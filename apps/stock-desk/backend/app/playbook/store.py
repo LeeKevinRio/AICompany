@@ -677,6 +677,23 @@ def _write_state(conn: sqlite3.Connection, values: Mapping[str, str | None]) -> 
         )
 
 
+def _read_batch(conn: sqlite3.Connection, symbol: str, batch_no: int) -> BatchState | None:
+    """One batch row read on ``conn``; the only SELECT :meth:`PlaybookStore.get_batch` runs."""
+    row = conn.execute(
+        f"SELECT {_BATCH_SELECT} FROM playbook_batches WHERE symbol = ? AND batch_no = ?",
+        (symbol, batch_no),
+    ).fetchone()
+    return None if row is None else PlaybookStore._row_to_batch(row)
+
+
+def _read_exit_stamp(conn: sqlite3.Connection, directive_id: int) -> date | None:
+    """The L4 stamp of one log row read on ``conn``, ``None`` when it has none (C-B6)."""
+    row = conn.execute(
+        "SELECT exit_stamped_on FROM playbook_directives WHERE id = ?", (directive_id,)
+    ).fetchone()
+    return None if row is None else _day(row[0])
+
+
 def _add_cash(conn: sqlite3.Connection, delta: Decimal) -> None:
     """Read ``cash`` on ``conn`` and write it back moved by ``delta`` (N-177 修訂一 1.3(3)).
 
@@ -944,20 +961,31 @@ class PlaybookStore:
 
     def get_batch(self, symbol: str, batch_no: int) -> BatchState | None:
         with closing(self._connect()) as conn:
-            row = conn.execute(
-                f"SELECT {_BATCH_SELECT} FROM playbook_batches WHERE symbol = ? AND batch_no = ?",
-                (symbol, batch_no),
-            ).fetchone()
-        return None if row is None else self._row_to_batch(row)
+            return _read_batch(conn, symbol, batch_no)
 
     def roll_peak_closes(self, closes: Mapping[str, Decimal]) -> None:
-        """Advance 波段最高收盤 of every open batch with today's close."""
+        """Advance 波段最高收盤 of every open batch with today's close.
+
+        N-177 修訂一 C17: only ``peak_close`` is written, and only while the batch
+        is still open, so a stale list cannot reopen a batch a settlement closed.
+        """
+        moment = datetime.now(UTC).isoformat()
+        raised: list[tuple[str, str, str, int]] = []
         for batch in self.list_batches():
             close = closes.get(batch.symbol)
             if batch.status != "open" or close is None:
                 continue
             if batch.peak_close is None or close > batch.peak_close:
-                self.save_batch(batch.model_copy(update={"peak_close": close}))
+                raised.append((str(close), moment, batch.symbol, batch.batch_no))
+        if not raised:
+            return
+        with closing(self._connect()) as conn, conn:
+            for values in raised:
+                conn.execute(
+                    "UPDATE playbook_batches SET peak_close = ?, updated_at = ? "
+                    "WHERE symbol = ? AND batch_no = ? AND status = 'open'",
+                    values,
+                )
 
     # --- symbol / blacklist state ---------------------------------------
 
@@ -1275,21 +1303,41 @@ class PlaybookStore:
                     effect.symbol, effect.batch_no, {"defer_count": effect.value or 0}
                 )
             elif effect.kind == "defer_reset" and effect.symbol is not None:
-                for batch in self.list_batches():
-                    if batch.symbol == effect.symbol and batch.defer_count:
-                        self.save_batch(batch.model_copy(update={"defer_count": 0}))
+                # N-177 修訂一 C17: the one column, never the whole row.
+                with closing(self._connect()) as conn, conn:
+                    conn.execute(
+                        "UPDATE playbook_batches SET defer_count = 0, updated_at = ? "
+                        "WHERE symbol = ? AND defer_count <> 0",
+                        (datetime.now(UTC).isoformat(), effect.symbol),
+                    )
             elif effect.kind == "batch_skipped" and effect.symbol is not None:
                 self._update_batch(effect.symbol, effect.batch_no, {"status": "skipped"})
             elif effect.kind == "trailing_on" and effect.symbol is not None:
                 self._update_batch(effect.symbol, effect.batch_no, {"trailing_active": True})
 
     def _update_batch(self, symbol: str, batch_no: int | None, changes: Mapping[str, Any]) -> None:
-        if batch_no is None:
+        """Write ``changes`` to one batch row, column by column (N-177 修訂一 C17).
+
+        No read first and no wholesale rewrite, so a stale value cannot reach
+        ``shares``, ``remaining_shares`` or open／closed. Only the columns the
+        three callers use are accepted, and ``status`` only as ``skipped``.
+        """
+        allowed = frozenset({"defer_count", "status", "trailing_active"})
+        unknown = sorted(set(changes) - allowed)
+        if unknown:
+            raise ValueError(f"_update_batch cannot write {unknown}")
+        if "status" in changes and changes["status"] != "skipped":
+            raise ValueError(f"_update_batch cannot set status {changes['status']!r}")
+        if batch_no is None or not changes:
             return
-        batch = self.get_batch(symbol, batch_no)
-        if batch is None:
-            return
-        self.save_batch(batch.model_copy(update=dict(changes)))
+        assignments = ", ".join(f"{column} = ?" for column in changes)
+        values = [int(value) if isinstance(value, bool) else value for value in changes.values()]
+        with closing(self._connect()) as conn, conn:
+            conn.execute(
+                f"UPDATE playbook_batches SET {assignments}, updated_at = ? "
+                "WHERE symbol = ? AND batch_no = ?",
+                (*values, datetime.now(UTC).isoformat(), symbol, batch_no),
+            )
 
     def record_schedule(self, evaluation: PlaybookEvaluation) -> None:
         """Log the queued line of every directive (批次／預定日／順延次數／狀態)."""
@@ -1597,7 +1645,10 @@ class PlaybookStore:
         ADR-0041 (N-177a): an S2 judged executed (:func:`is_s2_fill`) sells the
         whole symbol across its batches in :meth:`_settle_s2_fill` and leaves an
         audit row per batch in ``playbook_fill_moves``; it needs its log row id,
-        so one without is refused before anything is written.
+        so one without is refused before anything is written. Every line that
+        moves shares or cash reads the book and writes it inside one
+        ``BEGIN IMMEDIATE`` (N-177 修訂一 R-α), so two settlements running at once
+        leave the shares, open／closed and cash of some serial order of the two.
         """
         if is_s2_fill(directive):
             if directive_id is None:
@@ -1610,49 +1661,99 @@ class PlaybookStore:
         if directive.status == "missed" and directive.batch_no is not None:
             # CEO 裁決 E-2: a MISSED line moves no shares, but it is not free --
             # the retry counter is what the R3-aligned ceiling reads.
-            batch = self.get_batch(directive.symbol, directive.batch_no)
-            if batch is not None:
-                self.save_batch(batch.model_copy(update={"missed_count": batch.missed_count + 1}))
+            self._count_missed(directive)
         if directive.status != "executed" or directive.batch_no is None:
             self._mark_schedule(directive)
             return
-        batch = self.get_batch(directive.symbol, directive.batch_no)
-        if batch is None:
-            self._mark_schedule(directive)
-            return
-        price = _settle_price(directive, fill_price)
-        if directive.action == "buy":
-            stamp = None if directive_id is None else self._exit_stamp(directive_id)
-            batch = batch.model_copy(
-                update={
-                    "status": "open",
-                    "entry_date": directive.execution_date,
-                    "cost": price,
-                    "shares": directive.shares,
-                    "remaining_shares": directive.shares,
-                    "peak_close": price,
-                    "entry_before_exit_on": batch.entry_before_exit_on if stamp is None else stamp,
-                }
-            )
-            self.set_cash(self.portfolio_state().cash - price * Decimal(directive.shares))
-        elif directive.action == "sell":
-            moved = min(batch.remaining_shares, directive.shares)
-            self.set_cash(self.portfolio_state().cash + price * Decimal(moved))
-            remaining = max(0, batch.remaining_shares - directive.shares)
-            changes: dict[str, Any] = {
-                "remaining_shares": remaining,
-                "status": "closed" if remaining == 0 else "open",
-            }
-            if directive.rule_id == "P1":
-                changes["p1_done"] = True
-            elif directive.rule_id == "P2":
-                changes["p2_done"] = True
-                changes["trailing_active"] = True
-            elif directive.rule_id == "P3":
-                changes["p3_last_date"] = directive.data_date
-            batch = batch.model_copy(update=changes)
-        self.save_batch(batch)
+        self._settle_batch_line(
+            directive, price=_settle_price(directive, fill_price), directive_id=directive_id
+        )
         self._mark_schedule(directive)
+
+    def _count_missed(self, directive: Directive) -> None:
+        """Count one MISSED retry on the line's batch; no batch row, no write (E-2, C-B6)."""
+        with closing(self._connect()) as conn, conn:
+            conn.execute(
+                "UPDATE playbook_batches SET missed_count = missed_count + 1, updated_at = ? "
+                "WHERE symbol = ? AND batch_no = ?",
+                (datetime.now(UTC).isoformat(), directive.symbol, directive.batch_no),
+            )
+
+    def _settle_batch_line(
+        self, directive: Directive, *, price: Decimal, directive_id: int | None
+    ) -> None:
+        """Book one executed per-batch buy or sell under a single write lock (修訂一 1.3(2)).
+
+        On one connection: ``BEGIN IMMEDIATE``, the batch read, for a buy the L4
+        stamp read, the batch UPDATE of this branch's columns only, the cash
+        read-modify-write, ``COMMIT``. The values written are the ones the
+        wholesale rewrite wrote before, computed from what was read under the
+        lock. No batch row: nothing is written. No other connection is opened
+        while the lock is held; errors follow :meth:`commit_evaluation` (C-11).
+        """
+        assert directive.batch_no is not None
+        moment = datetime.now(UTC).isoformat()
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                batch = _read_batch(conn, directive.symbol, directive.batch_no)
+                if batch is not None and directive.action == "buy":
+                    stamp = None if directive_id is None else _read_exit_stamp(conn, directive_id)
+                    conn.execute(
+                        "UPDATE playbook_batches SET status = ?, entry_date = ?, cost = ?, "
+                        "shares = ?, remaining_shares = ?, peak_close = ?, "
+                        "entry_before_exit_on = ?, updated_at = ? "
+                        "WHERE symbol = ? AND batch_no = ?",
+                        (
+                            "open",
+                            _iso(directive.execution_date),
+                            _text(price),
+                            directive.shares,
+                            directive.shares,
+                            _text(price),
+                            _iso(batch.entry_before_exit_on if stamp is None else stamp),
+                            moment,
+                            directive.symbol,
+                            directive.batch_no,
+                        ),
+                    )
+                    _add_cash(conn, -(price * Decimal(directive.shares)))
+                elif batch is not None and directive.action == "sell":
+                    moved = min(batch.remaining_shares, directive.shares)
+                    remaining = max(0, batch.remaining_shares - directive.shares)
+                    p1_done, p2_done = batch.p1_done, batch.p2_done
+                    trailing_active, p3_last_date = batch.trailing_active, batch.p3_last_date
+                    if directive.rule_id == "P1":
+                        p1_done = True
+                    elif directive.rule_id == "P2":
+                        p2_done = True
+                        trailing_active = True
+                    elif directive.rule_id == "P3":
+                        p3_last_date = directive.data_date
+                    conn.execute(
+                        "UPDATE playbook_batches SET remaining_shares = ?, status = ?, "
+                        "p1_done = ?, p2_done = ?, trailing_active = ?, p3_last_date = ?, "
+                        "updated_at = ? WHERE symbol = ? AND batch_no = ?",
+                        (
+                            remaining,
+                            "closed" if remaining == 0 else "open",
+                            int(p1_done),
+                            int(p2_done),
+                            int(trailing_active),
+                            _iso(p3_last_date),
+                            moment,
+                            directive.symbol,
+                            directive.batch_no,
+                        ),
+                    )
+                    _add_cash(conn, price * Decimal(moved))
+                conn.execute("COMMIT")
+            except BaseException:
+                # SQLite may already have rolled back on its own (a full disk,
+                # say); a second ROLLBACK would then replace the real error.
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
 
     def _settle_s2_fill(self, directive: Directive, *, price: Decimal, directive_id: int) -> None:
         """Book one S2 fill across the symbol's batches under a single write lock.
@@ -1729,10 +1830,7 @@ class PlaybookStore:
     def _exit_stamp(self, directive_id: int) -> date | None:
         """The L4 stamp of one log row, ``None`` when it has none (ADR-0034 C-B6)."""
         with closing(self._connect()) as conn:
-            row = conn.execute(
-                "SELECT exit_stamped_on FROM playbook_directives WHERE id = ?", (directive_id,)
-            ).fetchone()
-        return None if row is None else _day(row[0])
+            return _read_exit_stamp(conn, directive_id)
 
     def _mark_schedule(self, directive: Directive) -> None:
         with closing(self._connect()) as conn, conn:
