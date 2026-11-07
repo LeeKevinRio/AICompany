@@ -669,7 +669,10 @@ def test_c9_the_in_flight_read_is_select_only_with_rows_in_it(
 
 
 class _ShiftingPrices(FakePriceService):
-    """First answer per symbol: WEDNESDAY missing; every later answer: the full series."""
+    """First answer per symbol: WEDNESDAY missing; every later answer: the full series.
+
+    (i) 之後，同一請求內不會要求第二次回答；保留作為回退 (i) 時的絆線。
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -686,17 +689,40 @@ class _ShiftingPrices(FakePriceService):
 
 
 def test_t15_classification_follows_the_series_the_settlement_judged_n1_on(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prices = _ShiftingPrices()
     book = _authored(tmp_path / "playbook.db", prices=prices)
     hold(book.store, "2330", 1, shares=300)
     log_like_before_n166(book.store, [_exit("2330", 1, WEDNESDAY)])
+    # ADR-0040 補充一 E-1 (c): the wiring itself -- the block is classified on the
+    # very ``run.loaded`` object the settlement returned.
+    runs: list[service_module.SettlementRun] = []
+    received: list[object] = []
+    real_settle = book.service._settle_pending
+    real_lines = service_module._pending_exit_lines
+
+    def settle_spy(as_of: date) -> service_module.SettlementRun:
+        run = real_settle(as_of)
+        runs.append(run)
+        return run
+
+    def lines_spy(read: Any, **kwargs: Any) -> service_module.PendingExitView:
+        received.append(kwargs["loaded"])
+        return real_lines(read, **kwargs)
+
+    monkeypatch.setattr(book.service, "_settle_pending", settle_spy)
+    monkeypatch.setattr(service_module, "_pending_exit_lines", lines_spy)
 
     evaluation = book.service.evaluate_today(today=THURSDAY)
 
-    # The evaluation's own load saw WEDNESDAY's bar; the settlement's did not.
-    assert len(prices.calls) >= 2
+    # Since ADR-0040 Decision 7 (i) the settlement and the evaluation share one
+    # series by construction: the source is asked once, and that one answer --
+    # the one without WEDNESDAY -- is what N1 and the block are both judged on.
+    assert len(prices.calls) == 1  # ADR-0040 Decision 7 (i): the same series by construction
+    (run,) = runs
+    assert len(received) == 1 and received[0] is run.loaded
+    assert WEDNESDAY not in {bar.date for bar in run.loaded["2330"].bars}
     assert evaluation.settlement is not None
     (unsettled,) = evaluation.settlement.unsettled
     assert wording.SETTLEMENT_EXIT_STALE_REOPEN_NOTE in unsettled.reason  # N1b

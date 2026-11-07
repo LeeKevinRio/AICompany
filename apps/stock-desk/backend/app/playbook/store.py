@@ -19,6 +19,9 @@ column is TEXT so ``Decimal`` round-trips exactly.
   rule-set confirmation flag the 歸屬語 reads (風控 R2).
 * ``playbook_directives`` -- every line ever produced, with its rules version,
   input provenance and T+1 outcome (風控 required R16).
+* ``playbook_evaluation_marks`` -- ADR-0040 (甲): which S/P and M1 evaluations
+  ran on usable data, per 預定執行日 and 依據資料日; written only by
+  :meth:`PlaybookStore.commit_evaluation`.
 
 The split between "decided" and "filled" is deliberate. Rule *state* (pause,
 blacklist, freeze, deferral, skip) is applied the moment the rule fires, because
@@ -39,6 +42,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from contextlib import closing
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -152,6 +156,18 @@ _SCHEMA = (
         settled_open_price TEXT
     )
     """,
+    # ADR-0040 Decision 9 第 1 點: 「稍早已用可用資料評估」 marks of (甲). No UNIQUE and
+    # no primary key (N172-C9): "not there yet" is decided by the INSERT itself,
+    # under :meth:`PlaybookStore.commit_evaluation`'s write lock. Never deleted.
+    """
+    CREATE TABLE IF NOT EXISTS playbook_evaluation_marks (
+        kind TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        execution_date TEXT NOT NULL,
+        data_date TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
 )
 
 #: Columns added after the first release. Every playbook table is created by
@@ -238,6 +254,12 @@ FILL_DEPENDENT_EFFECTS = frozenset(
 #: ADR-0035 K2: the R series decides once per ``(symbol, 預定執行日)``.
 R_SERIES_RULE_IDS: tuple[str, ...] = ("R1", "R2", "R3", "M1")
 _R_SERIES_PLACEHOLDERS = ", ".join("?" for _ in R_SERIES_RULE_IDS)
+
+#: The S/P series sell lines (ADR-0035 補充五 X-1 第 1 點): what N190-I's earlier
+#: and later sell lines (風控 2026-11-05 B-3) and ADR-0040's 「S/P sell 列」
+#: (Decision 9 第 5 點) are. EMERGENCY is not one; S3 writes no line. The one
+#: definition -- nothing else may spell these ids out again.
+SETTLED_SINCE_RULE_IDS: tuple[str, ...] = ("S1", "S2", "P1", "P2", "P3")
 
 #: ADR-0035 Decision 2 / N172-C4: lines outside K1 and K2. They are the
 #: covering set of ADR-0033 C-4 and the quarterly recomputation, which have
@@ -425,6 +447,26 @@ def _read_and_stamp_exit_entries(conn: sqlite3.Connection, *, stamped_on: date) 
     )
 
 
+#: ADR-0040 Decision 9 第 2 點: engine evaluated this symbol's S/P on usable data.
+MARK_KIND_SP = "SP"
+#: ADR-0040 Decision 9 第 3 點: engine evaluated M1 on usable index data.
+MARK_KIND_M1 = "M1"
+
+
+class EvaluationMark(NamedTuple):
+    """One (甲) mark: ``kind`` was evaluated for ``subject`` on usable data (ADR-0040).
+
+    Keyed by the 預定執行日 of the evaluation that wrote it and the 依據資料日 of
+    the series it was evaluated on -- the symbol's own snapshot for
+    :data:`MARK_KIND_SP`, the index's for :data:`MARK_KIND_M1`.
+    """
+
+    kind: str
+    subject: str
+    execution_date: date
+    data_date: date
+
+
 class EvaluationCommit(NamedTuple):
     """What :meth:`PlaybookStore.commit_evaluation` did under its write lock.
 
@@ -438,6 +480,9 @@ class EvaluationCommit(NamedTuple):
     #: oldest first, one per K1 (the smallest id) -- what ``/today`` lists
     #: (Decision 4, N172-C6). Older duplicates stay in the log (C11).
     logged: list[Directive]
+    #: ADR-0040 Decision 9 第 1 點: the marks of the 預定執行日 that existed
+    #: **before** this commit wrote its own, read under the same lock. Additive.
+    earlier_marks: frozenset[EvaluationMark] = frozenset()
 
 
 def decision_key(directive: Directive) -> tuple[str, int | None, str, str, str]:
@@ -581,6 +626,49 @@ def _read_logged(conn: sqlite3.Connection, execution_date: date) -> list[Directi
         directive = _row_to_pending(row).directive
         lines.setdefault(decision_key(directive), directive)
     return list(lines.values())
+
+
+def _read_marks(conn: sqlite3.Connection, execution_date: date) -> frozenset[EvaluationMark]:
+    """Every (甲) mark of ``execution_date`` on ``conn``. SELECT only."""
+    rows = conn.execute(
+        "SELECT kind, subject, execution_date, data_date FROM playbook_evaluation_marks "
+        "WHERE execution_date = ?",
+        (execution_date.isoformat(),),
+    ).fetchall()
+    return frozenset(
+        EvaluationMark(
+            kind=str(kind),
+            subject=str(subject),
+            execution_date=date.fromisoformat(str(on)),
+            data_date=date.fromisoformat(str(data_date)),
+        )
+        for kind, subject, on, data_date in rows
+    )
+
+
+def _insert_marks(
+    conn: sqlite3.Connection,
+    marks: Iterable[EvaluationMark],
+    *,
+    existing: AbstractSet[EvaluationMark],
+    moment: str,
+) -> None:
+    """Write each mark of ``marks`` that is not there yet ("不存在才 INSERT"), on ``conn``.
+
+    ``existing`` is what the same lock just read, so a repeated evaluation issues
+    no write at all (N172-T11); the ``NOT EXISTS`` guard covers any other date.
+    """
+    for mark in dict.fromkeys(marks):
+        if mark in existing:
+            continue
+        key = (mark.kind, mark.subject, mark.execution_date.isoformat(), mark.data_date.isoformat())
+        conn.execute(
+            "INSERT INTO playbook_evaluation_marks "
+            "(kind, subject, execution_date, data_date, created_at) "
+            "SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM playbook_evaluation_marks "
+            "WHERE kind = ? AND subject = ? AND execution_date = ? AND data_date = ?)",
+            (*key, moment, *key),
+        )
 
 
 class EmergencyExitWrite(Protocol):
@@ -1247,7 +1335,9 @@ class PlaybookStore:
                 moment=datetime.now(UTC).isoformat(),
             )
 
-    def commit_evaluation(self, evaluation: PlaybookEvaluation) -> EvaluationCommit:
+    def commit_evaluation(
+        self, evaluation: PlaybookEvaluation, *, marks: Iterable[EvaluationMark] = ()
+    ) -> EvaluationCommit:
         """Log one evaluation's new decisions under a single write lock (ADR-0035).
 
         ``GET /today`` evaluates on every call, and before N-172a each call
@@ -1266,6 +1356,9 @@ class PlaybookStore:
            logged before is deleted or updated (N172-C11).
         4. The 預定執行日's logged lines are read back for the response
            (Decision 4, N172-C6), then everything commits together.
+        5. ADR-0040 Decision 9 第 1 點 (甲): the 預定執行日's marks that exist
+           before this commit are read, then each of ``marks`` not there yet
+           is inserted -- the same lock, still nothing but this connection.
 
         No resolver, network or other store call runs while the lock is held
         (N172-C2): ``evaluation`` was computed before this method was called.
@@ -1287,6 +1380,8 @@ class PlaybookStore:
                 )
                 _insert_schedule(conn, written, moment=moment)
                 logged = _read_logged(conn, evaluation.execution_date)
+                earlier_marks = _read_marks(conn, evaluation.execution_date)
+                _insert_marks(conn, marks, existing=earlier_marks, moment=moment)
                 conn.execute("COMMIT")
             except BaseException:
                 # SQLite may already have rolled back on its own (a full disk,
@@ -1294,7 +1389,7 @@ class PlaybookStore:
                 if conn.in_transaction:
                     conn.execute("ROLLBACK")
                 raise
-        return EvaluationCommit(written=written, logged=logged)
+        return EvaluationCommit(written=written, logged=logged, earlier_marks=earlier_marks)
 
     def commit_emergency_exit[PlanT: EmergencyExitWrite](
         self, plan: Callable[[EmergencyExitState], PlanT], *, stamped_on: date

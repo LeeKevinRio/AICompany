@@ -31,6 +31,7 @@ from typing import NamedTuple
 
 from app.data.calendar import TradingCalendar
 from app.data.interface import PriceBar
+from app.demo.series import DEMO_SOURCE
 from app.playbook import indicators, wording
 from app.playbook.engine import (
     _symbol_average_cost,
@@ -67,11 +68,15 @@ from app.playbook.models import (
 )
 from app.playbook.store import (
     LINE_BOUND_EFFECTS,
+    MARK_KIND_M1,
+    MARK_KIND_SP,
     ORDER_ACTIONS,
     R_SERIES_RULE_IDS,
+    SETTLED_SINCE_RULE_IDS,
     EmergencyExitState,
     EntryBeforeExitRead,
     EvaluationCommit,
+    EvaluationMark,
     ExitEntryRead,
     PendingDirective,
     PendingExitRead,
@@ -79,7 +84,7 @@ from app.playbook.store import (
     decision_key,
 )
 from app.positions.models import Market
-from app.services.index import IndexServiceResolver, load_market_benchmark
+from app.services.index import MARKET_BENCHMARK, IndexServiceResolver, load_market_benchmark
 from app.services.market import MarketDataResolver, load_bars
 
 #: Calendar days of history requested per symbol. Enough for a 25-day MA, a
@@ -88,6 +93,9 @@ LOOKBACK_DAYS = 180
 
 #: The market this rule set trades. The 加權指數 benchmark is TW's ``^TWII``.
 PLAYBOOK_MARKET: Market = "TW"
+
+#: The subject of an M1 mark (ADR-0040 Decision 9 第 3 點): the benchmark M1 reads.
+M1_MARK_SUBJECT = MARKET_BENCHMARK[PLAYBOOK_MARKET].series_symbol
 
 #: MA window for BIAS25 / S1 recovery -- the rule set's 25MA.
 MA25_WINDOW = 25
@@ -127,6 +135,10 @@ class LoadedSeries(NamedTuple):
     #: ``ProviderResult.reason`` -- carried into the snapshot and every
     #: directive issued from it (風控 2026-09-15 R3), never dropped here.
     reason: str | None = None
+    #: ``ProviderResult.is_within_ttl``, carried into the snapshot untouched
+    #: (ADR-0040 Decision 3): the second field a ``cached_stale`` status has to be
+    #: read with (interface.py, ADR-0005 D-2).
+    is_within_ttl: bool | None = None
 
 
 #: What a symbol the ladder never answered for looks like.
@@ -141,6 +153,7 @@ def build_market_snapshot(
     source: str,
     reason: str | None = None,
     high_volatility: bool = False,
+    is_within_ttl: bool | None = None,
 ) -> MarketSnapshot | None:
     """One symbol's snapshot, or ``None`` when no bar came back at all."""
     ordered = indicators.sorted_closes(bars)
@@ -159,6 +172,7 @@ def build_market_snapshot(
         source=source,
         data_reason=reason,
         high_volatility=high_volatility,
+        is_within_ttl=is_within_ttl,
     )
 
 
@@ -169,6 +183,7 @@ def build_index_snapshot(
     source: str,
     params: RuleParams,
     reason: str | None = None,
+    is_within_ttl: bool | None = None,
 ) -> IndexSnapshot | None:
     """加權指數 snapshot: 月線, its run of closes below it, and the fast-market pair."""
     ordered = indicators.sorted_closes(bars)
@@ -192,6 +207,7 @@ def build_index_snapshot(
         data_status=status,
         source=source,
         data_reason=reason,
+        is_within_ttl=is_within_ttl,
     )
 
 
@@ -477,6 +493,111 @@ def _insert_after(warnings: list[str], anchor: str, note: str) -> None:
     warnings.insert(position, note)
 
 
+def holds_shares(symbol_batches: Sequence[BatchState]) -> bool:
+    """The engine's 「本檔目前持有部位」 (engine.py, DATA_GAP_HOLDING_NOTE's choice)."""
+    return any(batch.status == "open" and batch.remaining_shares > 0 for batch in symbol_batches)
+
+
+def sp_evaluated(symbol_batches: Sequence[BatchState], snapshot: MarketSnapshot | None) -> bool:
+    """Did the engine evaluate this symbol's S/P series? (ADR-0040 Decision 9 第 2 點). Pure.
+
+    True exactly when the snapshot is there and usable -- the engine's own
+    :func:`is_usable` -- and at least one batch passes the S/P batch gate of
+    ``_evaluate_batch_exits`` (open, ``cost`` set, ``remaining_shares > 0``),
+    which is also the condition ``_symbol_average_cost`` counts S2's shares
+    by. 暫停／黑名單 only stop the R series, so they do not enter here.
+    ``symbol_batches`` is the very list handed to the engine.
+    """
+    if snapshot is None or not is_usable(
+        snapshot.data_status, snapshot.source, is_within_ttl=snapshot.is_within_ttl
+    ):
+        return False
+    return any(
+        batch.status == "open" and batch.cost is not None and batch.remaining_shares > 0
+        for batch in symbol_batches
+    )
+
+
+def m1_evaluated(index: IndexSnapshot | None) -> bool:
+    """Did ``_defense_transition`` evaluate M1? (ADR-0040 Decision 9 第 3 點). Pure.
+
+    Its three branches: index missing or unusable, no monthly line
+    (``insufficient_data``), evaluated. Not inferred from
+    ``fast_market_measured_on``: 快市 is measured without a monthly line, and
+    its date is the evaluation's, not the index's.
+    """
+    return (
+        index is not None
+        and is_usable(index.data_status, index.source, is_within_ttl=index.is_within_ttl)
+        and index.monthly_line is not None
+    )
+
+
+def evaluation_marks(
+    evaluation: PlaybookEvaluation,
+    *,
+    batches: Sequence[BatchState],
+    markets: Mapping[str, MarketSnapshot],
+    index: IndexSnapshot | None,
+) -> list[EvaluationMark]:
+    """The (甲) marks one evaluation writes (ADR-0040 Decision 9 第 2、3 點). Pure.
+
+    ``batches`` and ``markets`` are what the engine was handed. Computed before
+    :meth:`PlaybookStore.commit_evaluation`, which writes them under its lock;
+    no load and no store call here (Decision 14 第 1 點).
+    """
+    by_symbol: dict[str, list[BatchState]] = {}
+    for batch in batches:
+        by_symbol.setdefault(batch.symbol, []).append(batch)
+    marks: list[EvaluationMark] = []
+    for symbol in sorted(by_symbol):
+        snapshot = markets.get(symbol)
+        if snapshot is not None and sp_evaluated(by_symbol[symbol], snapshot):
+            marks.append(
+                EvaluationMark(MARK_KIND_SP, symbol, evaluation.execution_date, snapshot.data_date)
+            )
+    if index is not None and m1_evaluated(index):
+        marks.append(
+            EvaluationMark(
+                MARK_KIND_M1, M1_MARK_SUBJECT, evaluation.execution_date, index.data_date
+            )
+        )
+    return marks
+
+
+def _evaluated_earlier(
+    kind: str,
+    subject: str,
+    snapshot: MarketSnapshot | IndexSnapshot | None,
+    *,
+    execution_date: date,
+    marks: AbstractSet[EvaluationMark],
+) -> bool:
+    """(甲)'s rendering condition (ADR-0040 Decision 9 第 4 點), on structured fields only.
+
+    This run's snapshot is there, ``cached_stale``, not within TTL (``is_within_ttl
+    is not True``) and not demo, and a mark of
+    the same kind, subject, 預定執行日 and the snapshot's own 依據資料日 existed
+    before this run's commit.
+    """
+    return (
+        snapshot is not None
+        and snapshot.data_status == "cached_stale"
+        and snapshot.is_within_ttl is not True
+        and snapshot.source != DEMO_SOURCE
+        and EvaluationMark(kind, subject, execution_date, snapshot.data_date) in marks
+    )
+
+
+def _replace(warnings: list[str], original: str, replacement: list[str]) -> None:
+    """Put ``replacement`` where ``original`` is; at the end when it is not there."""
+    if original in warnings:
+        position = warnings.index(original)
+        warnings[position : position + 1] = replacement
+    else:
+        warnings.extend(replacement)
+
+
 def same_day_warnings(
     evaluation: PlaybookEvaluation,
     commit: EvaluationCommit,
@@ -487,6 +608,7 @@ def same_day_warnings(
     blocked: Sequence[PendingDirective] = (),
     refused_ids: AbstractSet[int] = frozenset(),
     entries: Sequence[Directive] = (),
+    index: IndexSnapshot | None = None,
 ) -> list[str]:
     """The evaluation's warnings, reconciled with the logged list the page shows.
 
@@ -531,6 +653,17 @@ def same_day_warnings(
 
     The block is FROZEN_NOTE → W-B6 → W-B1d → ENTRY → W-B6b, or first when
     FROZEN_NOTE is not there (P4: the anchor missing never drops a sentence).
+
+    **(甲)** (ADR-0040 Decision 9 第 4～6 點): for a held symbol whose snapshot
+    meets :func:`_evaluated_earlier` against ``commit.earlier_marks``, the
+    DATA_GAP_HOLDING_NOTE is replaced -- by B-4
+    (:data:`wording.SAME_DAY_EARLIER_SP_EVALUATED_NOTE`) when the log has no S/P
+    sell of the symbol (B-4 → A → B), by nothing when it has one (A → B; N190-C9,
+    風控 C-1). ``if not orders and not decisions`` does not skip it. A symbol
+    that does not hold keeps its DATA_GAP_NOTE. ``index`` gets B-2
+    (:data:`wording.SAME_DAY_EARLIER_M1_EVALUATED_NOTE`) in place of the status
+    branch of INDEX_DATA_GAP_NOTE on an M1 mark; the ``insufficient_data``
+    branch is never replaced. Neither condition reads a sentence.
 
     Known limit -- two snapshots (ADR-0035 補充四 釐清一 E-2, accepted; 風控
     2026-11-04 第 11 點). ``blocked`` comes from the one in-flight read, taken
@@ -588,12 +721,39 @@ def same_day_warnings(
         stale.add(wording.INDEX_DATA_GAP_DEFER_NOTE)
     warnings = [warning for warning in warnings if warning not in stale]
 
+    earlier_marks = commit.earlier_marks
+    if index is not None and _evaluated_earlier(
+        MARK_KIND_M1,
+        M1_MARK_SUBJECT,
+        index,
+        execution_date=evaluation.execution_date,
+        marks=earlier_marks,
+    ):
+        # B-2: only the status branch, rendered for this very index (風控 B-2).
+        status_branch = wording.INDEX_DATA_GAP_NOTE.format(
+            status=index.data_status, source=index.source
+        )
+        if status_branch in warnings:
+            _replace(
+                warnings,
+                status_branch,
+                [
+                    wording.SAME_DAY_EARLIER_M1_EVALUATED_NOTE.format(
+                        status=index.data_status,
+                        source=index.source,
+                        data_date=index.data_date.isoformat(),
+                    )
+                ],
+            )
+
     by_symbol: dict[str, list[BatchState]] = {}
     for batch in batches:
         by_symbol.setdefault(batch.symbol, []).append(batch)
     for symbol in sorted(by_symbol):
         snapshot = markets.get(symbol)
-        if snapshot is not None and is_usable(snapshot.data_status, snapshot.source):
+        if snapshot is not None and is_usable(
+            snapshot.data_status, snapshot.source, is_within_ttl=snapshot.is_within_ttl
+        ):
             continue
         lines = [line for line in logged if line.symbol == symbol]
         orders = sum(
@@ -602,31 +762,53 @@ def same_day_warnings(
             if line.action in ORDER_ACTIONS and decision_key(line) not in blocked_keys
         )
         decisions = sum(1 for line in lines if line.action in DECISION_RECORD_ACTIONS)
-        if not orders and not decisions:
+        holds = holds_shares(by_symbol[symbol])
+        marked = holds and _evaluated_earlier(
+            MARK_KIND_SP,
+            symbol,
+            snapshot,
+            execution_date=evaluation.execution_date,
+            marks=earlier_marks,
+        )
+        if not orders and not decisions and not marked:
             continue
         status = "unavailable" if snapshot is None else snapshot.data_status
         source = "none" if snapshot is None else snapshot.source
-        holds = any(
-            batch.status == "open" and batch.remaining_shares > 0 for batch in by_symbol[symbol]
-        )
         gap = wording.DATA_GAP_HOLDING_NOTE if holds else wording.DATA_GAP_NOTE
         # DATA_GAP(_HOLDING)_NOTE -> A -> B; each falls back to the end of the
         # list when the sentence before it is not there (風控 必改 7).
         anchor = gap.format(symbol=symbol, status=status, source=source)
+        following: list[str] = []
         if orders:
-            note = wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE.format(
-                symbol=symbol, status=status, line_count=orders
+            following.append(
+                wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE.format(
+                    symbol=symbol, status=status, line_count=orders
+                )
             )
-            _insert_after(warnings, anchor, note)
-            anchor = note
         if decisions:
-            _insert_after(
-                warnings,
-                anchor,
+            following.append(
                 wording.SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE.format(
                     symbol=symbol, decision_count=decisions
-                ),
+                )
             )
+        if marked and snapshot is not None:
+            # (甲): the HOLDING sentence goes; B-4 takes its place unless the log
+            # already has an S/P sell of the symbol (風控 B-4; C-1, N190-C9).
+            if not any(_is_sp_sell(line) for line in lines):
+                following.insert(
+                    0,
+                    wording.SAME_DAY_EARLIER_SP_EVALUATED_NOTE.format(
+                        symbol=symbol,
+                        status=status,
+                        source=source,
+                        data_date=snapshot.data_date.isoformat(),
+                    ),
+                )
+            _replace(warnings, anchor, following)
+            continue
+        for note in following:
+            _insert_after(warnings, anchor, note)
+            anchor = note
 
     frozen_entries = list(entries) if evaluation.mode == "emergency_frozen" else []
     listed_keys = {decision_key(line) for line in frozen_entries}
@@ -892,6 +1074,90 @@ class SettlementRun(NamedTuple):
 
     result: SettlementResult
     loaded: Mapping[str, LoadedSeries]
+
+
+def _is_sp_sell(directive: Directive) -> bool:
+    return directive.action == "sell" and directive.rule_id in SETTLED_SINCE_RULE_IDS
+
+
+def _later_sells(earlier: Directive, logged: Sequence[Directive]) -> list[Directive]:
+    """N190-I's later lines: S/P sells after ``earlier`` on its batch, or its symbol with S2.
+
+    EMERGENCY is never one (風控 2026-11-05 B-3): it is not on ``logged``, and
+    :func:`_is_sp_sell` would not take it either.
+    """
+    return sorted(
+        (
+            line
+            for line in logged
+            if _is_sp_sell(line)
+            and line.symbol == earlier.symbol
+            and line.execution_date > earlier.execution_date
+            and ("S2" in (earlier.rule_id, line.rule_id) or line.batch_no == earlier.batch_no)
+        ),
+        key=lambda line: (line.execution_date, line.batch_no or 0),
+    )
+
+
+def _later_sell_item(line: Directive) -> str:
+    if line.batch_no is None:
+        return wording.SETTLEMENT_EARLIER_SELL_SYMBOL_ITEM.format(
+            symbol=line.symbol,
+            rule_id=line.rule_id,
+            shares=line.shares,
+            execution_date=line.execution_date.isoformat(),
+        )
+    return wording.SETTLEMENT_EARLIER_SELL_BATCH_ITEM.format(
+        symbol=line.symbol,
+        batch_no=line.batch_no,
+        rule_id=line.rule_id,
+        shares=line.shares,
+        execution_date=line.execution_date.isoformat(),
+    )
+
+
+def with_earlier_sell_notes(
+    settlement: SettlementResult,
+    *,
+    logged: Sequence[Directive],
+    loaded: Mapping[str, LoadedSeries],
+) -> SettlementResult:
+    """N190-I on ``/today``'s settlement (風控 2026-11-04 第二節之 2; N190-C4～C7). Pure.
+
+    An unsettled S/P sell whose reason is its own :data:`wording.SETTLEMENT_NO_OPEN_PRICE`
+    -- rendered from ``loaded``, the series that very settlement judged it on --
+    gets :data:`wording.SETTLEMENT_EARLIER_SELL_NOT_DEDUCTED_NOTE` appended when
+    ``logged`` (this response's ``directives``) holds a later sell of the same
+    batch, or of the same symbol when either line is S2 (:func:`_later_sells`).
+
+    Everything is read from the response itself: no store, no in-flight read, no
+    ``_lines``. The reason and its mirror in ``warnings`` -- the first
+    ``len(unsettled)`` entries are the reasons, in order (``_settle_pending``)
+    -- are replaced together; nothing is inserted or reordered (N190-C7).
+    ``POST /settle`` never comes here: it has no ``directives``.
+    """
+    unsettled = list(settlement.unsettled)
+    warnings = list(settlement.warnings)
+    for position, line in enumerate(unsettled):
+        earlier = line.directive
+        if not _is_sp_sell(earlier):
+            continue
+        series = loaded.get(earlier.symbol, NOTHING_LOADED)
+        no_open_price = wording.SETTLEMENT_NO_OPEN_PRICE.format(
+            symbol=earlier.symbol,
+            execution_date=earlier.execution_date.isoformat(),
+            status=series.status,
+            source=series.source,
+        )
+        later = _later_sells(earlier, logged)
+        if not later or not line.reason.startswith(no_open_price):
+            continue
+        reason = line.reason + wording.SETTLEMENT_EARLIER_SELL_NOT_DEDUCTED_NOTE.format(
+            later_items="、".join(_later_sell_item(item) for item in later)
+        )
+        unsettled[position] = line.model_copy(update={"reason": reason})
+        warnings[position] = reason
+    return settlement.model_copy(update={"unsettled": unsettled, "warnings": warnings})
 
 
 def exit_row_past_due(execution_dates: Sequence[date], *, as_of: date) -> bool:
@@ -1207,9 +1473,32 @@ class PlaybookService:
                 self._markets, symbol=symbol, market=PLAYBOOK_MARKET, start=start, end=today
             )
             loaded[symbol] = LoadedSeries(
-                list(result.bars), result.status.value, result.source, result.reason
+                list(result.bars),
+                result.status.value,
+                result.source,
+                result.reason,
+                result.is_within_ttl,
             )
         return loaded
+
+    def _evaluation_series(
+        self, symbols: Sequence[str], *, settled: Mapping[str, LoadedSeries], today: date
+    ) -> dict[str, LoadedSeries]:
+        """The series ``/today`` evaluates ``symbols`` on (ADR-0040 Decision 7 (i), N190-C2).
+
+        A symbol the same request's settlement already loaded is evaluated on
+        that very series, whatever its status: a second load moments later can
+        only land inside the data layer's cooldown, so it never learns anything
+        new, and the S/P pass would then see a different answer for the same
+        bars than the settlement did (path (a′)). Only the symbols the
+        settlement did not load reach the ladder, so each symbol is asked for
+        at most once per request. Order follows ``symbols``.
+        """
+        missing = [symbol for symbol in symbols if symbol not in settled]
+        fetched = self._load_symbol_bars(missing, today=today)
+        return {
+            symbol: settled[symbol] if symbol in settled else fetched[symbol] for symbol in symbols
+        }
 
     def _load_index_bars(self, *, today: date) -> LoadedSeries:
         start = today - timedelta(days=LOOKBACK_DAYS)
@@ -1217,7 +1506,11 @@ class PlaybookService:
             self._indices, market=PLAYBOOK_MARKET, start=start, end=today
         )
         return LoadedSeries(
-            list(benchmark.bars), benchmark.status.value, benchmark.source, benchmark.reason
+            list(benchmark.bars),
+            benchmark.status.value,
+            benchmark.source,
+            benchmark.reason,
+            benchmark.is_within_ttl,
         )
 
     def settle_pending(self, *, today: date | None = None) -> SettlementResult:
@@ -1550,8 +1843,11 @@ class PlaybookService:
                 status=series.status,
                 source=series.source,
                 reason=series.reason,
+                is_within_ttl=series.is_within_ttl,
             )
-            if snapshot is None or not is_usable(snapshot.data_status, snapshot.source):
+            if snapshot is None or not is_usable(
+                snapshot.data_status, snapshot.source, is_within_ttl=snapshot.is_within_ttl
+            ):
                 missing.append(batch.symbol)
                 continue
             deployed += snapshot.close * Decimal(batch.remaining_shares)
@@ -1861,7 +2157,7 @@ class PlaybookService:
         in_flight = self._store.read_in_flight()
         batches = self._store.list_batches()
         symbols = sorted({batch.symbol for batch in batches})
-        loaded = self._load_symbol_bars(symbols, today=as_of)
+        loaded = self._evaluation_series(symbols, settled=run.loaded, today=as_of)
         index_series = self._load_index_bars(today=as_of)
         index_bars = index_series.bars
 
@@ -1882,6 +2178,7 @@ class PlaybookService:
             source=index_series.source,
             params=params,
             reason=index_series.reason,
+            is_within_ttl=index_series.is_within_ttl,
         )
         markets: dict[str, MarketSnapshot] = {}
         for symbol, series in loaded.items():
@@ -1891,6 +2188,7 @@ class PlaybookService:
                 status=series.status,
                 source=series.source,
                 reason=series.reason,
+                is_within_ttl=series.is_within_ttl,
             )
             if snapshot is not None:
                 markets[symbol] = snapshot
@@ -1918,7 +2216,13 @@ class PlaybookService:
             calendar=calendar,
         )
         self._store.save_fast_market(evaluation.fast_market, measured_on=data_date)
-        commit = self._store.commit_evaluation(evaluation)
+        # (甲) marks: a pure reading of what the engine was handed, written under
+        # the commit's lock (ADR-0040 Decision 9, Decision 14 第 1 點).
+        marks = evaluation_marks(evaluation, batches=book, markets=markets, index=index)
+        commit = self._store.commit_evaluation(evaluation, marks=marks)
+        # N190-I: an earlier S/P sell still unsettled next to a later one on this
+        # page, from the settlement and the logged lines of this response only.
+        settlement = with_earlier_sell_notes(settlement, logged=commit.logged, loaded=run.loaded)
         # §6 ②: the effective date of the row actually in force on the 依據資料日,
         # read from the store rather than from ``params`` -- a parameter set that
         # fell back to the system default carries a derived date, and the page
@@ -1939,6 +2243,7 @@ class PlaybookService:
             blocked=g1_blocked_entries(in_flight.entries),
             refused_ids={line.directive_id for line in settlement.unsettled if line.refused_by_g1},
             entries=entries,
+            index=index,
         )
         if index_series.reason:
             warnings.append(wording.index_data_reason_note(index_series.reason))
