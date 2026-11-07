@@ -2712,3 +2712,160 @@ force before this run.
 （coordinator 2026-11-07 補記，修訂五索引追加一列：N-177a 在 c9e6ddb 依 C14 merge 時，衝突解法第 6 項是在 `test_n177_n190_backtrack_probe.py::test_the_report_states_whether_the_audit_table_exists` 的 fixture 加上 `DROP TABLE playbook_fill_moves`，斷言零 diff。qa-reviewer 已判定可以接受，見 `work/reviews/2026-11-07-N177a審查-qa-reviewer.md`。）
 
 （coordinator 2026-11-07 補記，依風控 S8：修訂七第 6 節索引第 1 列已依 TA 授權改為替換句，內容與 TA 回報原文不同；這屬於替換，不是只刪字。修訂七第 4 節「編號由 coordinator 給」的編號是 N-200。）
+
+## 修訂八（tech-architect，2026-11-07；回應 [風控-ADR42 回審] R13、S7，以及 [風控-ADR42 回審二] R15、R16）
+
+- 依據：[風控-ADR42 回審] `work/reviews/2026-11-07-ADR0042修正版與N199第5節回審-風控.md`；[風控-ADR42 回審二] `work/reviews/2026-11-07-ADR0042修正版二與修訂八回審-風控.md`；[風控-ADR42 回審三] `work/reviews/2026-11-07-R14至R16改寫回審-風控.md`。
+- 本修訂只取代下面點名的段落，其餘維持修訂六、修訂七。取代範圍：
+  - 修訂七第 2 節全文；
+  - 修訂七第 4 節第 3 點的首行；
+  - 修訂六 1.3 末段的執行者聲明；
+  - 修訂六 1.4 全文。
+- 第 0 節，以及第 1 節中標「配合流程事實」的部分：風控確認 R13 之後，我依 coordinator 提供的流程事實改寫。
+
+### 0. 流程名詞的對照（配合流程事實）
+- 事實（coordinator 提供）：product 線目前不使用 GitHub PR。一張單的合入流程是：
+  1. dev-lead 把分支 push 到 origin；
+  2. qa-reviewer 讀 `git diff` 審查；
+  3. coordinator 在本機或 scratchpad worktree 以 `git merge --no-ff -F <訊息檔>` 產生 merge commit，對它跑完整 CI，全綠後以 fast-forward push 到 `origin/product/stock-desk`。
+- 本規格（修訂一起）與 ADR-0042 中的下列詞，依此表讀：
+
+| 原詞 | 現行流程的對應 |
+|---|---|
+| PR | 一次送審：dev-lead 推到 origin 的分支，加上該次的交件紀錄 |
+| PR 分支名、`<PR 分支名>` | 交件紀錄所寫的分支名（`refs/heads/` 之後的部分），下文寫作 `<分支名>` |
+| PR 說明 | dev-lead 的交件紀錄（`work/reviews/` 下，coordinator 逐字轉存）。修訂六 1.2 的 (i)、N198-C8 的修改清單、N198-T1 的效力證明都附在這裡 |
+| PR 建立、PR 開出 | 送審：該版交件紀錄首次出現在 `origin/product/stock-desk` 的 commit（`<D>`） |
+| PR 說明的編輯歷史 | 交件紀錄路徑在 `origin/product/stock-desk` 上的 git 歷史 |
+| PR 的 head | 該版交件紀錄所寫的 head（完整 40 碼）；由第 1 節第 6 點和 `<head>` 核對 |
+| PR 的 base 分支 | 固定是 `product/stock-desk` |
+| 合入 PR | 依第 1 節「合入綁定」產生 merge commit，並以 fast-forward push |
+| PR 作者、共同作者 | 在 `<base>..<head>` 範圍內下 git commit 的角色，依第 2 節判定 |
+
+- 交件紀錄：
+  - 每一版都要寫：分支名、head 的完整 40 碼、本角色在 `<base>..<head>` 範圍內下的每個 commit（完整 40 碼）。
+  - 送 qa 審查之前，先 push 到 `origin/product/stock-desk`。coordinator 在派工紀錄中記錄送 qa 審查的時間（到分鐘，Asia/Taipei）。
+  - 首版之後不修改，要補充就另開檔案；head 變動而重新送審時，另開一版新的交件紀錄。
+- 日後若改用 GitHub PR，屬流程改變，要 CEO 決定；屆時本表作廢，由 TA 另出修訂。
+
+### 1. head SHA 的對照與合入綁定（取代修訂七第 2 節全文）
+- 修訂六 1.5 新增第 6 點（全部都要成立；不成立就判 BLOCKING）：
+  - 6. 以下四個值都是完整 40 碼，而且必須完全相同；交件紀錄所寫的 head 也必須等於它們。任何兩者不同，就判 BLOCKING：
+    - (α) (i) 紀錄中的 `<head>`（`git rev-parse HEAD`）；
+    - (β) (ii) 紀錄中的 `<head>`（在 (ii) 的 `git fetch` 之後，`git rev-parse origin/<分支名>`）；
+    - (γ) ［配合流程事實改寫］origin 伺服器端的分支 ref：由 (ii) 的執行者以 `git ls-remote` 直接向 origin 讀出 `refs/heads/<分支名>` 的值；
+    - (δ) qa 實際審查的 commit：qa 審查這一單時，所下 `git diff` 指令的 head 端一律寫完整 40 碼，不得寫分支名或 `HEAD`，並在審查報告中列出這個值。
+- **(γ) 的取得（配合流程事實，取代上一版「PR 物件的 head SHA」）：**
+  - 原因：沒有 PR 物件。現行流程中，伺服器端唯一記錄「送審分支當下 tip」的，是 origin 上的 `refs/heads/<分支名>`。
+  - 和 (β) 的差別：`git ls-remote` 直接向 origin 讀，不經過本機的 remote-tracking ref；(β) 則依賴本機 fetch 的結果。
+  - 候選指令如下，由 devops-sre 查證定稿：
+    ```bash
+    git ls-remote origin refs/heads/<branch> refs/heads/product/stock-desk; echo "exit=$?"
+    ```
+  - 原樣貼出：指令原文、完整輸出、`exit=` 行、讀取時間（到分鐘，Asia/Taipei）。
+  - 附加核對（取代「head／base 分支名」）：
+    - 輸出中屬於送審分支的列恰好一列，ref 名正好是 `refs/heads/<分支名>`，而且 `<分支名>` 等於交件紀錄所寫的分支名。不符就判 BLOCKING：讀到的是另一個分支。
+    - `refs/heads/product/stock-desk` 的值，必須等於 (ii) 的 `<tip>`。不等，表示 fetch 與讀取之間 product 有新的 push，(ii) 重做。
+  - 時點：(γ) 在 (ii) 的 `git fetch` 之後讀。(γ) 和 (β) 不同，通常表示兩次讀取之間分支有新的 push，依 1.7 全部重做。
+- 不新增 Bash：(γ) 由 (ii) 的執行者取得，qa 只讀紀錄；(δ) 是 qa 自己所下 `git diff` 的參數。`READONLY_ALLOWED_BASH` 不變。
+- 殘留：(γ) 和 (ii) 一樣經過執行者轉錄，qa 無法親自重現，與修訂六 1.8 登錄的殘留相同。
+- 殘留：(γ) 與 (β) 由同一個執行者、向同一個 origin 取得。上一版的 (γ) 是 GitHub 的 PR 紀錄，屬於 git ref 以外的來源；改用 `ls-remote` 之後，(γ) 只抓得出『fetch 與讀取之間有新的 push』與本機 remote-tracking ref 的異常，抓不出執行者轉錄錯誤或不實。對這兩種情形，四值相等的防護只來自 (α)（dev-lead 的紀錄）與 (δ)（qa 自己所下的 `git diff`）。
+- 理由（照舊）：1.5 第 4 點的 `git diff --stat` 輸出為空，只代表兩者的 tree 相同，不代表是同一個 commit。同一個 tree 的另一個 commit（例如 rebase 之後的、或空 commit），祖先關係可能不同，(i)、(ii) 的 ancestry 判定就不適用於它。
+- **合入綁定 `<head>`（[風控-ADR42 回審二] R15）：**
+  - (1) 綁定方式：
+    - 合入者 merge 時，對象直接寫 `<head>` 的完整 40 碼。不得寫分支名、`origin/<分支名>`、`FETCH_HEAD`，或任何會隨 push 變動的名稱。
+    - merge 前 checkout 的必須是 `<tip_m>`：合入者在 merge 之前 fetch 得到的 `refs/remotes/origin/product/stock-desk`，完整 40 碼。
+    - 這樣 merge commit `<M>` 的第二個 parent 由指令決定，不受「qa 給 PASS 之後分支又有 push」影響。
+    - 現行流程是本機 merge，不經過 GitHub 合入 API，所以上一版「API 的 head 綁定參數」作廢，不需要查證。
+  - (2) push 之前的核對（主要閘門）：
+    - 理由：CEO 以 dev-up 拉 product 就等於部署（追蹤清單 N-195 審查那一列），push 之後才核對，發現時可能已經部署。
+    - 由合入者在 `<M>` 上核對，以下全部成立才可以 push：
+      - `<M>` 恰好有兩個 parent；
+      - 第一個 parent 等於 `<tip_m>`；
+      - 第二個 parent 等於 `<head>`。
+    - 完整 CI 的對象就是 `<M>`。若 push 被拒而重新 merge，得到 `<M′>`：對 `<M′>` 重新核對上面三項，並重跑完整 CI。
+      - 例外：只有 `<M>` 與 `<M′>` 的整棵 tree 雜湊相同時，才可以沿用 `<M>` 的 CI 結果；兩個 tree 雜湊都要原樣記錄。只比對部分路徑或部分目錄，不構成例外：本 repo 的測試與驗證腳本會讀 `apps/` 以外的檔案（例如 `work/reviews/` 下的風控定稿、`docs/org-chart.md`），完整 CI 的讀取範圍無法可靠地窮舉（[風控-ADR42 回審三] 不採用『依 CI 讀取路徑比對』的例外）。
+    - push 只能是 fast-forward：不得帶 `--force` 或 `--force-with-lease`，refspec 也不得加 `+`。被拒時依上一點重做，不得改用強制推送。
+  - (3) push 之後的核對（[風控-ADR42 回審二] R15 (a)；兩條路徑都要做）：
+    - 由 (ii) 的執行者 fetch 之後，以唯讀的 git 查詢記錄下面兩項：
+      - `refs/remotes/origin/product/stock-desk`，以及 `git ls-remote origin refs/heads/product/stock-desk` 的值：必須等於 `<M>`。若期間又有新的 push，改為記錄新值，並記錄 `git merge-base --is-ancestor <M> refs/remotes/origin/product/stock-desk`，結果必須是 `exit=0`。
+      - `<M>` 的完整 40 碼及其第二個 parent：第二個 parent 必須等於 `<head>`。
+    - C7、N196-C8、N197a-C8 都要求以 merge commit 合入，所以第二個 parent 一定查得到。查不到（例如被 fast-forward 合入），也依 (4) 視為事件。
+  - (4) 不相等時：
+    - **在 push 之前發現：** 不得 push。丟棄 `<M>`，記錄下來，依 (1) 重做。這不算事件，但要記入同一份審查紀錄。
+    - **在 push 之後發現（屬事件）：** 已經合入了未經審查的內容。
+      - coordinator 立即回報風控與 CEO，並請 CEO 在處理完成之前不要 pull product、不要執行 dev-up。CEO 若已經拉取，要讓他知道本機正在執行未經審查的版本。
+      - 不得 force push，不得 reset product。
+      - 處理方式（TA 訂）：
+        - (i) 第二個 parent 以 `<head>` 為祖先，也就是 qa 給 PASS 之後分支上的新 commit 被一起合入：預設補審。
+          - 不適用的情形：`git diff <head> <M 的第二個 parent>` 只要動到面向使用者的文字（回應字面、通知、畫面文字，或測試引用的風控定稿檔），就不走補審，直接走 (ii)。是否動到由 qa 讀 diff 判定；判定不了，就走 (ii)。
+          - qa 審 `git diff <head> <M 的第二個 parent>` 的全部內容，加上 Codex 第二意見；風控在 risk-gate 核對。兩者都通過才結案。
+          - 補審判 BLOCKING 時，改走 (ii)。
+        - (ii) 其他情形（例如合入的是另一個分支或改寫過的歷史），或補審不通過：
+          - 以 `git revert -m 1 <M>` 產生新的 commit，依 (2) 跑完整 CI，再以 fast-forward push。
+          - 之後要合入正確的 `<head>` 時，修訂六 1.2～1.7 與本節全部重做。
+          - 若被 revert 的內容與要重新合入的分支有共同的 commit，git 不會再次帶入它們。遇到這種情形先回 TA，依當時的拓撲裁示，不得自行處理。
+      - 處理完成之前不部署；ADR-0041:114 的補註與 R-6′ 的已修正註記也不落檔。
+  - (5) 退路（[風控-ADR42 回審二] R15 (b)）：
+    - 前提：devops-sre 書面查證「無法以 40 碼指定 merge 對象」，查證紀錄放在 `work/`，寫明原因。沒有這份紀錄，不得走退路。
+    - 做法：merge 之前，由 (ii) 的執行者再讀一次 (γ)，必須等於 `<head>`，不等就不得 merge。merge 之後仍要做 (2) 和 (3)。
+    - 殘留揭露：讀取 (γ) 與 merge 之間仍有窗口，分支可能在這段時間被 push。
+      - 現行流程是本機 merge，(2) 的 push 前核對會在 push 之前擋下這種情況。
+      - 日後若改在無法於 push 之前核對的環境合入（例如伺服器端合入），這個窗口只能靠 (3) 事後補抓，而那時可能已經部署。
+  - (6) 紀錄（[風控-ADR42 回審二] R15 (c)）：
+    - 合入者只能是 (ii) 的執行者，或者會把下面各項記入同一份審查紀錄的角色。無法留下紀錄的角色不得合入。
+    - 合入者不是 (ii) 的執行者時，(3) 仍由 (ii) 的執行者做。
+    - `work/reviews/` 的本案審查紀錄要記下：
+      - 合入者的角色；
+      - merge 所在的位置（本機 checkout 或 scratchpad worktree 的路徑）；
+      - `<tip_m>`、`<head>`、`<M>`，都是完整 40 碼；
+      - merge、核對、CI、push 的每一條指令原文與完整輸出，每條附 `exit=` 行；
+      - merge 訊息檔的內容；
+      - 時間（到分鐘，Asia/Taipei）。
+    - 實際指令由 devops-sre 指定，只用於非唯讀的執行者。
+  - 理由：第 6 點只保證 qa 給 PASS 的那一刻 tip 等於 `<head>`。以 40 碼 merge，加上 push 前的核對，才能保證合入的就是 qa 審過的 commit。
+- 修訂六 1.7 的重做清單，加上 1.5 第 6 點（包括 (γ)）。
+- 適用於 N196-C8、N197a-C8，以及 ADR-0042 的 N198-C7。
+
+### 2. 執行者的獨立性（取代修訂六 1.3 末段的執行者聲明，以及 1.4 全文；[風控-ADR42 回審二] R16）
+- 以「角色」判定：
+  - 角色指 `.claude/agents/` 定義的 agent 名稱（例如 dev-lead、devops-sre），以及 coordinator。同一角色的不同次派工，都視為同一角色。
+  - 不以 git 的 author、committer 或 `Co-Authored-By` 判定。理由：本 checkout 的 reflog 身分一律是 `Claude <noreply@anthropic.com>`，各 agent 的 `Co-Authored-By` 也都是同一個模型標記，git metadata 分不出角色。
+- 修訂六 1.3 末段的聲明，改為：
+  - (ii) 紀錄寫明執行者的角色，並聲明：本角色不是 (i) 的執行角色，也不是 `<base>..<head>` 範圍內任何 commit 的提交角色。
+- 修訂六 1.4 改為：
+  - (1) 角色舉證：coordinator 在 `work/` 下的派工紀錄要逐一列出以下各項，(ii) 紀錄要寫明這份派工紀錄的路徑：
+    - `<base>..<head>` 範圍內的每個 commit（完整 40 碼）是在哪個角色的派工下 commit 的，並註明出處，也就是該角色交件紀錄的路徑；
+    - (i) 的執行角色；
+    - (ii) 的執行角色；
+    - 合入者的角色（第 1 節「合入綁定」(6)）。
+  - (2) 第二來源：每個 commit 的 40 碼，都必須出現在派工紀錄所註明的那份交件紀錄中（第 0 節：交件紀錄要列出本角色下的每個 commit）。
+  - (3) commit 清單互核，作用是綁定內容：(i)、(ii) 兩份紀錄都原樣貼出 `<base>..<head>` 範圍內每個 commit 的完整 40 碼。只用唯讀的 git 查詢，實際指令由 devops-sre 指定。不貼作者，也不貼 `Co-Authored-By`。
+  - (4) qa 讀紀錄判定，以下任一項成立就判 BLOCKING：
+    - (i)、(ii) 兩份清單不一致，或者和派工紀錄列出的 commit 集合不一致；
+    - 有 commit 在派工紀錄中沒有提交角色，或者在註明的交件紀錄中找不到；
+    - (ii) 的執行角色等於 (i) 的執行角色，或者是任何一個 commit 的提交角色；
+    - 派工紀錄缺漏，或 (ii) 紀錄沒有寫角色、沒有聲明。
+  - 本修訂之前已經做成的 (ii) 紀錄，要補上角色聲明與派工紀錄才可以判定；不補就判 BLOCKING。
+- 殘留（揭露）：
+  - git metadata 證明不了角色。獨立性只靠三份資料：coordinator 的派工紀錄、提交角色的交件紀錄、(ii) 執行者的自我聲明。
+  - 這三份都由 coordinator 轉存。coordinator 自己擔任 (ii) 的執行者時，派工紀錄中關於 (ii) 的那一列，是 coordinator 對自己的陳述。
+  - 建議（不擋）：由 devops-sre 擔任 (ii) 的執行者，讓派工者和查核者分開。
+- 適用於 N196-C8、N197a-C8，以及 ADR-0042 的 N198-C7。
+
+### 3. `set_capital(at=...)` 的時區守衛（取代修訂七第 4 節第 3 點「另開單，編號由 coordinator 給…」的首行；三個子點不變）
+- 另開單 **N-200**，P3，不擋 N-197a（[風控-ADR42 回審] S7）：
+  - 條件：N-200 落地之前，若 app 內出現任何傳入 `at` 的 `set_capital(`，或 N-195 `set_total_deploy(` 的呼叫點，N-200 要先落地，或在同一張單內補上守衛。
+  - qa 檢查（BLOCKING）：審任何改動 `app/**` 的 PR 時，用 grep 檢查上述呼叫點是否帶 `at=`（兩者的 `at` 都是 keyword-only，store.py:1033-1040）。如果有，而 N-200 尚未合入、該 PR 也沒有守衛，就判 BLOCKING。
+
+### 4. 修改處索引（風控比對用）
+
+| # | 位置 | 性質 | 依據 |
+|---|---|---|---|
+| 0 | 本修訂第 0 節（新增） | 流程名詞對照；交件紀錄的應記事項 | 配合流程事實 |
+| 1 | 修訂七第 2 節 → 本修訂第 1 節 | 四值相等；(γ) 由「PR 物件的 head SHA」改為 `git ls-remote`；殘留：(γ) 與 (β) 同源（R20） | R13；配合流程事實改寫 |
+| 2 | 本修訂第 1 節「合入綁定」 | 以 40 碼 merge；push 前、push 後各核對一次；事件處理；退路；紀錄；CI 只在整棵 tree 相同時可沿用；事件涉及面向使用者文字時直接 revert（[風控-ADR42 回審三]） | R15 |
+| 3 | 修訂六 1.3 的聲明與 1.4 → 本修訂第 2 節 | 以角色判定，兩個來源互核；清單只留 SHA | R16 |
+| 4 | 修訂七第 4 節第 3 點 → 本修訂第 3 節 | 編號改為 N-200；先行條件與 qa 檢查 | S7（不變） |
+
+（修訂八由 tech-writer 2026-11-07 依 TA 區塊 C、區塊 F 與 [風控-ADR42 回審三] 授權插入／替換組成，coordinator 附加。）

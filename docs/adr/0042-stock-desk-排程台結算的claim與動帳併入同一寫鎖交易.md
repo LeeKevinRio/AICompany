@@ -4,9 +4,9 @@
 - 日期：2026-11-07（同日修正版二：回應 [風控-ADR42] R1、R2、R4、S5，以及 [風控-ADR42 回審] R9～R11、S6、S9）
 - 決策者：
   - tech-architect：草案、修正版、修正版二；
-  - risk-compliance-officer：2026-11-07 審查，CONDITIONAL APPROVE，決策 P1 核可，附 R1～R4；同日回審，CONDITIONAL APPROVE，R1～R4 符合，附 R9～R11；同日再回審（[風控-ADR42 回審二]），CONDITIONAL APPROVE，R9～R11 符合，CEO 通知全文改版。本 ADR 依再回審的判定落檔；
+  - risk-compliance-officer：2026-11-07 審查，CONDITIONAL APPROVE，決策 P1 核可，附 R1～R4；同日回審，CONDITIONAL APPROVE，R1～R4 符合，附 R9～R11；同日再回審（[風控-ADR42 回審二]），CONDITIONAL APPROVE，R9～R11 符合，CEO 通知全文改版；同日第三次回審（[風控-ADR42 回審三]），CONDITIONAL APPROVE，R14 符合，流程名詞對照確認，附 R18。本 ADR 依第三次回審的判定更新；
   - CEO：核可，待定。
-- 落檔附記：tech-writer 2026-11-07 依 [風控-ADR42 回審二] 第二節第 4 點落檔；第 3 點 (a)(b)(c) 為依 [風控-ADR42 回審二] 授權替換，第 1 點為只刪字。
+- 落檔附記：tech-writer 2026-11-07 依 [風控-ADR42 回審二] 第二節第 4 點落檔；第 3 點 (a)(b)(c) 為依 [風控-ADR42 回審二] 授權替換，第 1 點為只刪字。同日依 [TA-177S] 修訂八與 TA 的 R14～R16 改寫套用 E-1～E-3；E-2 (6b) 兩點依 [風控-ADR42 回審三] 授權插入。
 - 來源簡稱（都在 `work/reviews/` 下）：
   - [TA-177S]：`2026-11-07-N177實作規格與偵測回溯工具-tech-architect.md`（修訂一 1.3 的 R-α、修訂四第 4 節、修訂六、修訂七、修訂八）；
   - [風控-197]：`2026-11-07-N177修訂四比對與N197裁示-風控.md`；
@@ -14,9 +14,11 @@
   - [TA-E2]：`2026-11-04-N182解讀點2與3裁示-tech-architect.md`（E-2）；
   - [風控-1104]：`2026-11-04-ADR0039v2回審與N182字面-風控.md`（第 11 點）；
   - [風控-ADR42 回審]：`2026-11-07-ADR0042修正版與N199第5節回審-風控.md`；
-  - [風控-ADR42 回審二]：`2026-11-07-ADR0042修正版二與修訂八回審-風控.md`。
+  - [風控-ADR42 回審二]：`2026-11-07-ADR0042修正版二與修訂八回審-風控.md`；
+  - [風控-ADR42 回審三]：`2026-11-07-R14至R16改寫回審-風控.md`。
 - 適用範圍：只有 product/stock-desk。路徑相對於 `apps/stock-desk/backend/`。
 - 程式位置：主 checkout，N-190 以 3985f4d 合入之後的 tip。只讀、未執行，以內容定位。
+- 流程名詞：product 線目前不使用 GitHub PR。本 ADR 中的「PR」「PR 說明」「PR 開出／建立」「PR 分支」「PR head」，依 [TA-177S] 修訂八第 0 節的對照表讀。
 - 前提：N-177a、N-177b、N-199 尚未合入。本 ADR 以三者的規格為前提（見「先後與相依」）。
 
 ## Context（背景）
@@ -179,23 +181,53 @@ def claim_and_settle(
          - Q-g、N177b-C6／C9 改為從 `claim_and_settle` 的回傳取值；
          - N-177b 合入之前 `ClaimSettle.settled` 的型別與取值；
          - C7 的 `<M_2>` 與第二份 diff 的改寫。
-       - (b) 補充送達風控，以及風控對補充的審查紀錄，都必須早於 N-198 的 PR 建立，不得事後補。舉證方式如下，全部都要成立（[風控-ADR42 回審] R10）：
-         - (1) 風控對該補充的審查紀錄，在 N-198 的 PR 建立之前，已經存在於 `work/reviews/` 並已 push 到 remote。也就是說，(c) 的「審查紀錄存在」提前到 PR 建立之前。
-         - (2) PR 說明在**建立當下**就要列出三個路徑：補充、coordinator 的送審紀錄、風控的審查紀錄。qa 依 PR 說明的編輯歷史判定：這些引用若是建立之後才補上的，就判 BLOCKING。
+       - (b) 補充送達風控，以及風控對補充的審查紀錄，都必須早於 N-198 送審，不得事後補。「送審」依 [TA-177S] 修訂八第 0 節，指該版交件紀錄首次出現在 `origin/product/stock-desk` 上。舉證方式如下，全部都要成立（[風控-ADR42 回審] R10；[風控-ADR42 回審二] R14）：
+         - (1) 風控對該補充的審查紀錄，在 N-198 送審之前已經存在於 `work/reviews/`，而且在 (ii) 讀取當下，在 `refs/remotes/origin/product/stock-desk` 上可達。也就是說，(c) 的「審查紀錄存在」提前到送審之前。（「已 push」依 [風控-ADR42 回審二] 第二節第 2 點 (3) 降為「讀取當下可達」。）
+         - (2) N-198 的交件紀錄在**首版**就要列出三個路徑：補充、coordinator 的送審紀錄、風控的審查紀錄；另外要列出 (6) 的 `<R>`，寫完整 40 碼。qa 依交件紀錄路徑在 `origin/product/stock-desk` 上的 git 歷史判定：這些引用若是首版之後才補上的，就判 BLOCKING。
          - (3) 送審紀錄要記到分鐘，並註明時區（Asia/Taipei）。
-         - (4) 先後無法確立，就判 BLOCKING，例如只有日期、時區不明、紀錄缺漏。
-         - (5) 風控在 risk-gate 核對 (1)～(3) 的紀錄。
-         - ［待風控確認］執行方式（TA 補）：
-           - qa-reviewer 的工具是 Read、Grep、Glob、`codex`、`git diff`，不能讀 GitHub 頁面或 API，也不為此新增工具。所以 (2) 的編輯歷史與 PR 建立時間，依 ADR-0007 的執行與判斷分離取得。
-             - 由修訂六 1.3 (ii) 的執行者負責，獨立性同修訂六 1.4。
-             - 以唯讀方式向 GitHub 讀出以下各項，原樣記入 `work/reviews/` 的本案審查紀錄：PR 編號；伺服器記錄的 PR 建立時間（原樣保留時區）；PR 說明的編輯歷史（包括「沒有任何編輯」的情形）；讀取方式；讀取時間（到分鐘，Asia/Taipei）。
-             - 實際讀法由 devops-sre 查證，本 ADR 不指定。
-             - qa 與風控讀這份紀錄判定。編輯歷史讀不到，依 (4) 判 BLOCKING。
-           - (1) 的「已存在」以內容雜湊舉證：
-             - PR 說明在建立當下，另外列出風控審查紀錄所在 commit 的完整 40 碼。commit SHA 由內容決定，建立當下寫得出這個值，就表示那份紀錄在 PR 建立之前已經 commit。
-             - (ii) 的執行者在同一份紀錄中，貼出該 commit 在 remote 上可達的指令原文與完整輸出，附 `exit=` 行。
-             - 殘留：這只能證明 commit 早於 PR 建立、而且審查時已經在 remote 上，證明不了 push 的時點。
-           - 時間比對換算到同一時區之後才進行。送審紀錄所載的送達時間，必須早於 PR 建立時間所在的那一分鐘；落在同一分鐘，視為先後無法確立，依 (4) 判 BLOCKING。
+         - (4) 先後無法確立，就判 BLOCKING。例如：只有日期、時區不明、紀錄缺漏，或任一條指令沒有原文、沒有完整輸出、沒有 `exit=` 行。
+         - (5) 風控在 risk-gate 核對 (1)～(3) 與 (6) 的紀錄。
+         - (6) 以內容雜湊確立先後。現行流程沒有 PR，所以不以 PR 建立時間為錨點。
+           - 名詞：
+             - `<R>`：風控審查紀錄所在的 commit，完整 40 碼，由交件紀錄首版列出。
+             - `<D>`：交件紀錄路徑首次出現在 `origin/product/stock-desk` 的那個 commit，完整 40 碼。
+             - `<head>`：同 [TA-177S] 修訂六 1.1。
+           - (6a) 證明 `<R>` 的 tree 含有三份紀錄：
+             - 原樣貼出 `<R>` 的 tree 中，(2) 列出的三個路徑各自的項目，包括 blob 雜湊。
+             - 任一路徑不在 `<R>` 的 tree 中，就判 BLOCKING。
+           - (6b) 證明紀錄沒有事後改寫：
+             - 同一份紀錄再貼出這三個路徑在 (ii) 讀取當下、`refs/remotes/origin/product/stock-desk` 版本的 blob 雜湊。
+             - 任一路徑的兩個雜湊不同，就判 BLOCKING：這表示該紀錄在 `<R>` 之後被改寫過。
+             - 因此這三份紀錄在 `<R>` 之後都不得再修改，coordinator 的補記也一樣，要補記就另開檔案。
+             - coordinator 的送審紀錄必須是本次送審專用的獨立檔案，不得是會持續更新的檔案（例如追蹤清單）。
+             - (a) 的 TA 補充同樣必須是獨立檔案，不得是會持續追加修訂的規格檔（例如 [TA-177S]）。日後要併入規格檔，只能以引用方式併入，原檔不動。
+             - 任一路徑在讀取當下的 `refs/remotes/origin/product/stock-desk` 中不存在，同樣判 BLOCKING。
+           - (6c) 證明 `<R>` 在 product 上可達：
+             - `git merge-base --is-ancestor <R> refs/remotes/origin/product/stock-desk`，結果必須是 `exit=0`。
+             - 另外貼出 `git ls-remote origin refs/heads/product/stock-desk` 的輸出。它的值必須等於讀取當下本機 `refs/remotes/origin/product/stock-desk` 的值；不等就重做 (6c)。
+             - 只接受 `product/stock-desk`。審查紀錄在產品線上；`main` 依 CLAUDE.md §1 不放產品內容，不適用。
+           - (6d) 證明 `<R>` 早於送審，也早於受審對象：
+             - `git merge-base --is-ancestor <R> <D>`，結果必須是 `exit=0`；
+             - `git merge-base --is-ancestor <R> <head>`，結果必須是 `exit=0`。
+             - 理由：commit SHA 由內容與 parent 決定，以 `<R>` 為祖先的 commit，不可能在 `<R>` 之前算出來。qa 審的就是 `<head>`（[TA-177S] 修訂八第 1 節，四個值相等），所以 qa 的審查必然晚於這份審查紀錄。
+             - 第二條實際上要求：N-198 分支在送審之前，已經 merge 過含有 `<R>` 的 product。這和 C7「合入前 merge 最新 product」同方向，不會延後開工。
+           - (6e) 交件紀錄的歷史：
+             - 貼出交件紀錄路徑在 `origin/product/stock-desk` 上的完整 commit 歷史，每一筆都寫完整 40 碼，並貼出首版之後每一筆對該檔的 diff。歷史只有一筆，就表示「沒有任何編輯」。
+             - 依 [TA-177S] 修訂六 1.7 重新送審時，每一版新的交件紀錄都各自適用 (2) 與 (6d)。
+           - 時間的交叉核對：
+             - 送審紀錄所載的送達時間（到分鐘，Asia/Taipei），必須早於 coordinator 派工紀錄所載「N-198 送 qa 審查」的時間所在的那一分鐘。落在同一分鐘或更晚，依 (4) 判 BLOCKING。
+             - 這兩個時間都由 coordinator 記錄，只用來抓出錯誤，不是先後的主要證據；主要證據是 (6d)。
+           - 執行與判斷分離（ADR-0007）：
+             - qa-reviewer 的工具是 Read、Grep、Glob、`codex`、`git diff`，不為此新增工具。
+             - (6a)～(6e) 由 [TA-177S] 修訂六 1.3 (ii) 的執行者執行。指令原文與完整輸出原樣記入 `work/reviews/` 的本案審查紀錄，每條都附 `exit=` 行，並記錄讀取時間（到分鐘，Asia/Taipei）。
+             - 只用唯讀的 git 查詢，實際指令由 devops-sre 指定；本 ADR 只訂要證明的事。
+             - 獨立性依 [TA-177S] 修訂八第 2 節，以角色判定。
+             - qa 與風控讀這份紀錄判定。
+           - 殘留：
+             - 證明不了 push 的時點，只證明 `<R>` 早於 `<D>` 與 `<head>`，而且讀取當下在 product 上可達。這一項 [風控-ADR42 回審二] 第二節第 2 點 (3) 已接受。
+             - `<D>` 何時 push、qa 何時被派工，都由 coordinator 記錄，git 證明不了。(6d) 的第二條不受影響。
+             - `product/stock-desk` 禁止 force push 是公司規範；伺服器端有沒有強制，待 devops-sre 書面查證。沒有強制時，(6c) 只證明讀取當下可達。
+             - qa 無法親自重現，與 [TA-177S] 修訂六 1.8 的殘留相同。
        - (c) (1) 的審查紀錄不是 VETO，而且其 required 在 N-198 合入之前已經處理。
      - N-177b 延誤，不構成 N-198 延到第三包之後的理由（見「先後與相依」第 5 點）。
 7. **測試（全部 BLOCKING；用真實 `PlaybookStore`、檔案型 DB）**
@@ -303,7 +335,7 @@ def claim_and_settle(
    - 兩者都改 `_settle_pending`，也都動 `settle` 的回傳（`SettleOutcome`）。
    - 若 N-177b 在第三包凍結前趕不上，N-198 可以先合入，但要依 N198-C9 處理：
      - TA 出補充：Q-g、N177b-C6／C9 改為從 `claim_and_settle` 的回傳取值；N-177b 合入之前 `ClaimSettle.settled` 的型別；一併修改 N198-C7 的 `<M_2>` 與第二份 diff。
-     - 這份補充必須在 **N-198 的 PR 開出之前**送到風控，而且風控對它的審查紀錄在 PR 開出之前已經存在、並已 push 到 remote，不得事後補。舉證依 N198-C9 (b)。這只會延後 PR 開出的時間，不會延後合入（[風控-ADR42 回審] 第二節第 1 點）。
+     - 這份補充必須在 **N-198 送審之前**送到風控。風控對它的審查紀錄，也要在送審之前已經存在，並在 `origin/product/stock-desk` 上可達，不得事後補。「送審」的定義與舉證都依 N198-C9 (b)。這只會延後送審的時間：N-198 分支要先 merge 含有該審查紀錄的 product。不會延後合入（[風控-ADR42 回審] 第二節第 1 點）。
    - N-177b 延誤，不構成 N-198 延期的理由（第 5 點）。
 3. **N-195、N-196、N-197a**：沒有邏輯相依（REBALANCE 路徑）；都會動到 store.py，依 C7 merge 最新 product 即可。
 4. **N-199：N-198 相依於 N-199。**
@@ -324,5 +356,4 @@ def claim_and_settle(
    - 部署之前，coordinator 先核對該點「授權範圍」列出的各項事實和要部署的版本一致。不一致時回風控；風控回覆之前，不部署 N-198。
 
 ## 待決
-- [待風控] 確認本版標「［待風控確認］」的各項。風控確認的項目，tech-writer 刪除該標記（只刪字）；風控不採用的項目，整項刪除；要改寫的，回 TA。各項處理完之後，刪除本點。
 - CEO：核可。
