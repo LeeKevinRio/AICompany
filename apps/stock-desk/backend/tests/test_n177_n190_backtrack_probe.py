@@ -1087,6 +1087,7 @@ def test_report_json_schema_and_limitation_codes(tmp_path: Path) -> None:
         "gate",
         "n177",
         "n190",
+        "n199",
         "limitations",
         "diff_vs_previous",
     }
@@ -1112,13 +1113,13 @@ def test_report_json_schema_and_limitation_codes(tmp_path: Path) -> None:
         "ceo_decision_required",
     }
     assert result["diff_vs_previous"] is None
-    assert result["limitations"] == [f"L{i}" for i in range(1, 12)]
+    assert result["limitations"] == [f"L{i}" for i in range(1, 15)]
     assert result["meta"]["run_at_utc"] == "2026-11-07T12:00:00+00:00"
 
 
 def test_every_known_limitation_is_written_into_the_markdown(tmp_path: Path) -> None:
     _code, _result, markdown = _run(tmp_path, _rich_world(tmp_path))
-    assert sorted(probe.LIMITATIONS, key=lambda c: int(c[1:])) == [f"L{i}" for i in range(1, 12)]
+    assert sorted(probe.LIMITATIONS, key=lambda c: int(c[1:])) == [f"L{i}" for i in range(1, 15)]
     for code, text in probe.LIMITATIONS.items():
         assert f"- {code}：{text}" in markdown
 
@@ -1185,7 +1186,7 @@ def test_stdout_is_an_ascii_summary(tmp_path: Path, capsys: pytest.CaptureFixtur
     text = capsys.readouterr().out
     assert code == 0
     assert text.isascii()
-    assert "version=1" in text and "gate_affected_symbols=2" in text
+    assert "version=2" in text and "gate_affected_symbols=2" in text
     assert "report_md=" in text and "report_json=" in text
     assert (out / "report.md").is_file()
 
@@ -1913,6 +1914,8 @@ def test_rc5_an_out_dir_inside_a_git_work_tree_is_refused(
 def test_rc6_the_module_documents_that_the_report_is_private() -> None:
     doc = ast.get_docstring(_script_tree()) or ""
     assert "holds holdings and cash" in doc and "never commit it" in doc
+    assert "Only the CEO reads the report files; no agent reads them." in doc
+    assert "coordinator" not in doc.lower()
 
 
 def test_s9_no_env_file_and_no_environment_value_is_read_or_printed(
@@ -2298,3 +2301,431 @@ def test_d9_known_values_leave_the_trial_alone(tmp_path: Path) -> None:
     _stage_phantom(path)
     (item,) = _affected(_report(tmp_path, path))
     assert item["guards"] == [] and item["trial"] is not None
+
+
+# ---------------------------------------------------------------- N-199 (N-197 (b) checks)
+
+N199_SETTLED_AT = "2026-08-11T23:00:00+00:00"
+
+
+def _n199(result: dict[str, Any]) -> dict[str, Any]:
+    section: dict[str, Any] = result["n199"]
+    return section
+
+
+def _stage_n199_a(path: Path) -> None:
+    """Batch 1 stays planned with an executed R1 and a later re-issued R1; batch 2 is skipped."""
+    _batch(path, batch_no=1, status="planned", entry_date=None, cost=None)
+    _executed(path, batch_no=1, shares=100)
+    _row(path, batch_no=1, shares=90, data_date="2026-08-13", execution_date="2026-08-14")
+    _batch(path, batch_no=2, status="skipped", entry_date=None, cost=None)
+    _executed(path, batch_no=2, shares=70, price="480", rule_id="R1")
+
+
+def test_n199_t1_fill_not_booked_is_listed_with_every_column(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _stage_n199_a(path)
+    result = _report(tmp_path, path)
+    rows = _n199(result)["fill_not_booked"]
+    assert [(r["batch_no"], r["batch_status"]) for r in rows] == [(1, "planned"), (2, "skipped")]
+    assert rows[0] == {
+        "id": 1,
+        "symbol": "2330",
+        "batch_no": 1,
+        "rule_id": "R1",
+        "shares": 100,
+        "data_date": "2026-08-11",
+        "execution_date": "2026-08-12",
+        "created_at": "2026-08-11T10:00:00+00:00",
+        "settled_at": N199_SETTLED_AT,
+        "settled_open_price": "500",
+        "batch_status": "planned",
+        "other_buys": [
+            {
+                "id": 2,
+                "rule_id": "R1",
+                "status": "pending",
+                "settled": 0,
+                "data_date": "2026-08-13",
+                "execution_date": "2026-08-14",
+            }
+        ],
+    }
+    assert rows[1]["settled_open_price"] == "480" and rows[1]["other_buys"] == []
+
+
+def test_n199_t2_fill_not_booked_misses(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _batch(path, batch_no=1, status="open")
+    _executed(path, batch_no=1)  # booked
+    _batch(path, batch_no=2, status="planned", entry_date=None, cost=None)
+    _row(path, batch_no=2)  # pending only
+    _batch(path, batch_no=3, status="planned", entry_date=None, cost=None)
+    _row(path, batch_no=3, status="missed", settled=1, settled_at=N199_SETTLED_AT)
+    _executed(path, batch_no=9)  # no batch row
+    result = _report(tmp_path, path)
+    assert _n199(result)["fill_not_booked"] == []
+    assert len(result["n177"]["missing_batch_rows"]) == 1  # only N177-D carries it
+
+
+def test_n199_t3_same_batch_blocked_hits_and_seconds(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _batch(path, symbol="2330", batch_no=1, status="open")
+    _executed(path, symbol="2330", batch_no=1)
+    _row(path, symbol="2330", batch_no=1, created_at="2026-08-11T23:00:30+00:00", shares=90)
+    _batch(path, symbol="2317", batch_no=1, status="closed")
+    _executed(path, symbol="2317", batch_no=1)
+    _row(path, symbol="2317", batch_no=1, created_at="2026-08-11T22:59:59.500000+00:00")
+    _batch(path, symbol="2454", batch_no=1, status="open")
+    _executed(path, symbol="2454", batch_no=1)
+    _row(path, symbol="2454", batch_no=1, created_at="not-a-time")
+    code, result, markdown = _run(tmp_path, path)
+    assert code == 0
+    rows = {r["symbol"]: r for r in _n199(result)["same_batch_blocked"]}
+    assert set(rows) == {"2330", "2317", "2454"}
+    first = rows["2330"]
+    assert first["batch_status"] == "open"
+    assert first["executed"] == {
+        "id": 1,
+        "rule_id": "R1",
+        "execution_date": "2026-08-12",
+        "settled_at": N199_SETTLED_AT,
+    }
+    assert first["pending"]["shares"] == 90 and first["pending"]["id"] == 2
+    assert first["seconds_pending_created_after_executed_settled"] == 30
+    assert rows["2317"]["batch_status"] == "closed"
+    assert rows["2317"]["seconds_pending_created_after_executed_settled"] == 0  # toward zero
+    assert rows["2454"]["seconds_pending_created_after_executed_settled"] is None
+    assert probe.CACHE_UNDETERMINED in markdown
+
+
+def test_n199_t4_same_batch_blocked_misses(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _batch(path, batch_no=1, status="planned", entry_date=None, cost=None)
+    _executed(path, batch_no=1)
+    _row(path, batch_no=1)  # planned: N199-A only
+    _batch(path, batch_no=2, status="open")
+    _executed(path, batch_no=2)
+    _row(path, batch_no=3)  # pending buy on another batch (no batch row)
+    _row(path, batch_no=2, action="sell", rule_id="S1", shares=10)  # pending sell
+    _row(path, batch_no=2, status="executed", settled=1, settled_at=N199_SETTLED_AT)
+    result = _report(tmp_path, path)
+    assert _n199(result)["same_batch_blocked"] == []
+    assert len(_n199(result)["fill_not_booked"]) == 1
+
+
+def test_n199_t5_multi_executed_buys(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _batch(path, batch_no=1, status="open")
+    _executed(path, batch_no=1, shares=100)
+    _executed(path, batch_no=1, shares=90, settled_at="2026-08-13T23:00:00+00:00")
+    _batch(path, batch_no=2, status="open")
+    for shares in (10, 20, 30):
+        _executed(path, batch_no=2, shares=shares)
+    _row(path, batch_no=2, shares=5)  # pending: not in the buys list
+    _batch(path, batch_no=3, status="open")
+    _executed(path, batch_no=3)  # a single one
+    _executed(path, batch_no=7)
+    _executed(path, batch_no=7)  # no batch row
+    result = _report(tmp_path, path)
+    rows = _n199(result)["multi_executed_buys"]
+    assert [(r["batch_no"], r["count"], r["batch_status"]) for r in rows] == [
+        (1, 2, "open"),
+        (2, 3, "open"),
+        (7, 2, None),
+    ]
+    assert [b["shares"] for b in rows[0]["buys"]] == [100, 90]
+    assert rows[0]["buys"][0] == {
+        "id": 1,
+        "rule_id": "R1",
+        "shares": 100,
+        "execution_date": "2026-08-12",
+        "created_at": "2026-08-11T10:00:00+00:00",
+        "settled_at": N199_SETTLED_AT,
+        "settled_open_price": "500",
+    }
+    assert [b["shares"] for b in rows[1]["buys"]] == [10, 20, 30]
+
+
+def test_n199_t6_s11_parity_with_the_store_g1_condition(tmp_path: Path) -> None:
+    rng = random.Random(199)
+    path = _db(tmp_path)
+    books = 400
+    directives: list[tuple[Any, ...]] = []
+    batches: list[tuple[Any, ...]] = []
+    for n in range(books):
+        symbol = f"T{n:04d}"
+        status = rng.choice(["planned", "open", "closed", "skipped", None])
+        if status is not None:
+            batches.append(
+                (symbol, 1, status, None, None, 100, 100, 0, 0, "2026-08-12T00:00:00+00:00")
+            )
+        for _ in range(rng.randint(1, 4)):
+            outcome = rng.choice(["pending", "executed", "missed"])
+            settled = rng.choice([0, 1])
+            directives.append(
+                (
+                    "2026-08-11T10:00:00+00:00",
+                    1,
+                    symbol,
+                    1,
+                    rng.choice(["buy", "buy", "buy", "sell"]),
+                    100,
+                    "R1",
+                    "x",
+                    "2026-08-11",
+                    "2026-08-12",
+                    "fresh",
+                    "fixture",
+                    outcome,
+                    settled,
+                )
+            )
+    with closing(sqlite3.connect(path)) as conn, conn:
+        conn.executemany(
+            "INSERT INTO playbook_batches (symbol, batch_no, status, entry_date, cost, shares, "
+            "remaining_shares, defer_count, missed_count, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            batches,
+        )
+        conn.executemany(
+            "INSERT INTO playbook_directives (created_at, rules_version, symbol, batch_no, "
+            "action, shares, rule_id, rule_summary, data_date, execution_date, data_status, "
+            "source, status, settled) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            directives,
+        )
+        expected = {
+            int(r[0])
+            for r in conn.execute(
+                "SELECT id FROM playbook_directives WHERE action = 'buy' AND settled = 0 "
+                f"AND status = 'pending' AND {store.BATCH_LEFT_PLANNED_SQL} "
+                "AND EXISTS (SELECT 1 FROM playbook_directives AS x "
+                "WHERE x.symbol = playbook_directives.symbol "
+                "AND x.batch_no = playbook_directives.batch_no AND x.action = 'buy' "
+                "AND x.status = 'executed' AND x.settled = 1)"
+            )
+        }
+    result = _report(tmp_path, path)
+    found = {r["pending"]["id"] for r in _n199(result)["same_batch_blocked"]}
+    assert found == expected
+    assert len(expected) >= 10  # the random books do exercise the condition
+
+
+def _real_store_db(tmp_path: Path) -> tuple[PlaybookStore, Path]:
+    live = tmp_path / "live" / "stock-desk.db"
+    real = PlaybookStore(db_path=live)
+    real.ensure_batches(["2330"], batches_per_target=1)
+    return real, live
+
+
+def _copy_and_probe(tmp_path: Path, live: Path, name: str) -> dict[str, Any]:
+    folder = tmp_path / name
+    folder.mkdir()
+    copy = folder / "stock-desk.db"
+    with closing(sqlite3.connect(live)) as source, closing(sqlite3.connect(copy)) as target:
+        source.backup(target)
+    code, result, _md = _run(tmp_path, copy, name=f"{name}_out")
+    assert code == 0
+    return result
+
+
+def test_n199_t7_real_store_paths(tmp_path: Path) -> None:
+    from tests.same_day_helpers import buy_line, evaluation_of
+
+    real, live = _real_store_db(tmp_path)
+    real.record_directives(evaluation_of(real, [buy_line()]))
+    ((first, line),) = real.pending_directives()
+    # (i) claimed, never settled into the book: the batch stays planned.
+    assert real.claim_directive(first, status="executed", open_price=Decimal("100"))
+    one = _n199(_copy_and_probe(tmp_path, live, "case_i"))
+    assert len(one["fill_not_booked"]) == 1
+    assert one["same_batch_blocked"] == [] and one["multi_executed_buys"] == []
+    # (ii) a full settle of r1, then a second R1 pending on the same batch.
+    real.settle(line.model_copy(update={"status": "executed"}), fill_price=Decimal("100"))
+    real.record_directives(evaluation_of(real, [buy_line(execution_date=date(2026, 8, 14))]))
+    two = _n199(_copy_and_probe(tmp_path, live, "case_ii"))
+    assert len(two["same_batch_blocked"]) == 1 and two["fill_not_booked"] == []
+    # (iii) the claim of the re-issued R1 is refused by G1 once the batch is open; rebuild the
+    # failure variant: a new DB where both R1 lines are claimed while the batch is planned.
+    live3 = tmp_path / "live3" / "stock-desk.db"
+    real3 = PlaybookStore(db_path=live3)
+    real3.ensure_batches(["2330"], batches_per_target=1)
+    real3.record_directives(evaluation_of(real3, [buy_line()]))
+    ((a_id, _a),) = real3.pending_directives()
+    assert real3.claim_directive(a_id, status="executed", open_price=Decimal("100"))
+    real3.record_directives(evaluation_of(real3, [buy_line(execution_date=date(2026, 8, 14))]))
+    ((b_id, b_line),) = real3.pending_directives()
+    assert real3.claim_directive(b_id, status="executed", open_price=Decimal("100"))
+    real3.settle(b_line.model_copy(update={"status": "executed"}), fill_price=Decimal("100"))
+    three = _n199(_copy_and_probe(tmp_path, live3, "case_iii"))
+    assert len(three["multi_executed_buys"]) == 1
+    assert three["multi_executed_buys"][0]["count"] == 2
+    assert three["fill_not_booked"] == []
+
+
+def test_n199_t8_s2_covers_the_new_constants() -> None:
+    constants: dict[str, str] = {}
+    for node in _script_tree().body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id.endswith("_SQL"):
+                assert isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+                constants[target.id] = node.value.value
+    assert len(constants) == 25 + 4
+    new = [n for n in constants if n.startswith("N199_")]
+    assert sorted(new) == [
+        "N199_BATCH_BUYS_SQL",
+        "N199_FILL_NOT_BOOKED_SQL",
+        "N199_MULTI_EXECUTED_BUY_SQL",
+        "N199_SAME_BATCH_BLOCKED_SQL",
+    ]
+    for name in new:
+        assert constants[name].strip().upper().startswith("SELECT "), name
+    assert constants["N199_BATCH_BUYS_SQL"].count("?") == 2
+    for name in new:
+        if name != "N199_BATCH_BUYS_SQL":
+            assert "?" not in constants[name], name
+    # The only execute call that passes parameters for the new detail query binds them.
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    assert "conn.execute(N199_BATCH_BUYS_SQL, key)" in source
+
+
+def _n199_world(tmp_path: Path) -> Path:
+    path = _db(tmp_path)
+    _stage_n199_a(path)
+    _batch(path, symbol="2317", batch_no=1, status="open")
+    _executed(path, symbol="2317", batch_no=1)
+    _row(path, symbol="2317", batch_no=1, created_at="2026-08-11T23:00:30+00:00")
+    _executed(path, symbol="2317", batch_no=1, shares=40)
+    return path
+
+
+def test_n199_t9_report_sections_stdout_and_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _n199_world(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    code = probe.main(
+        ["--db-path", str(path), "--out-dir", str(out)], env={}, now_utc=RUN_AT, today=AS_OF
+    )
+    text = capsys.readouterr().out
+    assert code == 0 and text.isascii()
+    lines = text.splitlines()
+    gate = lines.index("gate_affected_symbols=0")
+    assert lines[gate + 1 : gate + 4] == ["n199_a_rows=2", "n199_b_rows=2", "n199_c_rows=1"]
+    parsed_meta = json.loads((out / "report.json").read_text(encoding="utf-8"))["meta"]
+    assert lines[gate + 4 : gate + 8] == [
+        f"script_sha256_lf={parsed_meta['script_sha256_lf']}",
+        f"db_sha256_before={parsed_meta['db_sha256_before']}",
+        f"db_sha256_after={parsed_meta['db_sha256_after']}",
+        f"run_at_utc={parsed_meta['run_at_utc']}",
+    ]
+    assert re.fullmatch(r"script_sha256_lf=[0-9a-f]{64}", lines[gate + 4])
+    allowed = re.compile(
+        r"n177_n190_backtrack_probe version=|gate_affected_symbols=|report_md=|report_json="
+        r"|n199_[abc]_rows=|script_sha256_lf=|db_sha256_(before|after)=|run_at_utc="
+    )
+    assert all(allowed.match(line) for line in lines), lines
+    for symbol in ("2330", "2317"):  # symbols of the test DB
+        assert symbol not in text
+    markdown = (out / "report.md").read_text(encoding="utf-8")
+    for title in (
+        "## N199-A 已判定成交、批次未記入的買進",
+        "## N199-B 同批已有成交買進，另有 G1 擋下類的待結算買進",
+        "## N199-C 同批兩筆以上已判定成交的買進",
+        "| N199-A 已判定成交、批次未記入的買進 | 2 |",
+        "| N199-B 同批已有成交買進，另有 G1 擋下類的待結算買進 | 2 |",
+        "| N199-C 同批兩筆以上已判定成交的買進 | 1 |",
+    ):
+        assert title in markdown, title
+    assert markdown.index("## N190-D") < markdown.index("## N199-A") < markdown.index("## N199-B")
+    assert markdown.index("## N199-B") < markdown.index("## N199-C")
+    raw = (out / "report.json").read_text(encoding="utf-8")
+    parsed = json.loads(raw)
+    assert raw == json.dumps(parsed, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    assert set(parsed["n199"]) == {"fill_not_booked", "same_batch_blocked", "multi_executed_buys"}
+    assert parsed["schema_version"] == 1 and parsed["meta"]["script_version"] == "2"
+    for row in parsed["n199"]["fill_not_booked"]:
+        assert isinstance(row["settled_open_price"], str)
+    for row in parsed["n199"]["multi_executed_buys"]:
+        assert all(isinstance(b["settled_open_price"], str) for b in row["buys"])
+
+
+def test_n199_t9_a_v1_report_is_still_a_usable_previous_json(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _stage_phantom(path)
+    first = _report(tmp_path, path)
+    legacy = {k: v for k, v in first.items() if k != "n199"}
+    legacy["meta"] = {**legacy["meta"], "script_version": "1"}
+    legacy["limitations"] = [f"L{i}" for i in range(1, 12)]
+    legacy_path = tmp_path / "v1.json"
+    legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+    code, from_v1, _md = _run(tmp_path, path, "--previous-json", str(legacy_path), name="second")
+    assert code == 0
+    current = tmp_path / "out" / "report.json"
+    _code, from_v2, _md2 = _run(tmp_path, path, "--previous-json", str(current), name="third")
+    assert from_v1["diff_vs_previous"] == from_v2["diff_vs_previous"]
+    assert from_v1["diff_vs_previous"] is not None
+    assert from_v1["schema_version"] == 1
+
+
+def test_n199_t10_unexpected_values_are_sanitized_and_free_text_stays_out(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _batch(path, batch_no=1, status="weird")
+    _executed(path, batch_no=1, rule_id="建議務必")
+    _row(path, batch_no=1, rule_id="應", rule_summary="建議務必安全 free text")
+    _batch(path, batch_no=2, status="planned", entry_date=None, cost=None)
+    _executed(path, batch_no=2, rule_id="XYZ", price="建議務必安全")
+    code, result, markdown = _run(tmp_path, path)
+    assert code == 0
+    section = _n199(result)
+    blocked = section["same_batch_blocked"][0]
+    assert blocked["batch_status"] == probe.ENUM_UNEXPECTED
+    assert blocked["executed"]["rule_id"] == probe.ENUM_UNEXPECTED
+    assert blocked["pending"]["rule_id"] == probe.ENUM_UNEXPECTED
+    (filled,) = section["fill_not_booked"]
+    assert filled["rule_id"] == probe.ENUM_UNEXPECTED
+    assert filled["settled_open_price"] == probe.UNEXPECTED_TOKEN
+    assert result["meta"]["unexpected_enum_values"] >= 4
+    raw = (tmp_path / "out" / "report.json").read_text(encoding="utf-8")
+    assert "free text" not in raw and "free text" not in markdown
+    assert "rule_summary" not in "\n".join(
+        ln
+        for node in (probe.N199_FILL_NOT_BOOKED_SQL, probe.N199_SAME_BATCH_BLOCKED_SQL)
+        for ln in node.splitlines()
+    )
+    assert "rule_summary" not in probe.N199_BATCH_BUYS_SQL
+    assert "rule_summary" not in probe.N199_MULTI_EXECUTED_BUY_SQL
+
+
+def test_n199_t11_hits_leave_exit_zero_hash_and_two_files(tmp_path: Path) -> None:
+    path = _n199_world(tmp_path)
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    out = tmp_path / "out"
+    out.mkdir()
+    code = probe.main(
+        ["--db-path", str(path), "--out-dir", str(out)], env={}, now_utc=RUN_AT, today=AS_OF
+    )
+    assert code == 0
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+    assert sorted(p.name for p in out.iterdir()) == ["report.json", "report.md"]
+    meta = json.loads((out / "report.json").read_text(encoding="utf-8"))["meta"]
+    assert meta["db_sha256_before"] == before == meta["db_sha256_after"]
+
+
+def test_n199_t12_fixed_wording_has_no_advice_words(tmp_path: Path) -> None:
+    path = _n199_world(tmp_path)
+    _code, _result, markdown = _run(tmp_path, path)
+    for text in (
+        probe.N199_A_CONDITION,
+        probe.N199_B_CONDITION,
+        probe.N199_C_CONDITION,
+        probe.LIMITATIONS["L12"],
+        probe.LIMITATIONS["L13"],
+        probe.LIMITATIONS["L14"],
+    ):
+        assert _scan(text) == [], text
+        assert text in markdown
+    for code in ("L12", "L13", "L14"):
+        assert f"- {code}：{probe.LIMITATIONS[code]}" in markdown
+    assert _scan(markdown) == []
