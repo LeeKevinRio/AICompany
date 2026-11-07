@@ -332,6 +332,9 @@ class LoadedBenchmark:
     staleness_minutes: int | None = None
     reason: str | None = None
     notes: list[str] = field(default_factory=list)
+    #: ``ProviderResult.is_within_ttl``, copied as returned (ADR-0040 (x1)); not in
+    #: :meth:`meta` (ADR-0040 Options 三 (x3)).
+    is_within_ttl: bool | None = None
 
     @property
     def available(self) -> bool:
@@ -393,6 +396,7 @@ def load_market_benchmark(
                 NO_BARS_REASON.format(series_symbol=benchmark.series_symbol), result.reason
             ),
             notes=notes,
+            is_within_ttl=result.is_within_ttl,
         )
     return LoadedBenchmark(
         series_symbol=benchmark.series_symbol,
@@ -404,6 +408,7 @@ def load_market_benchmark(
         # Forwarded, never dropped (風控 2026-09-15 R1-b) -- see load_index_series.
         reason=result.reason,
         notes=notes,
+        is_within_ttl=result.is_within_ttl,
     )
 
 

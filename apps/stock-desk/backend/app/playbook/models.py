@@ -173,6 +173,10 @@ class MarketSnapshot(BaseModel):
     data_reason: str | None = None
     #: 高波動清單 membership only changes the P3 threshold (15% -> 20%).
     high_volatility: bool = False
+    #: ``ProviderResult.is_within_ttl`` of the load, passed on untouched (ADR-0040
+    #: Decision 3): ``True`` only for a ``cached_stale`` answer the data layer judged
+    #: to hold the latest session. Read together with ``data_status`` (ADR-0005 D-2).
+    is_within_ttl: bool | None = None
 
 
 class IndexSnapshot(BaseModel):
@@ -196,6 +200,8 @@ class IndexSnapshot(BaseModel):
     #: -- ADR-0009 D-7), carried so the mode reason it feeds can be qualified
     #: (風控 2026-09-15 R1-b). ``None`` when there is nothing to say.
     data_reason: str | None = None
+    #: ``ProviderResult.is_within_ttl`` of the index load, untouched (ADR-0040 Decision 3).
+    is_within_ttl: bool | None = None
 
 
 class BatchState(BaseModel):

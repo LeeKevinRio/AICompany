@@ -703,8 +703,10 @@ def test_t18_is_s2_fill_is_the_entry(changes: dict[str, Any], expected: bool) ->
 #: entry. ``apply_effects`` writes it as the blacklist row's source record
 #: (``self.blacklist(rule_id="S2")``), there since before N-177a and zero diff under
 #: C3; it is no condition literal of C4 and may not be rewritten to cite
-#: :data:`S2_FILL_ENTRY`. Each named place holds exactly one.
-PRE_N177A_S2_VALUES = ("apply_effects",)
+#: :data:`S2_FILL_ENTRY`. ``SETTLED_SINCE_RULE_IDS`` is N-190's one definition of the
+#: S/P sell series (N-190 停止點裁示 E-3; 修訂五 T18 (iii), merged under C14), zero
+#: diff. Each named place holds exactly one.
+PRE_N177A_S2_VALUES = ("apply_effects", "SETTLED_SINCE_RULE_IDS")
 
 
 def _string_owners(tree: ast.AST, value: str) -> list[str]:

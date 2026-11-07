@@ -921,6 +921,69 @@ SETTLEMENT_UNAUTHORED_NOTE = (
     "本系統不下單，無法得知你是否已在券商下單或成交，實際持股以你的券商回報為準。"
 )
 
+# --- N-190 (ADR-0040 Decision 7, 9) -----------------------------------------------
+# Copied by program from the 「…」 of work/reviews/2026-11-04-N190重裁-風控.md (N190-I
+# and its two item formats) and work/reviews/2026-11-05-N177修復與N190字面裁示-風控.md
+# (B-2, B-4); tests/test_playbook_n190_wording.py re-reads both files. B-1's three
+# sentences are not here (ADR-0040 Decision 10).
+
+#: N190-I (風控 2026-11-04 第二節之 2): appended to the
+#: :data:`SETTLEMENT_NO_OPEN_PRICE` reason of an unsettled S/P sell
+#: (``store.SETTLED_SINCE_RULE_IDS``) when this response's ``directives`` hold a
+#: later sell of the same batch -- of the same symbol when either line is S2.
+#: ``/today`` only; ``POST /settle`` has no ``directives``. ``{later_items}``
+#: joins the two item formats below with 「、」 by 預定執行日, batch_no.
+SETTLEMENT_EARLIER_SELL_NOT_DEDUCTED_NOTE = (
+    "這筆賣出指令尚未結算，帳冊未依它減少股數；"
+    "本頁指令中另有 {later_items}，"
+    "所列股數未扣除這筆。本系統不下單，"
+    "無法得知你是否已依這筆在券商賣出："
+    "若已賣出且成交，你在券商的持股可能少於上述較晚指令所列的股數，"
+    "請勿就超過你在券商實際持股的股數到券商下賣單；"
+    "若尚未賣出（包括該日休市、"
+    "未下單或未成交），實際持股以你的券商回報為準。"
+    "若日後補得這筆預定執行日的開盤價，"
+    "帳冊仍可能依這筆判定成交，"
+    "判定的日期與價格可能與你實際賣出的不同。"
+)
+
+#: N190-I ``{later_items}``: a per-batch line. ``{shares}`` is the line's own count.
+SETTLEMENT_EARLIER_SELL_BATCH_ITEM = (
+    "{symbol}第 {batch_no} 批規則 {rule_id} 賣出 {shares} 股（預定執行日 {execution_date}）"
+)
+
+#: N190-I ``{later_items}``: an S2 line (the whole symbol, no batch).
+SETTLEMENT_EARLIER_SELL_SYMBOL_ITEM = (
+    "{symbol}規則 {rule_id} 整檔賣出 {shares} 股（預定執行日 {execution_date}）"
+)
+
+#: B-4 (風控 2026-11-05; ADR-0040 Decision 9 第 4、5 點): takes the place of a held
+#: symbol's DATA_GAP_HOLDING_NOTE when this run's snapshot is ``cached_stale``,
+#: not within TTL and not demo, an SP mark of the same 預定執行日 and 依據資料日
+#: was written before this run, and the 預定執行日's log has no S/P sell of the
+#: symbol. Followed by A, then B, when they are rendered.
+SAME_DAY_EARLIER_SP_EVALUATED_NOTE = (
+    "{symbol} 本次資料狀態為 {status}（來源 {source}"
+    "），本次未重新評估這檔；"
+    "同一預定執行日稍早已有一次評估用資料日 {data_date} 的可用資"
+    "料評估過這檔持有部位的停損/停利（S/P 系列），"
+    "指令帳冊中同一預定執行日沒有這檔的停損/停利賣出指令，"
+    "稍早的評估結果未因本次資料狀態而取消或修改。"
+    "該次評估依據資料日 {data_date} 的收盤價，"
+    "不反映之後的價格變動。"
+)
+
+#: B-2 (風控 2026-11-05; ADR-0040 Decision 9 第 6 點): takes the place of the status
+#: branch of INDEX_DATA_GAP_NOTE -- never the ``insufficient_data`` one -- on the
+#: same conditions with an M1 mark of the index's own 依據資料日.
+SAME_DAY_EARLIER_M1_EVALUATED_NOTE = (
+    "加權指數本次資料狀態為 {status}（來源 {source}），"
+    "本次未重新評估 M1；M1 與快市判定維持同一預定執行日稍早一次以資料日"
+    " {data_date} 的可用資料評估的結果，"
+    "本次評估不產生新的 R 系列進場指令，"
+    "同一預定執行日稍早已產生的指令不因此取消或修改。"
+)
+
 #: N-166 風控 N1 (CEO #87): appended to :data:`SETTLEMENT_NO_OPEN_PRICE` for an
 #: unsettled EMERGENCY sell that meets 判準 Z while its batch is closed or has a
 #: later EMERGENCY sell -- the line otherwise reads 「賣出 N 股、待結算」 day

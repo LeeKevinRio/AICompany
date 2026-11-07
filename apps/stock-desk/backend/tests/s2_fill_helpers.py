@@ -202,6 +202,12 @@ def enclosing(tree: ast.AST) -> Iterator[tuple[str, ast.AST]]:
                 name = child.name
             elif isinstance(child, ast.Assign) and owner == "<module>":
                 name = ",".join(t.id for t in child.targets if isinstance(t, ast.Name))
+            elif (
+                isinstance(child, ast.AnnAssign)
+                and owner == "<module>"
+                and isinstance(child.target, ast.Name)
+            ):
+                name = child.target.id
             yield name, child
             yield from walk(child, name)
 

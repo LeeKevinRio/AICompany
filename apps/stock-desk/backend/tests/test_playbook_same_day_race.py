@@ -228,11 +228,12 @@ def test_an_evaluation_raises_when_the_write_lock_stays_taken(
     monkeypatch.setattr(store_module, "BUSY_TIMEOUT_MS", 50)
     real_commit = desk.store.commit_evaluation
 
-    def locked_commit(evaluation: PlaybookEvaluation) -> Any:
+    def locked_commit(evaluation: PlaybookEvaluation, **kwargs: Any) -> Any:
+        # ``**kwargs``: passes ADR-0040's ``marks=`` through unchanged.
         with closing(sqlite3.connect(db_path, isolation_level=None)) as holder:
             holder.execute("BEGIN IMMEDIATE")
             try:
-                return real_commit(evaluation)
+                return real_commit(evaluation, **kwargs)
             finally:
                 holder.execute("ROLLBACK")
 
