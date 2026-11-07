@@ -135,6 +135,10 @@ class LoadedSeries(NamedTuple):
     #: ``ProviderResult.reason`` -- carried into the snapshot and every
     #: directive issued from it (風控 2026-09-15 R3), never dropped here.
     reason: str | None = None
+    #: ``ProviderResult.is_within_ttl``, carried into the snapshot untouched
+    #: (ADR-0040 Decision 3): the second field a ``cached_stale`` status has to be
+    #: read with (interface.py, ADR-0005 D-2).
+    is_within_ttl: bool | None = None
 
 
 #: What a symbol the ladder never answered for looks like.
@@ -149,6 +153,7 @@ def build_market_snapshot(
     source: str,
     reason: str | None = None,
     high_volatility: bool = False,
+    is_within_ttl: bool | None = None,
 ) -> MarketSnapshot | None:
     """One symbol's snapshot, or ``None`` when no bar came back at all."""
     ordered = indicators.sorted_closes(bars)
@@ -167,6 +172,7 @@ def build_market_snapshot(
         source=source,
         data_reason=reason,
         high_volatility=high_volatility,
+        is_within_ttl=is_within_ttl,
     )
 
 
@@ -177,6 +183,7 @@ def build_index_snapshot(
     source: str,
     params: RuleParams,
     reason: str | None = None,
+    is_within_ttl: bool | None = None,
 ) -> IndexSnapshot | None:
     """加權指數 snapshot: 月線, its run of closes below it, and the fast-market pair."""
     ordered = indicators.sorted_closes(bars)
@@ -200,6 +207,7 @@ def build_index_snapshot(
         data_status=status,
         source=source,
         data_reason=reason,
+        is_within_ttl=is_within_ttl,
     )
 
 
@@ -1459,7 +1467,11 @@ class PlaybookService:
                 self._markets, symbol=symbol, market=PLAYBOOK_MARKET, start=start, end=today
             )
             loaded[symbol] = LoadedSeries(
-                list(result.bars), result.status.value, result.source, result.reason
+                list(result.bars),
+                result.status.value,
+                result.source,
+                result.reason,
+                result.is_within_ttl,
             )
         return loaded
 
@@ -1488,7 +1500,11 @@ class PlaybookService:
             self._indices, market=PLAYBOOK_MARKET, start=start, end=today
         )
         return LoadedSeries(
-            list(benchmark.bars), benchmark.status.value, benchmark.source, benchmark.reason
+            list(benchmark.bars),
+            benchmark.status.value,
+            benchmark.source,
+            benchmark.reason,
+            benchmark.is_within_ttl,
         )
 
     def settle_pending(self, *, today: date | None = None) -> SettlementResult:
@@ -1821,6 +1837,7 @@ class PlaybookService:
                 status=series.status,
                 source=series.source,
                 reason=series.reason,
+                is_within_ttl=series.is_within_ttl,
             )
             if snapshot is None or not is_usable(snapshot.data_status, snapshot.source):
                 missing.append(batch.symbol)
@@ -2153,6 +2170,7 @@ class PlaybookService:
             source=index_series.source,
             params=params,
             reason=index_series.reason,
+            is_within_ttl=index_series.is_within_ttl,
         )
         markets: dict[str, MarketSnapshot] = {}
         for symbol, series in loaded.items():
@@ -2162,6 +2180,7 @@ class PlaybookService:
                 status=series.status,
                 source=series.source,
                 reason=series.reason,
+                is_within_ttl=series.is_within_ttl,
             )
             if snapshot is not None:
                 markets[symbol] = snapshot
