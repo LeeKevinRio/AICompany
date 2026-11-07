@@ -1211,6 +1211,25 @@ class PlaybookService:
             )
         return loaded
 
+    def _evaluation_series(
+        self, symbols: Sequence[str], *, settled: Mapping[str, LoadedSeries], today: date
+    ) -> dict[str, LoadedSeries]:
+        """The series ``/today`` evaluates ``symbols`` on (ADR-0040 Decision 7 (i), N190-C2).
+
+        A symbol the same request's settlement already loaded is evaluated on
+        that very series, whatever its status: a second load moments later can
+        only land inside the data layer's cooldown, so it never learns anything
+        new, and the S/P pass would then see a different answer for the same
+        bars than the settlement did (path (a′)). Only the symbols the
+        settlement did not load reach the ladder, so each symbol is asked for
+        at most once per request. Order follows ``symbols``.
+        """
+        missing = [symbol for symbol in symbols if symbol not in settled]
+        fetched = self._load_symbol_bars(missing, today=today)
+        return {
+            symbol: settled[symbol] if symbol in settled else fetched[symbol] for symbol in symbols
+        }
+
     def _load_index_bars(self, *, today: date) -> LoadedSeries:
         start = today - timedelta(days=LOOKBACK_DAYS)
         benchmark = load_market_benchmark(
@@ -1861,7 +1880,7 @@ class PlaybookService:
         in_flight = self._store.read_in_flight()
         batches = self._store.list_batches()
         symbols = sorted({batch.symbol for batch in batches})
-        loaded = self._load_symbol_bars(symbols, today=as_of)
+        loaded = self._evaluation_series(symbols, settled=run.loaded, today=as_of)
         index_series = self._load_index_bars(today=as_of)
         index_bars = index_series.bars
 
