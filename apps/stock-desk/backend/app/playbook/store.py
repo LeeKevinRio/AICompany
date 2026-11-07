@@ -304,7 +304,8 @@ S2_FILL_ENTRY = S2FillEntry(status="executed", action="sell", rule_id="S2")
 
 def s2_fill_entry_sql(alias: str) -> str:
     """:data:`S2_FILL_ENTRY` as a SQL condition over the ``playbook_directives`` alias."""
-    assert alias.isidentifier()
+    if not alias.isidentifier():
+        raise ValueError(f"s2_fill_entry_sql needs an SQL identifier alias, got {alias!r}")
     return (
         f"{alias}.status = '{S2_FILL_ENTRY.status}' AND "
         f"{alias}.action = '{S2_FILL_ENTRY.action}' AND "

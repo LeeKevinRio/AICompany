@@ -189,6 +189,8 @@ def test_t21_f8_an_executed_s2_is_not_issued_again_the_next_day(tmp_path: Path) 
     assert [line.rule_id for line in second.directives if line.symbol == "2330"] == []
     assert [row[1] for row in _symbol_rows(desk.store.db_path)] == ["S2"]
     assert sum(b.remaining_shares for b in desk.store.list_batches()) == 0
+    # F8's other half: the cash came in, at Tuesday's open (80) × the S2's 900 shares.
+    assert cash(desk.store) == START_CASH + Decimal(80) * 900
 
 
 # --- T4, T5: the line's shares against the eligible total --------------------------------
@@ -678,7 +680,7 @@ def test_t18_the_entry_and_the_eligible_set_read_word_for_word() -> None:
     assert S2_ELIGIBLE_BATCH_SQL == C5_TEXT
     assert tuple(S2_FILL_ENTRY) == ("executed", "sell", "S2")
     assert FILL_MOVES_TABLE == "playbook_fill_moves"
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="identifier"):
         s2_fill_entry_sql("s; DROP TABLE x")
 
 
@@ -697,29 +699,89 @@ def test_t18_is_s2_fill_is_the_entry(changes: dict[str, Any], expected: bool) ->
     assert is_s2_fill(s2_line(300).model_copy(update=changes)) is expected
 
 
-#: 停止點 (N-177a PR): ``apply_effects`` has written the blacklist row's ``rule_id``
-#: as ``"S2"`` since before N-177a, and C3 keeps ``apply_effects`` zero diff outside
-#: ``defer_reset``. T18 / QB-3 say ``"S2"`` appears once; this pre-existing value
-#: is the one exception until tech-architect rules between the two.
-PRE_N177A_S2_VALUES = frozenset({"apply_effects"})
+#: N-177a 停止點裁示（修訂五 S-1 (a)）: the ``"S2"`` values that are not S2's fill
+#: entry. ``apply_effects`` writes it as the blacklist row's source record
+#: (``self.blacklist(rule_id="S2")``), there since before N-177a and zero diff under
+#: C3; it is no condition literal of C4 and may not be rewritten to cite
+#: :data:`S2_FILL_ENTRY`. Each named place holds exactly one.
+PRE_N177A_S2_VALUES = ("apply_effects",)
+
+
+def _string_owners(tree: ast.AST, value: str) -> list[str]:
+    return sorted(
+        owner
+        for owner, node in enclosing(tree)
+        if isinstance(node, ast.Constant) and node.value == value
+    )
 
 
 def test_t18_the_s2_literal_is_stated_once() -> None:
+    """修訂五 T18: ``"S2"`` only at the named places, once each; no ``'S2'`` in SQL."""
     tree = ast.parse(STORE_PY.read_text(encoding="utf-8"))
-    owners = [
+
+    assert _string_owners(tree, "S2") == sorted(["S2_FILL_ENTRY", *PRE_N177A_S2_VALUES])
+    (entry,) = [
+        node
+        for owner, node in enclosing(tree)
+        if owner == "S2_FILL_ENTRY" and isinstance(node, ast.keyword) and node.arg == "rule_id"
+    ]
+    assert isinstance(entry.value, ast.Constant) and entry.value.value == "S2"
+    sql_s2 = [
         owner
         for owner, node in enclosing(tree)
-        if isinstance(node, ast.Constant) and node.value == "S2"
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and "'S2'" in node.value
     ]
-    assert sorted(owners) == sorted(["S2_FILL_ENTRY", *PRE_N177A_S2_VALUES])
-    quoted = [
+    assert sql_s2 == []
+    eligible = [
         owner
         for owner, node in enclosing(tree)
         if isinstance(node, ast.Constant)
         and isinstance(node.value, str)
-        and ("'S2'" in node.value or "remaining_shares > 0 AND b.cost IS NOT NULL" in node.value)
+        and "remaining_shares > 0 AND b.cost IS NOT NULL" in node.value
     ]
-    assert quoted == ["S2_ELIGIBLE_BATCH_SQL"]
+    assert eligible == ["S2_ELIGIBLE_BATCH_SQL"]
+
+
+def test_t18_the_blacklist_source_record_is_the_one_s2_in_apply_effects() -> None:
+    """修訂五 T18 (ii): the value of ``rule_id=`` on the ``self.blacklist(...)`` call."""
+    tree = ast.parse(STORE_PY.read_text(encoding="utf-8"))
+    (apply_effects,) = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "apply_effects"
+    ]
+    s2_nodes = [
+        node
+        for node in ast.walk(apply_effects)
+        if isinstance(node, ast.Constant) and node.value == "S2"
+    ]
+    recorded = [
+        keyword.value
+        for call in ast.walk(apply_effects)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "blacklist"
+        for keyword in call.keywords
+        if keyword.arg == "rule_id"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value == "S2"
+    ]
+    assert len(s2_nodes) == 1 and recorded == s2_nodes
+
+
+def test_t18_executed_is_the_entry_and_the_per_batch_gate_only() -> None:
+    """修訂五 T18 (追加): ``"executed"`` in ``S2_FILL_ENTRY`` and in settle's gate, once each."""
+    tree = ast.parse(STORE_PY.read_text(encoding="utf-8"))
+
+    assert _string_owners(tree, "executed") == ["S2_FILL_ENTRY", "settle"]
+    (gate,) = [
+        node
+        for owner, node in enclosing(tree)
+        if owner == "settle"
+        and isinstance(node, ast.Compare)
+        and any(isinstance(c, ast.Constant) and c.value == "executed" for c in node.comparators)
+    ]
+    assert ast.unparse(gate) == "directive.status != 'executed'"
 
 
 # --- T20: one lock for the S2 branch -----------------------------------------------------
