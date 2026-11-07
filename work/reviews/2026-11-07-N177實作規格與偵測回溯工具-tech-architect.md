@@ -2320,3 +2320,14 @@ def _read_total_deploy_stamp(conn: sqlite3.Connection) -> TotalDeployStamp: ...
 | 15 | `evaluate_today` 改成單一讀交易 | 登錄，不處理（日後改動時順手做，仍回風控審） | 二-3 條件 3 suggested |
 
 （修訂四由 coordinator 2026-11-07 附加；原文見 tech-architect 回報。N-197a spec 與第 5 節草稿待風控審。）
+
+## 修訂五（tech-architect，2026-11-07；N-177a 停止點 S-1～S-5 裁示）
+
+- 全文與修訂文字見 `work/reviews/2026-11-07-N177a停止點裁示-tech-architect.md` 第二節，以該檔為準，本節只列索引。
+- S-1 選 (a)：T18 第 3 點取代為具名例外清單，即 (i) `S2_FILL_ENTRY`、(ii) `apply_effects` 的黑名單來源紀錄、(iii) 合入 N-190 後的 `SETTLED_SINCE_RULE_IDS`；另追加 `"executed"` 計數與 `ValueError` 兩點。QB-3 第一點限定為條件字面。C3 不修訂，也不回風控。
+- S-2：接受；4.2 位置條文取代為常數分兩段放置。
+- S-3：T21 取代為自寫版，加現金斷言與效力證明。追蹤清單上「qa-automation 重現 F8」一項改由 N-177a T21 承擔。
+- S-5：C4 第二點限定為 S2 成交條件；通用狀態閘不受限，由 T18 計數釘住。
+- 1.3(4)、T26(iv) 追加 `status` 只接受 `'skipped'`；`s2_fill_entry_sql` 的 assert 改為 `raise ValueError`。
+
+（修訂五由 coordinator 2026-11-07 附加索引。另一份同日的 N-196／N-197a 修訂改稱修訂六。）
