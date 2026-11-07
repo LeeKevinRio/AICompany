@@ -1,6 +1,7 @@
 # ADR-0040：stock-desk 排程台把「資料層判定已含最新交易日」的快取日線視為可用（R6 重新解讀；限定範圍豁免 N172-C3、C-B11）
 
 - 狀態：accepted（CEO #110，2026-11-07 書面核可；範圍為本文加風控 [風控-0040] 條件，明文涵蓋 Decision 12「範圍延伸」一列與 Decision 5 的 TOTAL_DEPLOY 重算行為）
+- 補充一（tech-architect 2026-11-07，回應 `work/reviews/2026-11-07-N190停止點QB17-dev-lead.md`）：ADR-0039 T15 的 QB-17 例外（E-1）、QB-20 事後查核的口徑（E-2）、`SETTLED_SINCE_RULE_IDS` 的定義者與對 N-188 的約束（E-3），以本檔末「補充一」節為準；本文不改。不擴大 CEO #110 的核可範圍；CEO 可推翻。
 - 日期：2026-11-05（同日第一次修訂：併入 [風控-0040] C-1～C-10 與 N-168 合併後的時序，見文末「修訂紀錄」）
 - 決策者：
   - tech-architect（草案、第一次修訂）
@@ -514,3 +515,89 @@ C-1～C-5 的編號出自 [風控-0040] 本文。C-6～C-10 在 [風控-0040] �
 | 其他：N-168 已合併 | N-168 已於 2026-11-05 以 9253032 合入 product；N-190 改為後合方，用 merge 吸收；QB-1 base 定義；事後查核 engine diff；[風控-N168] T3(a)(b) | 標頭「程式位置」；Decision 2；Decision 13；Decision 15；QB-1；QB-20 |
 
 不在本 ADR 的範圍：[風控-0040] 的 M-1、M-2 屬 ADR-0035 補充五修正一，另行併入該文件。
+
+### 2026-11-07 補充（coordinator 依風控確認加註，原文不改）
+
+- 風控 `work/reviews/2026-11-07-N177實作規格審查與C6至C10確認-風控.md` B 節：確認上表 C-6～C-10 的對照，以該裁示為這組編號的正式定義，上表「暫定」「待風控確認」字樣由本補充取代。
+- 風控澄清句（逐字）：「C-10 的兩項部署前條件是 N-190 部署的必要條件（Decision 13）；『不擋 P-A／P-B』只指開發與合併。」
+
+## 補充一：N-190 實作停止點的裁示（2026-11-07）
+
+- 日期：2026-11-07
+- 決策者：tech-architect。依據：QB-17「若必須改，PR 停下來送 TA」、Decision 13「不為空時送 TA 判斷」。兩處都授權 TA 裁示，本補充只記錄裁示結果。
+- 來源：`work/reviews/2026-11-07-N190停止點QB17-dev-lead.md`
+- 性質：補充本文，不改本文。標「取代」或「改為」的地方，以本補充為準。不擴大 CEO #110 的核可範圍，不改任何產品行為與字面。CEO 可推翻。
+- 程式位置：`fix/stock-desk-n190-usable-cache` 分支 086c223 的快照，以內容定位。全部是讀碼判定，未執行。
+- 用語：本 ADR 附錄 B 也有一條「T15」。為避免混淆，下文把 ADR-0039 附錄 B 的 T15 記為 39-T15，也就是 `tests/test_playbook_pending_exit_block.py::test_t15_classification_follows_the_series_the_settlement_judged_n1_on`。
+
+### E-1 39-T15 與 Decision 7 (i) 的衝突（QB-17 的例外）
+
+1. 判定：
+   - 39-T15 要守的不變式是 ADR-0039 Decision 3／N171-C2″：authored 路徑上，`/today` 區塊的分類用的是同一次請求 `_settle_pending` 載入的序列（`run.loaded`），所以與 N1 一致（風控 P-1）。
+   - `assert len(prices.calls) >= 2` 不是這個不變式，而是測試的前提檢查：確認情境裡「第二次載入」真的存在，分類才分得出用的是哪一份序列。它描述的是 (i) 之前 `evaluate_today` 會重新載入的實作細節，也就是 ADR-0039 Options 二 (ii) 的前提。
+   - (i) 之後：
+     - 能被判為不涵蓋的列，一定是到期列（`execution_date <= as_of`），它們的 symbol 一定在 `run.loaded`，評估沿用同一個物件；
+     - 未到期的列，在任何序列上都由 `exit_line_still_covers` 判為仍涵蓋。
+     - 因此同一請求內「結算與評估看到不同序列」已經無法構造。產品層的不變式由 ADR-0039 Decision 3 與本 ADR 的 (i) 兩道機制同時保證，比原先強。
+   - 但只把前提翻成 `== 1`，39-T15 會變成 QB-9 的重複，失去「證明用的是結算那一份」的能力：`evaluate_today` 把評估的 `loaded` 誤接給 `_pending_exit_lines` 時，在 (i) 下結果相同，測試抓不到；(i) 日後若回退，這個誤接就會變成實際錯誤。
+
+2. 准改範圍：只限 39-T15 這個測試函式，加上 `_ShiftingPrices` 的 docstring。QB-17 對其他測試照舊。
+   - (a) `assert len(prices.calls) >= 2` 改為 `assert len(prices.calls) == 1`。旁註寫明：自 ADR-0040 Decision 7 (i) 起，結算與評估從構造上就是同一份序列。
+   - (b) 原第 698 行註解改寫成與 (a) 相符的敘述。
+   - (c) 新增接線斷言：
+     - 用 monkeypatch 包住 `book.service._settle_pending`，取得回傳的 `run`；
+     - 包住 `service_module._pending_exit_lines`，記錄 `loaded` 引數；
+     - 斷言 `_pending_exit_lines` 恰好被呼叫一次，而且 `loaded is run.loaded`。必須用 `is`，不得用 `==`。
+   - (d) 新增前提斷言：`run.loaded["2330"].bars` 的日期不含 WEDNESDAY。這是 N1b 的前提，原本只寫在註解裡。
+   - (e) 原第 700～703 行的四條斷言逐字不改。`_ShiftingPrices` 的程式不改；docstring 可以補一句：「(i) 之後，同一請求內不會要求第二次回答；保留作為回退 (i) 時的絆線。」
+   - (f) 不得把 39-T15 移到 `tests/n190_helpers.py`，也不得換成其他 fake。fixture 零 diff。39-T15 不屬本 ADR 附錄 B，QB-7 不適用於它。
+
+3. 回退：日後若回退 (i)（依 Decision 13 必須回 TA 與風控），(a) 恢復為 `>= 2`，(c)(d) 保留。
+
+4. 不需要的事項：產品碼 diff；修改 ADR-0039 v2 本文或其補充一；重錄 golden；風控回審（字面、行為都不變，不變式只變強）。
+
+5. 檢查（qa-reviewer，BLOCKING）：
+   - `tests/test_playbook_pending_exit_block.py` 的 diff，hunk 只落在 39-T15 函式內與 `_ShiftingPrices` 的 docstring；
+   - 原第 700～703 行的四條斷言逐字存在；
+   - (c) 用 `is`，並斷言呼叫次數恰好為 1；
+   - PR 說明引用本節。
+
+### E-2 QB-20 事後查核的口徑（修正 Decision 13 的「事後查核」與 QB-20 第 4 小點）
+
+1. 判定：9253032 對 `app/playbook/engine.py` 的 diff，是在 `_snapshot_rows` 的 `BatchSnapshot(...)` 呼叫內，新增 2 行註解加 1 行 `entry_before_exit_on=batch.entry_before_exit_on,`。這**不違反** ADR-0034 C-B11。理由：
+   - ADR-0034 C-B8 及其補充一 S-3 第 3 點明文要求 `BatchSnapshot` 帶出標示，engine 只照抄 `BatchState`。這 3 行就是該授權的實作。
+   - C-B11 管的是 R、S、P 的判斷邏輯。這個欄位在 engine.py 只出現在這一處，不被任何條件讀取。W-B2、W-B2L 由 service 渲染，engine 不設定。
+   - C-B8 與 C-B11 同屬 ADR-0034 附錄 C。把 C-B11 讀成禁止 C-B8，清單就會自相矛盾。
+   - 原本寫「為空」，是本 ADR 起草時漏算 C-B8，錯在條文，不是 N-168 越界。
+
+2. QB-20 第 4 小點改為：
+   「確認 `git diff 9253032^1 9253032 -- app/playbook/engine.py` 只含 ADR-0034 C-B8 授權的照抄 hunk，也就是以下四項全部成立：
+   - (a) 每個 hunk 都落在 `_snapshot_rows` 的 `BatchSnapshot(...)` 呼叫內；
+   - (b) 新增行只有 `entry_before_exit_on=batch.entry_before_exit_on,` 與 `#` 註解行；刪除行為 0；
+   - (c) 在 9253032 與 N-190 的 HEAD 上，engine.py 中 `entry_before_exit_on` 恰好出現 1 次（即上述 kwarg），`entry_before_exit_label`、`entry_before_exit_note`、`exit_stamped_on` 都出現 0 次；
+   - (d) 這個 kwarg 的值是 `batch.entry_before_exit_on` 原樣，不經任何運算或條件。
+   任一項不成立時，送 TA 判斷是否違反 C-B11。」
+
+3. Decision 13「事後查核」一句改讀為：「qa-reviewer 在 N-190 PR 審查時，依補充一 E-2 第 2 點確認 9253032 對 engine.py 的 diff 只含 C-B8 照抄。」
+
+4. QB-1 的 `<base>` 定義不變。N-168 的 hunk 本來就不計入 QB-1，本節不影響 QB-1。
+
+### E-3 `SETTLED_SINCE_RULE_IDS` 的定義者（補充 Decision 9 第 5 點、N190-I；對 N-188 有約束）
+
+1. 確認：
+   - N-190 在 `app/playbook/store.py` 定義唯一一份 `SETTLED_SINCE_RULE_IDS: tuple[str, ...] = ("S1", "S2", "P1", "P2", "P3")`。值與順序等於 ADR-0035 補充五 X-1 第 1 點，與補充五修正一不衝突。
+   - 位置理由：store 是唯一兩邊都能引用的模組。service（N190-I、本 ADR 的 (甲)）引用 store；N-188 的 `_read_settled_since` 在 store 內；store 不得 import wording（N172-C7）。
+   - 定義者比照修正一 M1-2 第 1 點「先合者定義、後合者引用」：N-190 先合，由 N-190 定義。
+   - 修正一 M1-1 條件 A 的運維探針依規定不 import app，所以必須寫字面。這不算第二份定義，由 N188-T20（[風控-0040] M-1）斷言探針 SQL 的 rule_id 字面等於本常數。
+
+2. 對 N-188 的約束（併入 QB-18 檢查）：
+   - 必須引用 `app.playbook.store.SETTLED_SINCE_RULE_IDS`。
+   - `app/**` 內不得再定義第二份，也不得另寫這五個 rule_id 的 tuple、set 或 SQL `IN (...)` 字面。SQL 的 placeholders 由本常數產生。
+   - 補充五 X-6 第 5 點與 QB-18.6 所稱的 `SETTLED_SINCE_*`，指 `wording.py` 的字面常數（`SETTLED_SINCE_SYMBOL_NOTE`、`SETTLED_SINCE_BATCH_NOTE` 及其組成常數），**不含** `SETTLED_SINCE_RULE_IDS`。QB-18.6 的 AST 或 grep 檢查必須排除這個名稱，不得因它定義在 store.py、或在 service 被引用而判為 BLOCKING。
+
+3. 增減 rule_id 屬於補充五 X-1 的修訂，要回 TA 與風控。這會同時影響 N190-I、(甲)／B-4 的「S/P sell 列」、N-188，以及條件 A 的探針。
+
+4. 檢查（qa-reviewer，BLOCKING）：
+   - `app/**` 內 `SETTLED_SINCE_RULE_IDS =` 的指派恰好 1 次，在 `app/playbook/store.py`；
+   - `app/**` 內沒有其他恰好由這五個 rule_id 組成的字面集合；
+   - `scripts/n172_duplicate_probe.py` 屬 N-172 的既有分類，不在範圍內。
