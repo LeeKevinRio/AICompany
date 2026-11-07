@@ -50,6 +50,12 @@ RULED: dict[str, tuple[Path, str, bool]] = {
     ),
     "SETTLEMENT_EARLIER_SELL_BATCH_ITEM": (RULING_1104, "- 逐批列：「", False),
     "SETTLEMENT_EARLIER_SELL_SYMBOL_ITEM": (RULING_1104, "- S2 列：「", False),
+    "SAME_DAY_EARLIER_SP_EVALUATED_NOTE": (RULING_1105, "**B-4 只有 B 句時", True),
+    "SAME_DAY_EARLIER_M1_EVALUATED_NOTE": (
+        RULING_1105,
+        "**B-2 `INDEX_DATA_GAP_NOTE` 併入 (甲)",
+        True,
+    ),
 }
 
 
@@ -113,6 +119,33 @@ def test_the_item_formats_take_the_lines_own_values() -> None:
         "rule_id",
         "shares",
         "execution_date",
+    ]
+
+
+#: 風控 2026-11-05 B-1 自查 (the list B-2 and B-4 are held to as well).
+B_FORBIDDEN = ("需", "應", "建議", "務必", "盡快", "否則", "安全", "對應")
+
+
+@pytest.mark.parametrize(
+    "name", ["SAME_DAY_EARLIER_SP_EVALUATED_NOTE", "SAME_DAY_EARLIER_M1_EVALUATED_NOTE"]
+)
+def test_b2_and_b4_carry_no_forbidden_word(name: str) -> None:
+    sentence = getattr(wording, name)
+    for banned in B_FORBIDDEN:
+        assert banned not in sentence, (name, banned)
+
+
+def test_b2_and_b4_take_structured_values_only() -> None:
+    assert sorted(set(re.findall(r"{(\w+)}", wording.SAME_DAY_EARLIER_SP_EVALUATED_NOTE))) == [
+        "data_date",
+        "source",
+        "status",
+        "symbol",
+    ]
+    assert sorted(set(re.findall(r"{(\w+)}", wording.SAME_DAY_EARLIER_M1_EVALUATED_NOTE))) == [
+        "data_date",
+        "source",
+        "status",
     ]
 
 

@@ -31,6 +31,7 @@ from typing import NamedTuple
 
 from app.data.calendar import TradingCalendar
 from app.data.interface import PriceBar
+from app.demo.series import DEMO_SOURCE
 from app.playbook import indicators, wording
 from app.playbook.engine import (
     _symbol_average_cost,
@@ -67,12 +68,15 @@ from app.playbook.models import (
 )
 from app.playbook.store import (
     LINE_BOUND_EFFECTS,
+    MARK_KIND_M1,
+    MARK_KIND_SP,
     ORDER_ACTIONS,
     R_SERIES_RULE_IDS,
     SETTLED_SINCE_RULE_IDS,
     EmergencyExitState,
     EntryBeforeExitRead,
     EvaluationCommit,
+    EvaluationMark,
     ExitEntryRead,
     PendingDirective,
     PendingExitRead,
@@ -80,7 +84,7 @@ from app.playbook.store import (
     decision_key,
 )
 from app.positions.models import Market
-from app.services.index import IndexServiceResolver, load_market_benchmark
+from app.services.index import MARKET_BENCHMARK, IndexServiceResolver, load_market_benchmark
 from app.services.market import MarketDataResolver, load_bars
 
 #: Calendar days of history requested per symbol. Enough for a 25-day MA, a
@@ -89,6 +93,9 @@ LOOKBACK_DAYS = 180
 
 #: The market this rule set trades. The 加權指數 benchmark is TW's ``^TWII``.
 PLAYBOOK_MARKET: Market = "TW"
+
+#: The subject of an M1 mark (ADR-0040 Decision 9 第 3 點): the benchmark M1 reads.
+M1_MARK_SUBJECT = MARKET_BENCHMARK[PLAYBOOK_MARKET].series_symbol
 
 #: MA window for BIAS25 / S1 recovery -- the rule set's 25MA.
 MA25_WINDOW = 25
@@ -478,6 +485,107 @@ def _insert_after(warnings: list[str], anchor: str, note: str) -> None:
     warnings.insert(position, note)
 
 
+def holds_shares(symbol_batches: Sequence[BatchState]) -> bool:
+    """The engine's 「本檔目前持有部位」 (engine.py, DATA_GAP_HOLDING_NOTE's choice)."""
+    return any(batch.status == "open" and batch.remaining_shares > 0 for batch in symbol_batches)
+
+
+def sp_evaluated(symbol_batches: Sequence[BatchState], snapshot: MarketSnapshot | None) -> bool:
+    """Did the engine evaluate this symbol's S/P series? (ADR-0040 Decision 9 第 2 點). Pure.
+
+    True exactly when the snapshot is there and usable -- the engine's own
+    :func:`is_usable` -- and at least one batch passes the S/P batch gate of
+    ``_evaluate_batch_exits`` (open, ``cost`` set, ``remaining_shares > 0``),
+    which is also the condition ``_symbol_average_cost`` counts S2's shares
+    by. 暫停／黑名單 only stop the R series, so they do not enter here.
+    ``symbol_batches`` is the very list handed to the engine.
+    """
+    if snapshot is None or not is_usable(snapshot.data_status, snapshot.source):
+        return False
+    return any(
+        batch.status == "open" and batch.cost is not None and batch.remaining_shares > 0
+        for batch in symbol_batches
+    )
+
+
+def m1_evaluated(index: IndexSnapshot | None) -> bool:
+    """Did ``_defense_transition`` evaluate M1? (ADR-0040 Decision 9 第 3 點). Pure.
+
+    Its three branches: index missing or unusable, no monthly line
+    (``insufficient_data``), evaluated. Not inferred from
+    ``fast_market_measured_on``: 快市 is measured without a monthly line, and
+    its date is the evaluation's, not the index's.
+    """
+    return (
+        index is not None
+        and is_usable(index.data_status, index.source)
+        and index.monthly_line is not None
+    )
+
+
+def evaluation_marks(
+    evaluation: PlaybookEvaluation,
+    *,
+    batches: Sequence[BatchState],
+    markets: Mapping[str, MarketSnapshot],
+    index: IndexSnapshot | None,
+) -> list[EvaluationMark]:
+    """The (甲) marks one evaluation writes (ADR-0040 Decision 9 第 2、3 點). Pure.
+
+    ``batches`` and ``markets`` are what the engine was handed. Computed before
+    :meth:`PlaybookStore.commit_evaluation`, which writes them under its lock;
+    no load and no store call here (Decision 14 第 1 點).
+    """
+    by_symbol: dict[str, list[BatchState]] = {}
+    for batch in batches:
+        by_symbol.setdefault(batch.symbol, []).append(batch)
+    marks: list[EvaluationMark] = []
+    for symbol in sorted(by_symbol):
+        snapshot = markets.get(symbol)
+        if snapshot is not None and sp_evaluated(by_symbol[symbol], snapshot):
+            marks.append(
+                EvaluationMark(MARK_KIND_SP, symbol, evaluation.execution_date, snapshot.data_date)
+            )
+    if index is not None and m1_evaluated(index):
+        marks.append(
+            EvaluationMark(
+                MARK_KIND_M1, M1_MARK_SUBJECT, evaluation.execution_date, index.data_date
+            )
+        )
+    return marks
+
+
+def _evaluated_earlier(
+    kind: str,
+    subject: str,
+    snapshot: MarketSnapshot | IndexSnapshot | None,
+    *,
+    execution_date: date,
+    marks: AbstractSet[EvaluationMark],
+) -> bool:
+    """(甲)'s rendering condition (ADR-0040 Decision 9 第 4 點), on structured fields only.
+
+    This run's snapshot is there, ``cached_stale`` and not demo, and a mark of
+    the same kind, subject, 預定執行日 and the snapshot's own 依據資料日 existed
+    before this run's commit.
+    """
+    return (
+        snapshot is not None
+        and snapshot.data_status == "cached_stale"
+        and snapshot.source != DEMO_SOURCE
+        and EvaluationMark(kind, subject, execution_date, snapshot.data_date) in marks
+    )
+
+
+def _replace(warnings: list[str], original: str, replacement: list[str]) -> None:
+    """Put ``replacement`` where ``original`` is; at the end when it is not there."""
+    if original in warnings:
+        position = warnings.index(original)
+        warnings[position : position + 1] = replacement
+    else:
+        warnings.extend(replacement)
+
+
 def same_day_warnings(
     evaluation: PlaybookEvaluation,
     commit: EvaluationCommit,
@@ -488,6 +596,7 @@ def same_day_warnings(
     blocked: Sequence[PendingDirective] = (),
     refused_ids: AbstractSet[int] = frozenset(),
     entries: Sequence[Directive] = (),
+    index: IndexSnapshot | None = None,
 ) -> list[str]:
     """The evaluation's warnings, reconciled with the logged list the page shows.
 
@@ -532,6 +641,17 @@ def same_day_warnings(
 
     The block is FROZEN_NOTE → W-B6 → W-B1d → ENTRY → W-B6b, or first when
     FROZEN_NOTE is not there (P4: the anchor missing never drops a sentence).
+
+    **(甲)** (ADR-0040 Decision 9 第 4～6 點): for a held symbol whose snapshot
+    meets :func:`_evaluated_earlier` against ``commit.earlier_marks``, the
+    DATA_GAP_HOLDING_NOTE is replaced -- by B-4
+    (:data:`wording.SAME_DAY_EARLIER_SP_EVALUATED_NOTE`) when the log has no S/P
+    sell of the symbol (B-4 → A → B), by nothing when it has one (A → B; N190-C9,
+    風控 C-1). ``if not orders and not decisions`` does not skip it. A symbol
+    that does not hold keeps its DATA_GAP_NOTE. ``index`` gets B-2
+    (:data:`wording.SAME_DAY_EARLIER_M1_EVALUATED_NOTE`) in place of the status
+    branch of INDEX_DATA_GAP_NOTE on an M1 mark; the ``insufficient_data``
+    branch is never replaced. Neither condition reads a sentence.
 
     Known limit -- two snapshots (ADR-0035 補充四 釐清一 E-2, accepted; 風控
     2026-11-04 第 11 點). ``blocked`` comes from the one in-flight read, taken
@@ -589,6 +709,31 @@ def same_day_warnings(
         stale.add(wording.INDEX_DATA_GAP_DEFER_NOTE)
     warnings = [warning for warning in warnings if warning not in stale]
 
+    earlier_marks = commit.earlier_marks
+    if index is not None and _evaluated_earlier(
+        MARK_KIND_M1,
+        M1_MARK_SUBJECT,
+        index,
+        execution_date=evaluation.execution_date,
+        marks=earlier_marks,
+    ):
+        # B-2: only the status branch, rendered for this very index (風控 B-2).
+        status_branch = wording.INDEX_DATA_GAP_NOTE.format(
+            status=index.data_status, source=index.source
+        )
+        if status_branch in warnings:
+            _replace(
+                warnings,
+                status_branch,
+                [
+                    wording.SAME_DAY_EARLIER_M1_EVALUATED_NOTE.format(
+                        status=index.data_status,
+                        source=index.source,
+                        data_date=index.data_date.isoformat(),
+                    )
+                ],
+            )
+
     by_symbol: dict[str, list[BatchState]] = {}
     for batch in batches:
         by_symbol.setdefault(batch.symbol, []).append(batch)
@@ -603,31 +748,53 @@ def same_day_warnings(
             if line.action in ORDER_ACTIONS and decision_key(line) not in blocked_keys
         )
         decisions = sum(1 for line in lines if line.action in DECISION_RECORD_ACTIONS)
-        if not orders and not decisions:
+        holds = holds_shares(by_symbol[symbol])
+        marked = holds and _evaluated_earlier(
+            MARK_KIND_SP,
+            symbol,
+            snapshot,
+            execution_date=evaluation.execution_date,
+            marks=earlier_marks,
+        )
+        if not orders and not decisions and not marked:
             continue
         status = "unavailable" if snapshot is None else snapshot.data_status
         source = "none" if snapshot is None else snapshot.source
-        holds = any(
-            batch.status == "open" and batch.remaining_shares > 0 for batch in by_symbol[symbol]
-        )
         gap = wording.DATA_GAP_HOLDING_NOTE if holds else wording.DATA_GAP_NOTE
         # DATA_GAP(_HOLDING)_NOTE -> A -> B; each falls back to the end of the
         # list when the sentence before it is not there (風控 必改 7).
         anchor = gap.format(symbol=symbol, status=status, source=source)
+        following: list[str] = []
         if orders:
-            note = wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE.format(
-                symbol=symbol, status=status, line_count=orders
+            following.append(
+                wording.SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE.format(
+                    symbol=symbol, status=status, line_count=orders
+                )
             )
-            _insert_after(warnings, anchor, note)
-            anchor = note
         if decisions:
-            _insert_after(
-                warnings,
-                anchor,
+            following.append(
                 wording.SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE.format(
                     symbol=symbol, decision_count=decisions
-                ),
+                )
             )
+        if marked and snapshot is not None:
+            # (甲): the HOLDING sentence goes; B-4 takes its place unless the log
+            # already has an S/P sell of the symbol (風控 B-4; C-1, N190-C9).
+            if not any(_is_sp_sell(line) for line in lines):
+                following.insert(
+                    0,
+                    wording.SAME_DAY_EARLIER_SP_EVALUATED_NOTE.format(
+                        symbol=symbol,
+                        status=status,
+                        source=source,
+                        data_date=snapshot.data_date.isoformat(),
+                    ),
+                )
+            _replace(warnings, anchor, following)
+            continue
+        for note in following:
+            _insert_after(warnings, anchor, note)
+            anchor = note
 
     frozen_entries = list(entries) if evaluation.mode == "emergency_frozen" else []
     listed_keys = {decision_key(line) for line in frozen_entries}
@@ -2022,7 +2189,10 @@ class PlaybookService:
             calendar=calendar,
         )
         self._store.save_fast_market(evaluation.fast_market, measured_on=data_date)
-        commit = self._store.commit_evaluation(evaluation)
+        # (甲) marks: a pure reading of what the engine was handed, written under
+        # the commit's lock (ADR-0040 Decision 9, Decision 14 第 1 點).
+        marks = evaluation_marks(evaluation, batches=book, markets=markets, index=index)
+        commit = self._store.commit_evaluation(evaluation, marks=marks)
         # N190-I: an earlier S/P sell still unsettled next to a later one on this
         # page, from the settlement and the logged lines of this response only.
         settlement = with_earlier_sell_notes(settlement, logged=commit.logged, loaded=run.loaded)
@@ -2046,6 +2216,7 @@ class PlaybookService:
             blocked=g1_blocked_entries(in_flight.entries),
             refused_ids={line.directive_id for line in settlement.unsettled if line.refused_by_g1},
             entries=entries,
+            index=index,
         )
         if index_series.reason:
             warnings.append(wording.index_data_reason_note(index_series.reason))

@@ -957,6 +957,33 @@ SETTLEMENT_EARLIER_SELL_SYMBOL_ITEM = (
     "{symbol}規則 {rule_id} 整檔賣出 {shares} 股（預定執行日 {execution_date}）"
 )
 
+#: B-4 (風控 2026-11-05; ADR-0040 Decision 9 第 4、5 點): takes the place of a held
+#: symbol's DATA_GAP_HOLDING_NOTE when this run's snapshot is ``cached_stale``,
+#: not within TTL and not demo, an SP mark of the same 預定執行日 and 依據資料日
+#: was written before this run, and the 預定執行日's log has no S/P sell of the
+#: symbol. Followed by A, then B, when they are rendered.
+SAME_DAY_EARLIER_SP_EVALUATED_NOTE = (
+    "{symbol} 本次資料狀態為 {status}（來源 {source}"
+    "），本次未重新評估這檔；"
+    "同一預定執行日稍早已有一次評估用資料日 {data_date} 的可用資"
+    "料評估過這檔持有部位的停損/停利（S/P 系列），"
+    "指令帳冊中同一預定執行日沒有這檔的停損/停利賣出指令，"
+    "稍早的評估結果未因本次資料狀態而取消或修改。"
+    "該次評估依據資料日 {data_date} 的收盤價，"
+    "不反映之後的價格變動。"
+)
+
+#: B-2 (風控 2026-11-05; ADR-0040 Decision 9 第 6 點): takes the place of the status
+#: branch of INDEX_DATA_GAP_NOTE -- never the ``insufficient_data`` one -- on the
+#: same conditions with an M1 mark of the index's own 依據資料日.
+SAME_DAY_EARLIER_M1_EVALUATED_NOTE = (
+    "加權指數本次資料狀態為 {status}（來源 {source}），"
+    "本次未重新評估 M1；M1 與快市判定維持同一預定執行日稍早一次以資料日"
+    " {data_date} 的可用資料評估的結果，"
+    "本次評估不產生新的 R 系列進場指令，"
+    "同一預定執行日稍早已產生的指令不因此取消或修改。"
+)
+
 #: N-166 風控 N1 (CEO #87): appended to :data:`SETTLEMENT_NO_OPEN_PRICE` for an
 #: unsettled EMERGENCY sell that meets 判準 Z while its batch is closed or has a
 #: later EMERGENCY sell -- the line otherwise reads 「賣出 N 股、待結算」 day
