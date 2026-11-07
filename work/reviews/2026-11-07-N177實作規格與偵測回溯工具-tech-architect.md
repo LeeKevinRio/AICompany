@@ -2653,3 +2653,58 @@ force before this run.
 | 13 | CEO 通知前提 (1)（第 5 節） | 確認成立 | 二-4(e) 前提 (1) |
 
 （修訂六由 coordinator 2026-11-07 附加；原文見 tech-architect 回報。）
+
+## 修訂七（tech-architect，2026-11-07；回應風控 [風控-ADR42] suggested S1～S4）
+
+- 依據：[風控-ADR42] `work/reviews/2026-11-07-修訂六與ADR0042與N199審查及REBALANCE_SUPERSEDED定稿-風控.md`，結論 CONDITIONAL APPROVE。
+- 本修訂只取代或新增下面點名的段落，其餘維持修訂六。S5 屬 ADR-0042，已併入 ADR-0042 修正版，不在這裡。
+
+### 1. 1.6 表格中 regex 的跳脫（S1，採用）
+- 修訂六 1.6 表「稽核表 DDL」那一列的 `\|`，是 markdown 表格的跳脫，不是 regex 的一部分。實際要用的 regex 是：
+```
+^[-+].*CREATE TABLE IF NOT EXISTS (playbook_fill_moves|\{FILL_MOVES_TABLE\})
+```
+  - `|` 是 regex 的交替；
+  - `\{`、`\}` 才是 regex 的跳脫，比對字面的花括號，要保留。
+- 表中其他各列都不含 `\|`，照表使用。
+- 照抄成 `\|` 時，比對的是字面的直線符號，這個錨點永遠抓不到。所以 qa 以本節為準。
+- ADR-0042 N198-C7 的 regex 已改放在程式碼區塊，不經過表格。
+
+### 2. qa 以 PR 頁面的 head SHA 對照（S2，採用）
+- 修訂六 1.5 新增第 6 點（全部都要成立；不成立就判 BLOCKING）：
+  - 6. qa 從 PR 頁面讀出 head commit 的完整 40 碼（commits 分頁最後一個 commit，取 commit 頁面網址中的 SHA）。它必須等於 (i)、(ii) 兩份紀錄中的 `<head>`，也必須等於 qa 實際審查的 commit。
+  - 這一步是讀頁面，不需要 Bash。
+  - 理由：1.5 第 4 點的 `git diff --stat` 輸出為空，只代表兩者的 tree 相同，不代表是同一個 commit。同一個 tree 的另一個 commit（例如 rebase 之後、或空 commit），祖先關係可能不同，(i)、(ii) 的 ancestry 判定就不適用於它。
+- 修訂六 1.7 的重做清單，加上 1.5 第 6 點。
+- 適用於 N196-C8、N197a-C8，以及 ADR-0042 的 N198-C7。
+
+### 3. 名詞與判斷的延伸（配合 ADR-0042 修正版）
+- 修訂六 1.1：只在 N198-C7 新增 `<M_3>`，也就是 N-199 在 product 上的 merge commit，完整 40 碼。
+- 修訂六 1.5 第 3 點：對 N198-C7 讀為「三條 `--is-ancestor` 都是 `exit=0`」。N196-C8、N197a-C8 不變。
+
+### 4. `set_capital(at=...)` 的時區守衛（S4，採用為另開單；不在 N-197a 範圍）
+- 現況：`set_capital` 的 `at: datetime | None`（store.py:1033-1055）接受沒有時區的 datetime，並原樣寫入 `isoformat()`。app 內兩個呼叫點（service.py:1908、:2030）都不傳 `at`。
+- 對 N-197a 的影響：N197a-C11 在讀取端會 fail closed（沒有時區就 raise）。所以破口不會變成錯誤的字面，但失敗時點會延後到拒絕路徑。
+- 另開單，編號由 coordinator 給，P3，不擋 N-197a：
+  - `set_capital`，以及 N-195 的 `set_total_deploy`（若它接受 `at`）：`at` 不為 None 而且沒有時區時，在任何寫入之前 raise `ValueError`。
+  - 測試：傳入沒有時區的 `at` → `ValueError`，四個鍵逐字不變；有時區的 `at` 照舊寫入。
+  - 開工前用 grep 找出 `tests/**` 中傳入沒有時區 `at` 的既有呼叫，逐條列出，改為有時區的值。
+
+### 5. 不採用：S3（`RebalanceResponse.previous_total_deploy` 的 `Field(description=...)`）
+- 理由：
+  - 前端沒有使用這個回應（修訂四 3.6）；
+  - `message` 已經以「目前的 TOTAL_DEPLOY 為…」說明語意；
+  - 加這一項，要把 C1 擴大到 `app/api/playbook.py`，打破 N-197a 對 `app/api/**` 的零 diff，換來的只是目前沒有消費者的 OpenAPI 說明。
+- 重啟條件：前端新增 REBALANCE 的入口，或任何程式開始讀取 `RebalanceResponse` 時，同一張單必須加上這個 `Field(description=...)`，內容與修訂六 2.4 的 docstring 一致。依 R-5′，新增入口本來就要先回風控，所以這個條件會在那時被檢查。
+
+### 6. 修改處索引（風控比對用）
+
+| # | 位置 | 性質 | 依據 |
+|---|---|---|---|
+| 1 | 1.6 DDL 錨點的 regex | 註明實際 regex 中的直線符號是交替，並給出程式碼區塊版本 | S1 |
+| 2 | 1.5 新增第 6 點；1.7 重做清單 | 新增：讀 PR 頁面的 head SHA 對照 `<head>` | S2 |
+| 3 | 1.1 `<M_3>`；1.5 第 3 點對 N198-C7 的讀法 | 新增 | 配合 ADR-0042 R1 |
+| 4 | `set_capital(at=...)` 守衛 | 登錄另開單 | S4 |
+| 5 | S3 | 不採用，登錄重啟條件 | S3 |
+
+（修訂七由 coordinator 2026-11-07 附加；原文見 tech-architect 回報。）
