@@ -2331,3 +2331,325 @@ def _read_total_deploy_stamp(conn: sqlite3.Connection) -> TotalDeployStamp: ...
 - 1.3(4)、T26(iv) 追加 `status` 只接受 `'skipped'`；`s2_fill_entry_sql` 的 assert 改為 `raise ValueError`。
 
 （修訂五由 coordinator 2026-11-07 附加索引。另一份同日的 N-196／N-197a 修訂改稱修訂六。）
+
+## 修訂六（tech-architect，2026-11-07；回應風控 [風控-197]）
+
+- 依據：[風控-197] `work/reviews/2026-11-07-N177修訂四比對與N197裁示-風控.md`，結論 CONDITIONAL APPROVE。
+- 程式依據：主 checkout product/stock-desk，N-190 以 3985f4d fast-forward 之後的 tip。只讀、未執行。行號以這個 checkout 為準、以內容定位；修訂四引用的行號已位移，對照見第 4 節。
+- 編號說明：同日 `work/reviews/2026-11-07-N177a停止點裁示-tech-architect.md` 自稱「修訂五」（N-177a 停止點：T18、QB-3、C4、4.2、T21、1.3(4)、T26(iv)）。本修訂與它沒有重疊段落。
+- 本修訂只取代或新增下面點名的段落，其餘維持修訂四。
+- [TA 補]、[待風控] 的意義同前。
+
+### 0. 風控審查結果的登錄（不改判斷）
+- 修訂四索引第 1～10 項符合。5′ 接受，附五項 required，見第 1 節。
+- N-197a spec 核可，附四項 required，見第 2 節。
+- 三項 suggested 全部採用，見第 3 節。
+- R-5′、R-6′ 已由風控定稿，交 tech-writer 逐字落檔，本修訂不轉錄。
+- N-197 (b)：
+  - F2 拆成 N-198（N-169F2），ADR 草案為 ADR-0042，另行送審；
+  - 偵測工具的補充檢查為 N-199，spec 另交。
+- CEO 通知前提 (1)：TA 確認成立，見第 5 節。
+
+### 1. C8 的執行與判斷分離
+- 取代修訂四 1.2「[TA 補，待風控確認執行方式] 執行與判斷分離」整段。
+- N196-C8 的實質要求、`<base>` 定義、PR 說明須列出的項目都不變。
+- 本節同時適用 N197a-C8（見 1.8）。
+
+**1.1 名詞**
+- `<head>`：qa 審查對象 PR 的 head commit，完整 40 碼。
+- `<tip>`：執行者 fetch 之後 `origin/product/stock-desk` 所指的 commit，完整 40 碼。
+- `<base>`：`git merge-base <tip> <head>` 的輸出。
+- `<M_1>`、`<M_2>`：前置單在 product 上的 merge commit，完整 40 碼。
+  - N196-C8：N-177a、N-195。
+  - N197a-C8：N-195、N-196。
+
+**1.2 (i) 作者端紀錄（dev-lead，附在 PR 說明）**
+- 在 PR 分支的 checkout 上逐條執行，貼出指令原文與完整輸出。每條指令之後都接 `; echo "exit=$?"`：
+```bash
+git fetch origin; echo "exit=$?"
+git rev-parse origin/product/stock-desk; echo "exit=$?"
+git rev-parse HEAD; echo "exit=$?"
+git merge-base origin/product/stock-desk HEAD; echo "exit=$?"
+git merge-base --is-ancestor <M_1> <base>; echo "exit=$?"
+git merge-base --is-ancestor <M_2> <base>; echo "exit=$?"
+```
+- `--is-ancestor` 成功時沒有 stdout，所以 `exit=` 那一行是唯一的證據，一定要有。
+- 只寫「通過」或只貼結論，不算數。
+
+**1.3 (ii) 獨立紀錄（coordinator 或 devops-sre，記在 `work/reviews/` 的本案審查紀錄）**
+- 在自己的 checkout 上 fetch 之後，自己求出 `<tip>`、`<head>`、`<base>`，不得抄 PR 說明裡的值：
+```bash
+git fetch origin; echo "exit=$?"
+git rev-parse origin/product/stock-desk; echo "exit=$?"
+git rev-parse origin/<PR 分支名>; echo "exit=$?"
+git merge-base origin/product/stock-desk origin/<PR 分支名>; echo "exit=$?"
+git merge-base --is-ancestor <M_1> <base>; echo "exit=$?"
+git merge-base --is-ancestor <M_2> <base>; echo "exit=$?"
+```
+- 紀錄要列出 `<tip>`、`<head>`、`<base>`、`<M_1>`、`<M_2>`，都是完整 40 碼。
+- 紀錄要寫明執行者，並聲明執行者：
+  - 不是 (i) 的執行者；
+  - 不是 `<base>..<head>` 範圍內任何 commit 的作者，也不是其中任何 `Co-Authored-By`。
+
+**1.4 獨立性（風控 required 第 3 項）**
+- (ii) 的執行者不得是 (i) 的執行者，也不得是該 PR 的作者或共同作者。
+- qa 以 PR 頁面的 commit 清單核對。這一步是讀頁面，不需要 Bash。
+- 不符就判 BLOCKING。
+
+**1.5 qa 的判斷（全部都要成立；任一項不成立就判 BLOCKING）**
+1. (i)、(ii) 都存在，每條指令都附原文與 `exit=` 行。
+2. 兩份紀錄的 `<head>` 相同，`<base>` 也相同。
+   - [TA 補] `<tip>` 可以不同。理由：product 只會往前長（禁止 force push），新增的 commit 不在 `<head>` 裡時，`<base>` 不會變。
+   - `<base>` 不同，就表示其中一份已經過時，要重做。
+3. 兩份紀錄中，兩條 `--is-ancestor` 都是 `exit=0`。
+4. 綁定審查對象：qa 執行 `git diff --stat <紀錄中的 head> <qa 實際審查的 commit>`，輸出必須為空。
+5. 1.6 的旁證成立。
+
+**1.6 `git diff` 旁證（qa 執行；採用風控 suggested 的精確判準）**
+- N196-C8 要跑的兩份 diff：
+  - `git diff <M_N-177a> <base> -- apps/stock-desk/backend/app/playbook/store.py`
+  - `git diff <M_N-195> <base> -- apps/stock-desk/backend/app/playbook/`
+- N197a-C8 要跑的兩份 diff：
+  - `git diff <M_N-195> <base> -- apps/stock-desk/backend/app/playbook/`
+  - `git diff <M_N-196> <base> -- apps/stock-desk/backend/app/playbook/store.py`
+- 判準：下表任一個錨點出現在某一條 `-` 行，而同一份 diff 沒有任何一條 `+` 行含同一個錨點，旁證就不成立。
+
+| 錨點 | 適用 | 比對 diff 行的 regex |
+|---|---|---|
+| `_settle_batch_line` 的定義 | N196 | `^[-+]\s*def _settle_batch_line\(` |
+| `_settle_s2_fill` 的定義 | N196 | `^[-+]\s*def _settle_s2_fill\(` |
+| 稽核表 DDL | N196 | `^[-+].*CREATE TABLE IF NOT EXISTS (playbook_fill_moves\|\{FILL_MOVES_TABLE\})` |
+| 稽核表名常數 | N196 | `^[-+]FILL_MOVES_TABLE = ` |
+| `set_total_deploy` 的定義 | 兩者 | `^[-+]\s*def set_total_deploy\(` |
+| `read_rebalance_inputs` 的定義 | N197a | `^[-+]\s*def read_rebalance_inputs\(` |
+
+- [TA 補] DDL 是以 f-string 由常數組成（4.6），CREATE TABLE 那一行可能不含字面表名。所以錨點同時收兩種寫法，並把常數定義行也列為錨點。
+- [TA 補] `+` 行的配對只看錨點，不看參數，這是刻意的。後續單合法改簽名時（例如 N-198 讓 `_settle_batch_line` 改為接收 conn），不會被誤判。
+- 旁證只是內容層面的獨立檢查，不能取代 (i)、(ii) 的 ancestry 判定。qa 仍然要讀完整份 diff。
+
+**1.7 PR head 變動就重做（風控 required 第 5 項）**
+- PR head 只要有任何新 push（包括 C9 的 merge product），以下全部重做，舊紀錄作廢：
+  - (i)、(ii)；
+  - 1.5 第 4 點；
+  - 1.6 的旁證。
+- 新紀錄齊備之前，qa 不得給 PASS。
+
+**1.8 不變的部分，以及 N197a-C8**
+- QB-N196-2 不變。不擴充 `READONLY_ALLOWED_BASH`，也不提出這方面的 ADR。
+- 風控揭露的殘留照登錄：qa 無法親自重現 ancestry；ADR-0007 所說的現況不變。
+- **N197a-C8（取代修訂四 3.9 的 C8）**：base 與先後順序，依本節同一種方法驗證；`<M_1>`、`<M_2>` 改為 N-195、N-196 的 merge commit。
+- **QB-N197a-2（新增，BLOCKING）**：內容同 QB-N196-2，對象是 N197a-C8。
+
+### 2. N-197a 的 required（[風控-197] 第二節第 3(b) 點）
+
+**2.1 拒絕分支改寫**
+- 取代修訂四 3.9 中 service.py `rebalance` 的拒絕分支，拿掉 `or "0"`：
+```python
+        if not write.written:
+            total_deploy, set_at = _superseded_fields(write.found)
+            message = wording.REBALANCE_SUPERSEDED.format(
+                total_deploy=f"{total_deploy:.2f}",
+                set_at=wording.taipei_wall_time(set_at),
+            )
+            return RebalanceResult(
+                executed_at=as_of, status="superseded", total_assets=None,
+                previous_total_deploy=total_deploy,
+                new_total_deploy=None, deployed_value=None, overshoot=None,
+                directives=[], message=message, warnings=[message],
+            )
+```
+
+**2.2 鍵不存在的分支：視為不變式違反（風控 3(b)2，TA 選第一種）**
+- 新增 store.py 的例外型別：
+```python
+class TotalDeployStampInvariantError(RuntimeError):
+    """A refused TOTAL_DEPLOY write found the stamp incomplete or malformed (N197a-C11)."""
+```
+- 新增 service.py 的模組私有 helper：
+```python
+def _superseded_fields(found: TotalDeployStamp) -> tuple[Decimal, datetime]:
+    """Parse what a refused write found under the lock (N197a-C11).
+
+    Every writer stores the three keys in one transaction (C6), so a refusal that
+    finds one absent or malformed means that invariant is broken: raise, never
+    substitute 0 and never guess a time zone. Values are not echoed (private).
+    """
+    if found.total_deploy is None or found.set_at is None or found.source is None:
+        raise TotalDeployStampInvariantError("TOTAL_DEPLOY stamp incomplete under the lock")
+    try:
+        total_deploy = Decimal(found.total_deploy)
+        set_at = datetime.fromisoformat(found.set_at)
+    except (InvalidOperation, ValueError):
+        raise TotalDeployStampInvariantError("TOTAL_DEPLOY stamp malformed under the lock") from None
+    if not total_deploy.is_finite() or set_at.tzinfo is None:
+        raise TotalDeployStampInvariantError("TOTAL_DEPLOY stamp malformed under the lock")
+    return total_deploy, set_at
+```
+- 為什麼選第一種：
+  - 現有寫入者不會刪除這三個鍵。`set_capital` 與 N-195 的 `_total_deploy_state` 都是同時寫三個鍵，而 `_write_state` 只有收到 None 才會刪鍵（store.py:690-700）。所以拒絕路徑上出現缺鍵，只可能是不變式被破壞。
+  - 第二種（改用不含金額的字面）要多一句字面，並送風控逐字定稿，會把 C10 的阻擋再往後推；而且那句字面會掩蓋不變式已被破壞這件事。
+- 發生時的狀態：
+  - store 的交易已經 commit，而且沒有寫入任何東西（`written` 為 False）；
+  - 不呼叫 `record_directives`；
+  - 例外原樣往外拋，由 `CorsVisibleServerErrorMiddleware` 回 500，並記錄 traceback。這就是依 C-11 失敗、不靜默。
+- `from None`：避免 traceback 帶出鍵值。
+
+**2.3 set_at 的時區格式（風控 3(b)3）**
+- 新增 wording.py 的函式。字面只放在 wording.py，「台北時間」沿用 `app/advice/limits.py` 的 `DISCLOSURE_TZ_LABEL` 與 `app/api/event_study.py:144` 的既有標示：
+```python
+_TAIPEI = ZoneInfo("Asia/Taipei")
+
+
+def taipei_wall_time(moment: datetime) -> str:
+    """``moment`` as Asia/Taipei wall time to the second, labelled (N197a-C12)."""
+    if moment.tzinfo is None:
+        raise ValueError("taipei_wall_time needs an aware datetime")
+    return moment.astimezone(_TAIPEI).strftime("%Y-%m-%d %H:%M:%S") + " 台北時間"
+```
+- 格式是 `YYYY-MM-DD HH:MM:SS 台北時間`：
+  - 精確到秒，微秒直接截去，不四捨五入；
+  - 台灣沒有日光節約時間，所以不另外標 UTC+8；
+  - 用到秒而不是像 event_study 只到分，是因為交錯窗口很短，只到分鐘時，可能和 REBALANCE 本身的執行時刻顯示成同一個值。
+- 給 creative-lead 的佔位規則：
+  - 佔位只有 `{total_deploy}`（.2f）與 `{set_at}` 兩個；
+  - `{set_at}` 的代入值本身已經含「台北時間」，字面不得再加任何時區字樣；
+  - 不得新增需要計算的數字。
+
+**2.4 docstring（風控 3(b)4）**
+- `RebalanceResult` 的 class docstring 末尾，逐字追加以下段落（程式內的說明用英文）：
+```
+``previous_total_deploy`` depends on ``status`` (N197a-C13). On ``"ok"`` and
+``"insufficient_data"`` it is the TOTAL_DEPLOY this run read in its snapshot,
+before it computed anything. On ``"superseded"`` it is the TOTAL_DEPLOY found
+under the write lock when this run's write was refused -- the value stored now,
+written by another operation after the snapshot -- and not the value that was in
+force before this run.
+```
+- 已知限制：
+  - `app/api/playbook.py:185-198` 的 `RebalanceResponse` 依 C1 零 diff，所以 OpenAPI 的欄位上沒有這段說明；
+  - 前端沒有使用這個回應（3.6）。
+  - 若風控要求在 API 上也加欄位說明，C1 要擴大到 `app/api/playbook.py` 的一個 `Field(description=...)`，請回 TA。
+
+**2.5 約束（追加 C11～C13；C1 取代）**
+- **C1（取代）**：diff 範圍。
+  - store.py：修訂四列出的項目，加上 `TotalDeployStampInvariantError`。
+  - service.py：
+    - `rebalance` 中 `set_total_deploy` 那一個呼叫與拒絕分支；
+    - 模組私有的 `_superseded_fields`；
+    - 必要的 import（`InvalidOperation`、`datetime`、`TotalDeployStamp`、`TotalDeployStampInvariantError`）。
+  - models.py：Literal 的加法，加上 2.4 的 docstring 段落。
+  - wording.py：`REBALANCE_SUPERSEDED`、`_TAIPEI`、`taipei_wall_time`，以及 `zoneinfo` 的 import。
+  - `tests/**`。
+  - 以下零 diff：engine.py、`app/api/**`、`app/data/**`、`app/services/**`、frontend。
+- **C11**：拒絕分支只能經由 `_superseded_fields` 取值。
+  - 三個鍵任一個為 None、金額無法解析或不是有限值、set_at 無法解析或沒有時區，一律 raise `TotalDeployStampInvariantError`。
+  - 不得以 0、空字串或任何預設值代入；不得猜測時區。
+- **C12**：set_at 只經由 `taipei_wall_time` 呈現；字面內不得出現 ISO 原始字串。
+- **C13**：`RebalanceResult` 的 docstring 含 2.4 的段落，逐字一致（空白正規化之後）。
+
+**2.6 測試（追加 T10～T13，全部 BLOCKING）**
+- **T10（AST；C6 不變式）**：掃描範圍是 `app/**/*.py`。函式以 `模組:類別.函式` 的限定名記錄；模組層級的程式碼以 `模組:<module>` 記錄。
+  - (a) **引用集合**：
+    - 列出所有出現 `ast.Name(id="STATE_CASH")` 或 `ast.Attribute(attr="STATE_CASH")` 的函式，以具名常數 `STATE_CASH_REFERENCES` 釘住；
+    - PR 要附上對 N-197a base 的實測值；
+    - 新增任何一個成員，測試就失敗，回 TA 與風控判定它是不是寫入者。
+  - (b) **寫入者集合 W**：滿足下列任一條件的函式。
+    - 某個 `ast.Dict` 的鍵是 STATE_CASH（Name 或 Attribute）；
+    - 某個 Store 語境的 `ast.Subscript`，slice 是 STATE_CASH；
+    - 呼叫 `_write_state(` 或 `_set_state(` 時，values 引數是 Dict 字面，而且鍵含 `ast.Constant("cash")`。
+    - 斷言 W 等於具名常數 `STATE_CASH_WRITERS`。baseline 是三部分的聯集，以 PR 實測為準：
+      - `{store:PlaybookStore.set_capital}`；
+      - 結算私有 helper：N-177a 之後實測，依修訂一 1.3(3) 預期是 `store:_add_cash`；
+      - 若 N-197a base 仍定義 `set_cash`，加上 `{store:PlaybookStore.set_cash}`，並另外斷言 `app/` 內沒有 `set_cash(` 呼叫點（與 N177a-T19 同一個條件）。
+    - 結算 helper 的呼叫者只能是 `_settle_s2_fill`、`_settle_batch_line`。這一點引用 N177a-T19 的同一個斷言，不另寫一份。
+  - (c) **C6 的內容**：W 中結算 helper 與死碼 `set_cash` 以外的成員（現況只有 `set_capital`）：
+    - 含 STATE_CASH 鍵的那個 Dict 字面，必須同時含 STATE_TOTAL_DEPLOY、STATE_TOTAL_DEPLOY_SET_AT、STATE_TOTAL_DEPLOY_SOURCE 三個鍵；
+    - 而且這個 Dict 是同一個 `_set_state(`／`_write_state(` 呼叫的引數，也就是同一個交易。
+  - (d) **原始 SQL**：`app/` 內任何字串常數（包括 f-string 的常數片段），若同時符合 `(?i)\b(insert|replace|update|delete)\b` 與 `\bplaybook_state\b`，只能出現在 `store:_write_state`。
+  - (e) **無法靜態判讀的寫入呼叫**：
+    - `_write_state(`／`_set_state(` 的 values 引數不是 Dict 字面的呼叫，以 (函式, 計數) 的具名常數釘住，只准調低，比照 N177b-T22 (c′-3)；
+    - 現況預期有 `store:PlaybookStore._set_state`；
+    - N-195 的 `set_total_deploy` 若以 `_total_deploy_state(...)` 傳入，也列入，並另外斷言 `_total_deploy_state` 不屬於 W。
+  - **失敗時的處理**：
+    - W 新增成員，或任何集合調高：回 TA 與風控（C6）；
+    - W 少了成員：在同一個 commit 更新常數，並在 PR 說明列出，不必回 TA。
+- **T11（C11）**：同一個注入點，在窗口內以測試專用的 `_set_state` 製造以下三種情況：
+  - (i) 刪除 STATE_TOTAL_DEPLOY；
+  - (ii) 把 set_at 寫成 `"not-a-date"`；
+  - (iii) 把 set_at 寫成沒有時區的 `"2026-11-07T01:02:03"`。
+  - 每一種都斷言：raise `TotalDeployStampInvariantError`；例外訊息不含任何鍵值；DB 中四個鍵與窗口寫入之後的值逐字相同；沒有 REBALANCE 指令列。
+- **T12（C12）**：
+  - `taipei_wall_time(datetime.fromisoformat("2026-11-07T03:04:05.678901+00:00")) == "2026-11-07 11:04:05 台北時間"`；
+  - 跨日：`"2026-11-07T16:30:00+00:00"` 對應 `"2026-11-08 00:30:00 台北時間"`；
+  - 傳入沒有時區的 datetime → `ValueError`；
+  - T2 的 `message` 中不含 `found.set_at` 的原始字串。
+- **T13（C13）**：`inspect.getdoc(RebalanceResult)` 經空白正規化之後，含有 2.4 的段落。
+
+### 3. suggested 的評估（全部採用）
+
+**3.1 旁證判準的精確化（修訂四第 5 項）**：已併入 1.6。
+
+**3.2 (c′-1) 的名稱集合擴大到任何作用域（修訂四第 10 項）**
+- 取代修訂四 2.2 (c′-1) 的第一句。新的定義：
+- EMERGENCY 名稱集合 = 掃描範圍內，任何作用域（模組、類別、函式、lambda、comprehension）中，以下列任一形式綁定，而且綁定值的 AST 子樹含 `ast.Constant("EMERGENCY")` 的名稱：
+  - Assign、AnnAssign、AugAssign、NamedExpr 的 Name 目標，包括 Tuple／List 解包中的每一個 Name；
+  - For 與 comprehension 的目標，條件是 iter 含該常數；
+  - 函式參數，條件是預設值含該常數；
+  - `with ... as` 的目標；
+  - Attribute 目標的 attr，例如 `self.x = "EMERGENCY"` 的 `x`。
+- 集合由測試計算，不寫死。
+- 現況：至少有 `EMERGENCY_RULE_ID`（store.py:313）。`UNKEYED_RULE_IDS`（store.py:267，tuple 內含該常數）也會被收進集合。
+- 這是刻意的過度涵蓋：
+  - 集合只用來判定 `rule_id=` 的值；
+  - 多收進來的名稱若從未出現在 `rule_id=`，不影響計數；
+  - 若出現了，計數變大、測試失敗，回 TA 判讀。方向是寧可誤報。
+- (c′-1) 的 Constant／Name／Attribute 判定，以及「總數恰好一處」的要求，都不變。
+
+**3.3 3.9 第 6 點的指涉改為更正版（修訂四第 4 項）**
+- 修訂四 1.1 的 3.9 第 6 點末句，改為：「修好之前，以風控 2026-11-07 更正版 CEO 通知（取代同日稍早送出的補充句；[風控-197] 第二節第 6 點）揭露。」
+- 修訂四 3.9 N-197a「定位」的第 4 個子彈，改為：「在 N-197a 上線之前，第 2 列是殘留，以風控 2026-11-07 更正版 CEO 通知揭露，並登錄 ADR-0041 R-5′（風控定稿，[風控-197] 第二節第 5 點）。」
+
+### 4. 行號對照（修訂四引用 → 現在的 checkout；以內容定位）
+
+| 內容 | 修訂四 | 現在 |
+|---|---|---|
+| service `rebalance` 起點／`list_batches`／`portfolio_state`／`set_capital` | :1516／:1535／:1538／:1612 | :1809／:1828／:1831／:1908 |
+| service `confirm_rules` 起點／其中的 `set_capital` | :1722-1739／:1734 | :1987 起／:2030 |
+| service `_settle_pending` 中的 claim 與 G1 分支 | :1339-1356 | :1632-1649 |
+| service `evaluate_today` 的 `read_in_flight`／`list_batches`／`roll_peak_closes`／`list_batches`／`portfolio_state` | :1861／:1862／:1898／:1901／:1902 | :2157／:2158／:2196／:2199／:2200 |
+| store `claim_directive` | :1453-1460 | :1531-1555 |
+| store `set_capital` | :945-967 | :1033-1055 |
+| store `EMERGENCY_RULE_ID` | :291 | :313 |
+| wording `SETTLEMENT_EXIT_ITEM`／`SETTLEMENT_BATCH_ALREADY_FILLED_NOTE` | :956／:963-969 | :1019／:1026 起 |
+| models `RebalanceResult` | — | :511-534 |
+| engine `planned_batch_shares` | :176-205 | :186 起 |
+| api `today` | :582 | :581-582（未動） |
+
+### 5. CEO 通知前提 (1)：TA 確認成立
+- 同步 `/today` 在 threadpool 中執行，不會因為 client 斷線而中斷：
+  - FastAPI 走 `run_in_threadpool`，進到 anyio 的 `run_sync`，`abandon_on_cancel=False`；
+  - uvicorn 在斷線時只標記 disconnected，不取消 app task；
+  - 本 repo 三層 middleware 都是純 ASGI，沒有監聽斷線。
+- 前端的 `getPlaybookToday` 不接 `signal`，`cancelQueries` 不會中止 fetch。
+- 重新整理之後，新頁面立刻送出新的 `/today`，與舊的那次在後端並行。
+- 兩句都保留。完整依據見 TA 回報與 ADR-0042 Context 第 4 點。
+
+### 6. 修改處索引（風控比對用）
+
+| # | 位置 | 性質 | 依據 |
+|---|---|---|---|
+| 1 | C8 執行與判斷分離（1.1～1.7） | 取代修訂四 1.2 對應段：明列指令與 `exit=`；(ii) 獨立計算並列出 40 碼；執行者獨立；以 `git diff --stat` 綁定審查對象；head 變動就重做 | [風控-197] 二-2 required 1～5 |
+| 2 | 1.5 第 2 點 `<tip>` 可以不同 | [TA 補] | product 只往前長 |
+| 3 | 1.6 旁證錨點 | 採用 suggested，[TA 補] 收 f-string DDL 與常數定義行 | 二-1 第 5 項 suggested |
+| 4 | N197a-C8、QB-N197a-2（1.8） | 取代或新增 | 二-2「N197a-C8 一併適用」 |
+| 5 | 拒絕分支（2.1）、C11、T11 | 取代：鍵不存在視為不變式違反，不以 0 代入 | 二-3(b)2，TA 選第一種 |
+| 6 | `taipei_wall_time`、C12、T12 | 新增：台北時間，精確到秒，附標示 | 二-3(b)3 |
+| 7 | docstring 段落、C13、T13 | 新增 | 二-3(b)4 |
+| 8 | T10（AST） | 新增：引用、寫入者、C6 內容、原始 SQL、不可判讀呼叫 | 二-3(b)1 |
+| 9 | C1 | 取代：納入 2.1～2.4 的程式位置 | 隨 5～7 |
+| 10 | (c′-1) 任何作用域，過度涵蓋 | 採用 | 二-1 第 10 項 suggested |
+| 11 | 3.9 第 6 點、N-197a 定位：指涉改為更正版 | 採用 | 二-1 第 4 項 suggested |
+| 12 | 行號對照（第 4 節） | 登錄 | checkout 已位移 |
+| 13 | CEO 通知前提 (1)（第 5 節） | 確認成立 | 二-4(e) 前提 (1) |
+
+（修訂六由 coordinator 2026-11-07 附加；原文見 tech-architect 回報。）
