@@ -239,6 +239,12 @@ FILL_DEPENDENT_EFFECTS = frozenset(
 R_SERIES_RULE_IDS: tuple[str, ...] = ("R1", "R2", "R3", "M1")
 _R_SERIES_PLACEHOLDERS = ", ".join("?" for _ in R_SERIES_RULE_IDS)
 
+#: The S/P series sell lines (ADR-0035 補充五 X-1 第 1 點): what N190-I's earlier
+#: and later sell lines (風控 2026-11-05 B-3) and ADR-0040's 「S/P sell 列」
+#: (Decision 9 第 5 點) are. EMERGENCY is not one; S3 writes no line. The one
+#: definition -- nothing else may spell these ids out again.
+SETTLED_SINCE_RULE_IDS: tuple[str, ...] = ("S1", "S2", "P1", "P2", "P3")
+
 #: ADR-0035 Decision 2 / N172-C4: lines outside K1 and K2. They are the
 #: covering set of ADR-0033 C-4 and the quarterly recomputation, which have
 #: idempotency rules of their own; the evaluation never produces either.

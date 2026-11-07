@@ -69,6 +69,7 @@ from app.playbook.store import (
     LINE_BOUND_EFFECTS,
     ORDER_ACTIONS,
     R_SERIES_RULE_IDS,
+    SETTLED_SINCE_RULE_IDS,
     EmergencyExitState,
     EntryBeforeExitRead,
     EvaluationCommit,
@@ -892,6 +893,90 @@ class SettlementRun(NamedTuple):
 
     result: SettlementResult
     loaded: Mapping[str, LoadedSeries]
+
+
+def _is_sp_sell(directive: Directive) -> bool:
+    return directive.action == "sell" and directive.rule_id in SETTLED_SINCE_RULE_IDS
+
+
+def _later_sells(earlier: Directive, logged: Sequence[Directive]) -> list[Directive]:
+    """N190-I's later lines: S/P sells after ``earlier`` on its batch, or its symbol with S2.
+
+    EMERGENCY is never one (風控 2026-11-05 B-3): it is not on ``logged``, and
+    :func:`_is_sp_sell` would not take it either.
+    """
+    return sorted(
+        (
+            line
+            for line in logged
+            if _is_sp_sell(line)
+            and line.symbol == earlier.symbol
+            and line.execution_date > earlier.execution_date
+            and ("S2" in (earlier.rule_id, line.rule_id) or line.batch_no == earlier.batch_no)
+        ),
+        key=lambda line: (line.execution_date, line.batch_no or 0),
+    )
+
+
+def _later_sell_item(line: Directive) -> str:
+    if line.batch_no is None:
+        return wording.SETTLEMENT_EARLIER_SELL_SYMBOL_ITEM.format(
+            symbol=line.symbol,
+            rule_id=line.rule_id,
+            shares=line.shares,
+            execution_date=line.execution_date.isoformat(),
+        )
+    return wording.SETTLEMENT_EARLIER_SELL_BATCH_ITEM.format(
+        symbol=line.symbol,
+        batch_no=line.batch_no,
+        rule_id=line.rule_id,
+        shares=line.shares,
+        execution_date=line.execution_date.isoformat(),
+    )
+
+
+def with_earlier_sell_notes(
+    settlement: SettlementResult,
+    *,
+    logged: Sequence[Directive],
+    loaded: Mapping[str, LoadedSeries],
+) -> SettlementResult:
+    """N190-I on ``/today``'s settlement (風控 2026-11-04 第二節之 2; N190-C4～C7). Pure.
+
+    An unsettled S/P sell whose reason is its own :data:`wording.SETTLEMENT_NO_OPEN_PRICE`
+    -- rendered from ``loaded``, the series that very settlement judged it on --
+    gets :data:`wording.SETTLEMENT_EARLIER_SELL_NOT_DEDUCTED_NOTE` appended when
+    ``logged`` (this response's ``directives``) holds a later sell of the same
+    batch, or of the same symbol when either line is S2 (:func:`_later_sells`).
+
+    Everything is read from the response itself: no store, no in-flight read, no
+    ``_lines``. The reason and its mirror in ``warnings`` -- the first
+    ``len(unsettled)`` entries are the reasons, in order (``_settle_pending``)
+    -- are replaced together; nothing is inserted or reordered (N190-C7).
+    ``POST /settle`` never comes here: it has no ``directives``.
+    """
+    unsettled = list(settlement.unsettled)
+    warnings = list(settlement.warnings)
+    for position, line in enumerate(unsettled):
+        earlier = line.directive
+        if not _is_sp_sell(earlier):
+            continue
+        series = loaded.get(earlier.symbol, NOTHING_LOADED)
+        no_open_price = wording.SETTLEMENT_NO_OPEN_PRICE.format(
+            symbol=earlier.symbol,
+            execution_date=earlier.execution_date.isoformat(),
+            status=series.status,
+            source=series.source,
+        )
+        later = _later_sells(earlier, logged)
+        if not later or not line.reason.startswith(no_open_price):
+            continue
+        reason = line.reason + wording.SETTLEMENT_EARLIER_SELL_NOT_DEDUCTED_NOTE.format(
+            later_items="、".join(_later_sell_item(item) for item in later)
+        )
+        unsettled[position] = line.model_copy(update={"reason": reason})
+        warnings[position] = reason
+    return settlement.model_copy(update={"unsettled": unsettled, "warnings": warnings})
 
 
 def exit_row_past_due(execution_dates: Sequence[date], *, as_of: date) -> bool:
@@ -1938,6 +2023,9 @@ class PlaybookService:
         )
         self._store.save_fast_market(evaluation.fast_market, measured_on=data_date)
         commit = self._store.commit_evaluation(evaluation)
+        # N190-I: an earlier S/P sell still unsettled next to a later one on this
+        # page, from the settlement and the logged lines of this response only.
+        settlement = with_earlier_sell_notes(settlement, logged=commit.logged, loaded=run.loaded)
         # §6 ②: the effective date of the row actually in force on the 依據資料日,
         # read from the store rather than from ``params`` -- a parameter set that
         # fell back to the system default carries a derived date, and the page
