@@ -2000,7 +2000,7 @@ def test_s11_rule_param_defaults_match_rule_params() -> None:
 
 
 def test_s11_demo_source_and_index_keys_match_the_app() -> None:
-    assert probe.DEMO_SOURCE == DEMO_SOURCE == engine.DEMO_SOURCE
+    assert probe.DEMO_SOURCE == DEMO_SOURCE == vars(engine)["DEMO_SOURCE"]
     from app.playbook import service
 
     assert probe.INDEX_MARKET == service.PLAYBOOK_MARKET
@@ -2017,10 +2017,7 @@ def test_s11_the_state_and_table_names_the_probe_reads_exist_in_the_store() -> N
             assert f"CREATE TABLE IF NOT EXISTS {table} " in schema, table
 
 
-def test_s11_the_s2_constants_equal_the_store_once_n177a_defines_them() -> None:
-    module: Any = store
-    if not hasattr(module, "S2_FILL_ENTRY"):
-        pytest.skip("N-177a is not merged: the store has no S2_FILL_ENTRY yet")
+def _assert_s2_constants_align(module: Any) -> None:
     entry = module.S2_FILL_ENTRY
     assert (probe.S2_ENTRY_STATUS, probe.S2_ENTRY_ACTION, probe.S2_ENTRY_RULE_ID) == (
         entry.status,
@@ -2029,7 +2026,44 @@ def test_s11_the_s2_constants_equal_the_store_once_n177a_defines_them() -> None:
     )
     assert probe.S2_ELIGIBLE_BATCH_SQL == module.S2_ELIGIBLE_BATCH_SQL
     assert probe.FILL_MOVES_TABLE == module.FILL_MOVES_TABLE
-    assert module.s2_fill_entry_sql("d") in probe.S2_UNAUDITED_SQL
+    # Whitespace is normalised on both sides: the probe SQL is laid out over several lines.
+    wanted = " ".join(module.s2_fill_entry_sql("d").split())
+    for sql in (probe.S2_UNAUDITED_SQL, probe.S2_UNAUDITED_NO_TABLE_SQL):
+        assert wanted in " ".join(sql.split())
+
+
+def test_s11_the_s2_constants_equal_the_store_once_n177a_defines_them() -> None:
+    module: Any = store
+    if not hasattr(module, "S2_FILL_ENTRY"):
+        pytest.skip("N-177a is not merged: the store has no S2_FILL_ENTRY yet")
+    _assert_s2_constants_align(module)
+
+
+def test_s11_the_alignment_check_passes_against_the_spec_shaped_constants() -> None:
+    """A stand-in for N-177a section 4.2, so the check is known to pass once it lands."""
+    from types import SimpleNamespace
+
+    entry = SimpleNamespace(status="executed", action="sell", rule_id="S2")
+
+    def s2_fill_entry_sql(alias: str) -> str:
+        assert alias.isidentifier()
+        return (
+            f"{alias}.status = 'executed' AND {alias}.action = 'sell' AND "
+            f"{alias}.rule_id = 'S2' AND {alias}.batch_no IS NULL"
+        )
+
+    fake = SimpleNamespace(
+        S2_FILL_ENTRY=entry,
+        S2_ELIGIBLE_BATCH_SQL=(
+            "b.status = 'open' AND b.remaining_shares > 0 AND b.cost IS NOT NULL"
+        ),
+        FILL_MOVES_TABLE="playbook_fill_moves",
+        s2_fill_entry_sql=s2_fill_entry_sql,
+    )
+    _assert_s2_constants_align(fake)
+    fake.S2_ELIGIBLE_BATCH_SQL += " AND 1"
+    with pytest.raises(AssertionError):
+        _assert_s2_constants_align(fake)
 
 
 def test_s11_the_probe_sql_restates_its_own_constants() -> None:
@@ -2103,3 +2137,170 @@ def test_s11_the_marker_selects_exactly_the_index_gap_lines(tmp_path: Path) -> N
         ids["skip"],
         ids["nobar"],
     }
+
+
+# ---------------------------------------------------------------- review follow-ups
+
+
+def test_s1_enumerated_columns_print_only_known_values_and_the_count_is_reported(
+    tmp_path: Path,
+) -> None:
+    path = _db(tmp_path)
+    with closing(sqlite3.connect(path)) as conn, conn:
+        conn.execute(
+            "INSERT INTO playbook_blacklist (symbol, triggered_on, until, rule_id) "
+            "VALUES ('2330', '2026-08-12', '2026-12-31', 'a harmless English sentence')"
+        )
+        conn.execute(
+            "INSERT INTO playbook_blacklist (symbol, triggered_on, until, rule_id) "
+            "VALUES ('2317', '2026-08-12', '2026-12-31', 'S2')"
+        )
+    _executed(path, symbol="2454", batch_no=3, rule_id="ZZ9", action="sell")
+    code, result, markdown = _run(tmp_path, path)
+    assert code == 0
+    by_symbol = {r["symbol"]: r for r in result["n177"]["blacklist"]}
+    assert by_symbol["2330"]["rule_id"] == probe.ENUM_UNEXPECTED == "（非預期值）"
+    assert by_symbol["2317"]["rule_id"] == "S2"
+    (missing,) = result["n177"]["missing_batch_rows"]
+    assert (missing["rule_id"], missing["action"]) == (probe.ENUM_UNEXPECTED, "sell")
+    assert result["meta"]["unexpected_enum_values"] == 2
+    assert "非預期值個數：2" in markdown
+    assert "harmless English" not in markdown and "ZZ9" not in markdown
+
+
+def test_s1_a_clean_book_reports_zero_unexpected_enum_values(tmp_path: Path) -> None:
+    result = _report(tmp_path, _rich_world(tmp_path))
+    assert result["meta"]["unexpected_enum_values"] == 0
+
+
+def test_s1_the_sanitize_enum_rules() -> None:
+    counter = [0]
+    cleaned = probe.sanitize(
+        {
+            "rule_id": "R1",
+            "action": "buy",
+            "status": "weird",
+            "source": "twse",
+            "other": "plain",
+            "list": [{"status": "open"}, {"status": 5}],
+        },
+        None,
+        counter,
+    )
+    assert cleaned == {
+        "rule_id": "R1",
+        "action": "buy",
+        "status": probe.ENUM_UNEXPECTED,
+        "source": probe.ENUM_UNEXPECTED,
+        "other": "plain",
+        "list": [{"status": "open"}, {"status": 5}],
+    }
+    assert counter == [2]
+
+
+def test_s2_demo_index_bars_do_not_enter_the_calendar_or_the_cache_fact(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _stage_phantom(path)
+    for day in ("2026-08-10", "2026-08-12"):
+        _bar(path, "^TWII", day)
+    _bar(path, "^TWII", "2026-08-11", source=DEMO_SOURCE)
+    _blacklist(path, "2330", "2026-08-12")
+    (row,) = _report(tmp_path, path)["n177"]["blacklist"]
+    assert row["trading_day_difference"] == 1  # only 08-12 counts; the demo bar of 08-11 does not
+    with closing(probe.open_read_only(path)) as conn:
+        snapshot = probe.load(conn, since=None, until=AS_OF)
+    assert sorted(snapshot.index_bars) == ["2026-08-10", "2026-08-12"]
+
+
+def test_s4_a_non_positive_cost_is_left_out_of_the_whole_symbol_average(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _batch(path, symbol="2317", batch_no=1, entry_date="2026-09-01", cost="-50")
+    _batch(path, symbol="2317", batch_no=2, entry_date="2026-09-01", cost="50")
+    _bar(path, "2317", "2026-09-02", "-1")
+    result = _report(tmp_path, path)  # an average of 0 would divide by zero
+    (row,) = [c for c in _candidates(result) if c["category"] == probe.CAT_S2]
+    assert row["cost"] == "50"  # the batch with a positive cost alone
+    assert result["n190"]["stats"]["unusable_cost_batches"] >= 1
+
+
+def test_s5_a_previous_json_with_missing_fields_exits_two_without_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _db(tmp_path)
+    _stage_phantom(path)
+    bad = tmp_path / "prev.json"
+    bad.write_text(
+        json.dumps({"schema_version": 1, "n177": {"affected": [{"symbol": "2330"}]}}),
+        encoding="utf-8",
+    )
+    assert _run(tmp_path, path, "--previous-json", str(bad))[0] == 2
+    err = capsys.readouterr().err
+    assert "cannot build the report (KeyError)" in err and err.isascii()
+    assert list((tmp_path / "out").iterdir()) == []
+
+
+def test_s5_dirty_data_in_the_db_exits_two_without_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _db(tmp_path)
+    _batch(path, batch_no="not-a-number")  # type: ignore[arg-type]
+    assert _run(tmp_path, path)[0] == 2
+    err = capsys.readouterr().err
+    assert "cannot read the DB" in err and err.isascii()
+    assert list((tmp_path / "out").iterdir()) == []
+
+
+def test_s3_the_wal_sidecar_caveat_is_in_the_docstring_and_the_limitations() -> None:
+    doc = ast.get_docstring(_script_tree()) or ""
+    assert "-shm" in doc and "main file" in doc
+    assert "-shm" in probe.LIMITATIONS["L8"] and "主檔" in probe.LIMITATIONS["L8"]
+
+
+def test_d9_a_row_with_an_unexpected_enum_value_withholds_the_trial(tmp_path: Path) -> None:
+    """Risk control D-9: any row feeding the judgement with a value outside the set."""
+    cases = {
+        "g_a rule_id": {"rule_id": "ZZ9", "action": "buy", "execution_date": "2026-08-12"},
+    }
+    for name, fields in cases.items():
+        folder = tmp_path / name.replace(" ", "_")
+        folder.mkdir()
+        path = _db(folder)
+        _stage_phantom(path)
+        odd = _executed(path, batch_no=3, **fields)
+        item = _manual(_report(folder, path))
+        assert "D-9" in item["guards"], name
+        assert f"ids={odd}" in item["reasons"][-1]["detail"] or str(odd) in str(item["reasons"])
+
+
+def test_d9_in_flight_row_and_s2_status_with_unknown_values(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _stage_phantom(path)
+    _row(path, action="sell", rule_id="ZZ9", batch_no=1, execution_date="2026-08-20")
+    item = _manual(_report(tmp_path, path))
+    assert item["guards"] == ["D-9"]
+    other = _db_in(tmp_path, "second")
+    _stage_phantom(other)
+    _row(
+        other,
+        action="sell",
+        rule_id="S2",
+        batch_no=None,
+        status="vanished",
+        execution_date="2026-08-14",
+    )
+    assert _manual(_report(tmp_path, other, name="o2") if False else _report_in(tmp_path, other))[
+        "guards"
+    ] == ["D-9"]
+
+
+def _report_in(tmp_path: Path, db: Path) -> dict[str, Any]:
+    code, result, _md = _run(tmp_path, db, name="second-out")
+    assert code == 0
+    return result
+
+
+def test_d9_known_values_leave_the_trial_alone(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _stage_phantom(path)
+    (item,) = _affected(_report(tmp_path, path))
+    assert item["guards"] == [] and item["trial"] is not None

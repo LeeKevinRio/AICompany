@@ -25,8 +25,10 @@ Read-only by construction (S1-S11, each covered by a test):
 * the DB file is hashed (SHA-256) before and after; a difference is exit code 3;
 * the production DB path (``<backend>/data/stock-desk.db`` or the file named by the
   environment variable, read for comparison only) is refused with exit code 4;
-* the only files written are ``report.md`` and ``report.json`` in ``--out-dir``, opened in
-  exclusive mode so an existing file is refused;
+* the only files written by this tool are ``report.md`` and ``report.json`` in ``--out-dir``,
+  opened in exclusive mode so an existing file is refused (a WAL-mode copy may make SQLite
+  leave its own ``-shm`` / ``-wal`` files beside the copy; the DB hash covers the main file
+  only);
 * standard library only: no ``app`` import, no network, no secrets file.
 
 Private data (RC-6): the report holds holdings and cash. Keep it on the machine that made
@@ -234,7 +236,7 @@ WHERE market = ? AND trade_date BETWEEN ? AND ?
 
 INDEX_BARS_SQL = """
 SELECT trade_date, fetched_at, source FROM price_bars_cache
-WHERE symbol = ? AND market = ? ORDER BY trade_date
+WHERE symbol = ? AND market = ? AND source <> ? ORDER BY trade_date
 """
 
 #: Fallback calendar when the cache holds no index bar: every real TW bar date.
@@ -283,7 +285,10 @@ LIMITATIONS: dict[str, str] = {
         "持有區間是以已成交賣單重放推算的；N-166 之前的重複列會造成扭曲，請搭配 n172 探針一起看。"
     ),
     "L7": "黑名單相差的交易日數是用快取 bar 日期近似計算。",
-    "L8": "複本只反映複製當下的狀態，部署閘門以 R2 停機時的那次執行為準。",
+    "L8": (
+        "複本只反映複製當下的狀態，部署閘門以 R2 停機時的那次執行為準。"
+        "WAL 模式的複本可能被 SQLite 在同資料夾建立 -shm、-wal 檔；DB 雜湊只涵蓋主檔。"
+    ),
     "L9": ("試算回補假設使用者已照第一張 S2 在券商賣出（R10）。是否屬實只有券商對帳單能確認。"),
     "L10": "demo 來源的 bar 不計入，只計數。",
     "L11": (
@@ -576,7 +581,7 @@ def load(conn: sqlite3.Connection, *, since: date | None, until: date) -> Snapsh
     calendar: list[str] = []
     calendar_basis: str | None = None
     if has_bars:
-        for r in conn.execute(INDEX_BARS_SQL, (INDEX_SYMBOL, INDEX_MARKET)):
+        for r in conn.execute(INDEX_BARS_SQL, (INDEX_SYMBOL, INDEX_MARKET, DEMO_SOURCE)):
             index_bars[str(r[0])] = Bar("", str(r[2]), str(r[1]))
         if index_bars:
             calendar = sorted(index_bars)
@@ -755,6 +760,26 @@ def _classify_affected(
                     "合格批次上有預定執行日不晚於第一張 S2 的在途賣單 "
                     f"ids={_ids_text([r[0] for r in early])}"
                 ),
+            }
+        )
+
+    # D-9: a row with an enumerated value outside the known set must not feed a trial.
+    odd: list[int] = [
+        int(r[0])
+        for r in snap.g_a_rows.get(symbol, [])
+        if str(r[1]) not in ENUM_VALUES["rule_id"] or str(r[2]) not in ENUM_VALUES["action"]
+    ]
+    odd += [
+        int(r[0]) for r in snap.g_c_rows.get(symbol, []) if str(r[1]) not in ENUM_VALUES["rule_id"]
+    ]
+    odd += [
+        row[0] for row in snap.s2_rows if row[1] == symbol and row[2] not in ENUM_VALUES["status"]
+    ]
+    if odd:
+        reasons.append(
+            {
+                "code": "D-9",
+                "detail": f"判定用到含非預期枚舉值的列 ids={_ids_text(sorted(set(odd)))}",
             }
         )
 
@@ -1107,9 +1132,7 @@ def classify_n190_stop_loss(snap: Snapshot) -> dict[str, Any]:
                         "note": note,
                     }
                 )
-            costed = [
-                (b, r) for b, r in held if _decimal(b.cost) is not None and _decimal(b.cost) != 0
-            ]
+            costed = [(b, r) for b, r in held if (_decimal(b.cost) or Decimal(0)) > 0]
             total = sum(r for _b, r in costed)
             if total > 0 and not has_s2_row:
                 weighted = sum(
@@ -1337,7 +1360,9 @@ def build_result(
         if previous is None
         else diff_against_previous(n177["affected"], previous),
     }
-    sanitized: dict[str, Any] = sanitize(result)
+    counter = [0]
+    sanitized: dict[str, Any] = sanitize(result, None, counter)
+    sanitized["meta"]["unexpected_enum_values"] = counter[0]
     return sanitized
 
 
@@ -1362,12 +1387,32 @@ _FIXED_TEXT_KEYS = frozenset(
 )
 
 
-def sanitize(value: Any, key: str | None = None) -> Any:
-    """Pass fixed wording through; reduce every other string to a short ASCII token."""
+ENUM_UNEXPECTED = "（非預期值）"
+#: Enumerated columns: printed as read only when the value is a known one. ``source`` is
+#: not printed by any category today, so no value is known for it.
+ENUM_VALUES: dict[str, frozenset[str]] = {
+    "rule_id": frozenset(
+        {"R1", "R2", "R3", "R4", "S1", "S2", "S3", "P1", "P2", "P3", "M1", "IRON1"}
+        | {"EMERGENCY", "REBALANCE"}
+    ),
+    "action": frozenset({"buy", "sell", "defer", "skip", "none"}),
+    "status": frozenset({"pending", "executed", "missed", "planned", "open", "closed", "skipped"}),
+    "source": frozenset(),
+}
+
+
+def sanitize(value: Any, key: str | None = None, counter: list[int] | None = None) -> Any:
+    """Pass fixed wording through; enumerated columns by known value; the rest as tokens."""
     if isinstance(value, dict):
-        return {k: sanitize(v, k) for k, v in value.items()}
+        return {k: sanitize(v, k, counter) for k, v in value.items()}
     if isinstance(value, list):
-        return [sanitize(v, key) for v in value]
+        return [sanitize(v, key, counter) for v in value]
+    if isinstance(value, str) and key in ENUM_VALUES:
+        if value in ENUM_VALUES[key]:
+            return value
+        if counter is not None:
+            counter[0] += 1
+        return ENUM_UNEXPECTED
     if isinstance(value, str) and key not in _FIXED_TEXT_KEYS:
         return value if _TOKEN_RE.fullmatch(value) else UNEXPECTED_TOKEN
     return value
@@ -1417,6 +1462,8 @@ def render_markdown(result: Mapping[str, Any]) -> str:
         out.append(f"- 資料表 {name}：{'存在' if present else '不存在'}")
     out.append(f"- 交易日計數依據（黑名單相差）：{meta['trading_day_basis'] or '（快取沒有 bar）'}")
     out += [
+        "- 枚舉欄位（rule_id、action、status、source）的非預期值個數："
+        f"{meta['unexpected_enum_values']}",
         f"- 註：{FILL_MOVES_TABLE} 存在，表示這個 DB 已被 N-177a 版本開啟過",
         "",
     ]
@@ -1839,7 +1886,7 @@ def main(
         with closing(open_read_only(db_path)) as conn:
             snapshot = load(conn, since=args.since, until=until)
         hash_after = sha256_file(db_path)
-    except (OSError, sqlite3.Error) as error:
+    except (OSError, sqlite3.Error, ValueError, TypeError) as error:
         print(f"cannot read the DB: {_ascii(error)}", file=sys.stderr)
         return EXIT_UNREADABLE
     if hash_after != hash_before:
@@ -1850,19 +1897,25 @@ def main(
         return EXIT_HASH_CHANGED
 
     moment = now_utc if now_utc is not None else datetime.now(UTC)
-    result = build_result(
-        snapshot,
-        db_path=str(db_path.resolve()),
-        hash_before=hash_before,
-        hash_after=hash_after,
-        run_at=moment,
-        previous=previous,
-    )
+    try:
+        result = build_result(
+            snapshot,
+            db_path=str(db_path.resolve()),
+            hash_before=hash_before,
+            hash_after=hash_after,
+            run_at=moment,
+            previous=previous,
+        )
+        markdown = render_markdown(result)
+        json_text = render_json(result)
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        print(f"cannot build the report ({type(error).__name__}): {_ascii(error)}", file=sys.stderr)
+        return EXIT_UNREADABLE
     try:
         with open(md_path, "x", encoding="utf-8", newline="\n") as handle:
-            handle.write(render_markdown(result))
+            handle.write(markdown)
         with open(json_path, "x", encoding="utf-8", newline="\n") as handle:
-            handle.write(render_json(result))
+            handle.write(json_text)
     except FileExistsError:
         print("refused: a report file appeared in --out-dir", file=sys.stderr)
         return EXIT_REFUSED
