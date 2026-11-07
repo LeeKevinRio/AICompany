@@ -40,6 +40,7 @@ from app.playbook.store import (
     PlaybookStore,
 )
 from tests.api_helpers import FakePriceService, recent_bars
+from tests.same_day_helpers import evaluation_of
 
 SERIES_END = date(2026, 8, 14)
 QUARTER_END = date(2026, 8, 11)
@@ -247,7 +248,6 @@ def _line(*, batch_no: int, action: str, rule_id: str, shares: int) -> Directive
         limit_note="",
         data_status="fresh",
         source="test",
-        status="executed",
     )
 
 
@@ -269,12 +269,21 @@ def test_t3_a_settlement_committed_mid_rebalance_keeps_its_cash_movement(
     store_b = PlaybookStore(db_path=db_path)
     service_a = _service(store_a)
     line, delta = _CONCURRENT_SETTLEMENTS[case]
+    # B settles the way settle_pending does: the line is logged, then claimed,
+    # then applied to the book with its log row id.
+    store_b.record_directives(evaluation_of(store_b, [line]))
+    (pending,) = store_b.pending_directives()
     fired: list[Decimal] = []
 
     def settle_on_b() -> None:
         # A has read the batches and the cash (:1535, :1538) and has not begun
         # its write; B settles and commits without waiting on a lock.
-        store_b.settle(line, fill_price=CLOSE)
+        assert store_b.claim_directive(pending.directive_id, status="executed", open_price=CLOSE)
+        store_b.settle(
+            pending.directive.model_copy(update={"status": "executed"}),
+            fill_price=CLOSE,
+            directive_id=pending.directive_id,
+        )
         fired.append(store_b.portfolio_state().cash)
 
     _record(monkeypatch, store_a, db_path, hook=settle_on_b)
