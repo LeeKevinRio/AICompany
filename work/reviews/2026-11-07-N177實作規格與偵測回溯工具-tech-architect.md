@@ -2710,3 +2710,5 @@ force before this run.
 （修訂七由 coordinator 2026-11-07 附加；原文見 tech-architect 回報。）
 
 （coordinator 2026-11-07 補記，修訂五索引追加一列：N-177a 在 c9e6ddb 依 C14 merge 時，衝突解法第 6 項是在 `test_n177_n190_backtrack_probe.py::test_the_report_states_whether_the_audit_table_exists` 的 fixture 加上 `DROP TABLE playbook_fill_moves`，斷言零 diff。qa-reviewer 已判定可以接受，見 `work/reviews/2026-11-07-N177a審查-qa-reviewer.md`。）
+
+（coordinator 2026-11-07 補記，依風控 S8：修訂七第 6 節索引第 1 列已依 TA 授權改為替換句，內容與 TA 回報原文不同；這屬於替換，不是只刪字。修訂七第 4 節「編號由 coordinator 給」的編號是 N-200。）
