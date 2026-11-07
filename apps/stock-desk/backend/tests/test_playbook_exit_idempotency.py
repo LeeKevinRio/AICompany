@@ -771,6 +771,10 @@ ADR0034_COLUMNS: dict[str, list[str]] = {
     "playbook_directives": ["exit_stamped_on"],
 }
 
+#: ADR-0040 (N-190, accepted, CEO #110) Decision 9 第 1 點: the (甲) mark table, no
+#: UNIQUE and no primary key, so it adds a table and no index. Nothing else.
+ADR0040_TABLES = frozenset({"playbook_evaluation_marks"})
+
 #: The only indexes on those tables before N-166: SQLite's own, for the text
 #: primary keys. No unique index on the directive log (ADR-0033 方案 (e) 未採).
 PRE_N166_INDEXES = frozenset(
@@ -847,7 +851,7 @@ def test_the_exit_adds_no_column_table_or_state_key(book: Book) -> None:
             table: [str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")]
             for table in PRE_N166_COLUMNS
         }
-    assert names == set(PRE_N166_COLUMNS) | PRE_N166_INDEXES
+    assert names == set(PRE_N166_COLUMNS) | PRE_N166_INDEXES | ADR0040_TABLES
     assert columns == {
         table: [*before_n166, *ADR0034_COLUMNS.get(table, [])]
         for table, before_n166 in PRE_N166_COLUMNS.items()
