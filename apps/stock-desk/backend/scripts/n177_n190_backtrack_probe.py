@@ -764,6 +764,8 @@ def _classify_affected(
         )
 
     # D-9: a row with an enumerated value outside the known set must not feed a trial.
+    # Limit of the G-a SQL in the spec: it only selects action IN ('buy', 'sell'), so a row
+    # whose action is unexpected is never read here; only its rule_id can be checked.
     odd: list[int] = [
         int(r[0])
         for r in snap.g_a_rows.get(symbol, [])
@@ -1462,7 +1464,8 @@ def render_markdown(result: Mapping[str, Any]) -> str:
         out.append(f"- 資料表 {name}：{'存在' if present else '不存在'}")
     out.append(f"- 交易日計數依據（黑名單相差）：{meta['trading_day_basis'] or '（快取沒有 bar）'}")
     out += [
-        "- 枚舉欄位（rule_id、action、status、source）的非預期值個數："
+        "- 報告輸出欄位（rule_id、action、status、source）中的非預期值個數"
+        "（D-9 用到的列另見理由句）："
         f"{meta['unexpected_enum_values']}",
         f"- 註：{FILL_MOVES_TABLE} 存在，表示這個 DB 已被 N-177a 版本開啟過",
         "",
@@ -1886,8 +1889,14 @@ def main(
         with closing(open_read_only(db_path)) as conn:
             snapshot = load(conn, since=args.since, until=until)
         hash_after = sha256_file(db_path)
-    except (OSError, sqlite3.Error, ValueError, TypeError) as error:
+    except (OSError, sqlite3.Error) as error:
         print(f"cannot read the DB: {_ascii(error)}", file=sys.stderr)
+        return EXIT_UNREADABLE
+    except (ValueError, TypeError) as error:
+        # The message may quote a cell value; only the class name is printed.
+        print(
+            f"cannot read the DB (unexpected cell value, {type(error).__name__})", file=sys.stderr
+        )
         return EXIT_UNREADABLE
     if hash_after != hash_before:
         print(
@@ -1909,7 +1918,7 @@ def main(
         markdown = render_markdown(result)
         json_text = render_json(result)
     except (ValueError, KeyError, TypeError, AttributeError) as error:
-        print(f"cannot build the report ({type(error).__name__}): {_ascii(error)}", file=sys.stderr)
+        print(f"cannot build the report ({type(error).__name__})", file=sys.stderr)
         return EXIT_UNREADABLE
     try:
         with open(md_path, "x", encoding="utf-8", newline="\n") as handle:

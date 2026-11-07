@@ -2164,7 +2164,7 @@ def test_s1_enumerated_columns_print_only_known_values_and_the_count_is_reported
     (missing,) = result["n177"]["missing_batch_rows"]
     assert (missing["rule_id"], missing["action"]) == (probe.ENUM_UNEXPECTED, "sell")
     assert result["meta"]["unexpected_enum_values"] == 2
-    assert "非預期值個數：2" in markdown
+    assert "中的非預期值個數（D-9 用到的列另見理由句）：2" in markdown
     assert "harmless English" not in markdown and "ZZ9" not in markdown
 
 
@@ -2243,10 +2243,11 @@ def test_s5_dirty_data_in_the_db_exits_two_without_a_traceback(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path = _db(tmp_path)
-    _batch(path, batch_no="not-a-number")  # type: ignore[arg-type]
+    _batch(path, batch_no="CELL-VALUE-7731")  # type: ignore[arg-type]
     assert _run(tmp_path, path)[0] == 2
     err = capsys.readouterr().err
     assert "cannot read the DB" in err and err.isascii()
+    assert "CELL-VALUE-7731" not in err and "ValueError" in err
     assert list((tmp_path / "out").iterdir()) == []
 
 
@@ -2258,18 +2259,13 @@ def test_s3_the_wal_sidecar_caveat_is_in_the_docstring_and_the_limitations() -> 
 
 def test_d9_a_row_with_an_unexpected_enum_value_withholds_the_trial(tmp_path: Path) -> None:
     """Risk control D-9: any row feeding the judgement with a value outside the set."""
-    cases = {
-        "g_a rule_id": {"rule_id": "ZZ9", "action": "buy", "execution_date": "2026-08-12"},
-    }
-    for name, fields in cases.items():
-        folder = tmp_path / name.replace(" ", "_")
-        folder.mkdir()
-        path = _db(folder)
-        _stage_phantom(path)
-        odd = _executed(path, batch_no=3, **fields)
-        item = _manual(_report(folder, path))
-        assert "D-9" in item["guards"], name
-        assert f"ids={odd}" in item["reasons"][-1]["detail"] or str(odd) in str(item["reasons"])
+    path = _db(tmp_path)
+    _stage_phantom(path)
+    odd = _executed(path, batch_no=3, rule_id="ZZ9", action="buy", execution_date="2026-08-12")
+    item = _manual(_report(tmp_path, path))
+    assert item["guards"] == ["G-a", "D-9"]
+    assert item["reasons"][-1]["code"] == "D-9"
+    assert item["reasons"][-1]["detail"].endswith(f"ids={odd}")
 
 
 def test_d9_in_flight_row_and_s2_status_with_unknown_values(tmp_path: Path) -> None:
@@ -2288,9 +2284,7 @@ def test_d9_in_flight_row_and_s2_status_with_unknown_values(tmp_path: Path) -> N
         status="vanished",
         execution_date="2026-08-14",
     )
-    assert _manual(_report(tmp_path, other, name="o2") if False else _report_in(tmp_path, other))[
-        "guards"
-    ] == ["D-9"]
+    assert _manual(_report_in(tmp_path, other))["guards"] == ["D-9"]
 
 
 def _report_in(tmp_path: Path, db: Path) -> dict[str, Any]:
