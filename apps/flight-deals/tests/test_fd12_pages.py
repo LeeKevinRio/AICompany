@@ -358,6 +358,15 @@ def card(page: Page, watch_id: int) -> Node:
     return cards[0]
 
 
+def main_card(page: Page, watch_id: int) -> Node:
+    """The card without FD-19's extra pairs, which carry their own flights and links."""
+    one = card(page, watch_id)
+    one.children = [
+        c for c in one.children if not (isinstance(c, Node) and "more-pairs" in c.classes)
+    ]
+    return one
+
+
 def flight_blocks(node: Node) -> list[Node]:
     return node.find_all("div", "flight")
 
@@ -412,7 +421,7 @@ def test_list_card_shows_airline_flight_times_and_booking_link(harness: Harness)
     harness.services.views._links = TfsLinks()
     watch_id = priced_round_trip(harness)
     page = get(harness, "/")
-    one = card(page, watch_id)
+    one = main_card(page, watch_id)
     text = one.text()
     # Cheapest pair is 12/11-12/16 at 8,000: price, flight and link all come from that row.
     assert BEST_TITLE in text and "TWD 8,000" in text and "TWD 9,000" not in text
@@ -447,7 +456,7 @@ def test_list_one_way_has_no_leg_label_or_return_wording(harness: Harness) -> No
 def test_list_round_trip_card_has_only_the_outbound_flight(harness: Harness) -> None:
     watch_id = priced_round_trip(harness)
     page = get(harness, "/")
-    blocks = flight_blocks(card(page, watch_id))
+    blocks = flight_blocks(main_card(page, watch_id))
     assert len(blocks) == 1
     assert "去程" in blocks[0].text()
     # The return date lives in the dates line, never in the flight block.

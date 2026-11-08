@@ -24,7 +24,7 @@
   <p class="disclaimer">{{ disclaimer }}</p>
   {% if has_prices %}<p class="price-source-note">{{ ui.price_source_note }}</p>{% endif %}
   {% if has_prices and not is_round_trip and (top + recent_prices)|selectattr("overhead_bin_label")|list %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
-  {% if has_prices %}<p class="sampled-note">{{ sampled_only_note }}</p>{% endif %}
+  {% if has_prices %}<p class="sampled-note">{{ sampled_only_note }}{% if coverage_label %} <span class="coverage">{{ coverage_label }}</span>{% endif %}</p>{% endif %}
 </div>
 
 {# The manual-check link sits in the no-price card; an ended watch has no date left to check. #}

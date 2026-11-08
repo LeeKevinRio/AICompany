@@ -14,17 +14,16 @@
   <a class="button primary" href="/watches/new">建立第一個監看</a>
 </div>
 {% else %}
-{% set priced = watches|selectattr("min_price")|list %}
-{% set round_trip_priced = priced|selectattr("flight")|selectattr("flight.is_outbound_only")|list %}
-{% set booking_shown = priced|selectattr("booking_url")|list %}
+{# FD-19 R4: each condition counts the main cards and the extra pairs together. #}
 <div class="page-notes">
   <p class="disclaimer">{{ disclaimer }}</p>
-  {% if priced %}<p class="price-source-note">{{ ui.price_source_note }}</p>{% endif %}
-  {% if not round_trip_priced and priced|selectattr("overhead_bin_label")|list %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
-  {% if round_trip_priced %}<p class="return-explain">{{ ui.return_leg_explain_listed if priced|selectattr("return_flight")|list else ui.return_leg_explain }}</p>
+  {% if notes.priced %}<p class="price-source-note">{{ ui.price_source_note }}</p>{% endif %}
+  {% if notes.sampled %}<p class="sampled-note">{{ sampled_only_note }}</p>{% endif %}
+  {% if notes.overhead_one_way %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
+  {% if notes.round_trip %}<p class="return-explain">{{ ui.return_leg_explain_listed if notes.return_listed else ui.return_leg_explain }}</p>
   <p class="return-explain">{{ ui.round_trip_note }}</p>{% endif %}
-  {% if booking_shown %}<p class="booking-hint">{{ ui.booking_hint }}</p>{% endif %}
-  {% if priced %}{{ help_note(ui.local_time_explain) }}{% endif %}
+  {% if notes.booking %}<p class="booking-hint">{{ ui.booking_hint }}</p>{% endif %}
+  {% if notes.priced %}{{ help_note(ui.local_time_explain) }}{% endif %}
 </div>
 <div class="watch-grid">
   {% for w in watches %}
@@ -52,6 +51,7 @@
     </div>
     {{ flight(w.flight) }}
     {{ flight(w.return_flight) }}
+    {% if w.coverage_label %}<p class="coverage">{{ w.coverage_label }}</p>{% endif %}
     {% else %}
     <p class="muted">{{ w.no_price_label }}</p>
     {% if w.manual_check %}{{ help_note(ui.manual_check_explain) }}{% endif %}
@@ -88,6 +88,31 @@
       </div>
       {% if w.booking_url and w.booking_note %}<p class="hint booking-note">{{ w.booking_note }}</p>{% endif %}
     </div>
+
+    {#- FD-19 R6: after the main card's own button, so no button reads as the main card's. #}
+    {% if w.more_pairs %}
+    <section class="more-pairs" aria-labelledby="more-pairs-{{ w.id }}">
+      <h3 class="more-pairs-title" id="more-pairs-{{ w.id }}">{{ ui.other_pairs_title }}</h3>
+      <ul class="more-pairs-list">
+        {% for p in w.more_pairs %}
+        <li class="more-pair">
+          <div class="more-pair-head">
+            <span class="more-pair-amount">{{ p.amount }}</span>
+            <span class="more-pair-dates">{{ p.dates_weekday_label }}</span>
+          </div>
+          {% if w.pax_note %}<div class="price-sub">{{ w.pax_note }}</div>{% endif %}
+          {{- price_labels(p.split_ticket_label, p.overhead_bin_label) }}
+          <div class="price-meta">{{ price_meta(p.fetched_label, p.stale) }}</div>
+          {{ flight(p.flight, compact=true, leg=true) }}
+          {% if p.booking_url %}
+          <div class="more-pair-actions">{{ ext_link(p.booking_url, ui.booking_button_short, p.dates, "button small booking") }}</div>
+          {% if p.booking_note %}<p class="hint booking-note">{{ p.booking_note }}</p>{% endif %}
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
 
     <details class="fold fold-inline">
       <summary><span class="fold-title">監看條件</span></summary>

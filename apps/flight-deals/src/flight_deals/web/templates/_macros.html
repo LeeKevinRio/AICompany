@@ -6,12 +6,13 @@
 {%- endmacro %}
 
 {#- One flight (outbound only). `f` is a FlightSummary; every field is already display text. -#}
-{% macro flight(f, duration=true, compact=false) -%}
+{#- `leg` keeps "去程" in the compact form (FD-19 R5). -#}
+{% macro flight(f, duration=true, compact=false, leg=false) -%}
 {% if f %}
 <div class="flight{% if compact %} flight-compact{% endif %}">
   <span class="sr-only">{{ f.sr_text }}</span>
   <div class="flight-id" aria-hidden="true">
-    {% if f.leg_label and not compact %}<span class="flight-leg">{{ f.leg_label }}</span>{% endif %}
+    {% if f.leg_label and (leg or not compact) %}<span class="flight-leg">{{ f.leg_label }}</span>{% endif %}
     <span class="flight-airline">{{ f.airline }}</span>
     <span class="flight-no">{{ f.flight_numbers }}</span>
   </div>

@@ -1583,6 +1583,8 @@ class UiTexts:
         "只列去程航班；回程需在 Google Flights 選擇，價格可能因回程不同而改變。"
     )
     # FD-16 risk ruling: a page listing at least one return flight (list rows can be mixed).
+    # FD-19 risk ruling (final wording): only pairs with a price count, never a rank.
+    coverage: str = "已查到價格 {checked}／共 {total} 組日期"
     return_leg_explain_listed: str = (
         "回程要到 Google Flights 自己選；有列出的回程是查到價格當下的組合。"
         "價格可能已變，換回程也可能不同。"
@@ -1731,6 +1733,11 @@ def watch_settings_summary(
     return f"{origin} → {destination}・{trip}・{dates}・{budget_text}"
 
 
+def coverage_text(checked: int, total: int) -> str:
+    """FD-19: how many of the watch's date pairs ahead have a price."""
+    return WEB_TEXTS.coverage.format(checked=checked, total=total)
+
+
 def web_static_texts() -> list[str]:
     """Wording added by FD-12, for the banned-phrase test."""
     return [
@@ -1749,6 +1756,8 @@ def web_static_texts() -> list[str]:
         EXPLORATION_WATCH_HINT,
         EXPLORATION_CALENDAR_NOTE,
         stale_rounds_label(3),
+        coverage_text(12, 834),
+        SAMPLED_ONLY_NOTE,
         fetched_range_label(
             datetime(2026, 11, 1, 6, 31, tzinfo=UTC), datetime(2026, 11, 1, 6, 33, tzinfo=UTC)
         ),

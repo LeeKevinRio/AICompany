@@ -684,6 +684,19 @@ details.explain > summary {
 .explain-body { margin: var(--space-1) 0 0; max-width: 60ch; font-size: var(--text-sm); color: var(--color-muted); }
 .tech-details .error-text { color: var(--color-muted); font-size: var(--text-sm); }
 
+/* FD-19: the next date pairs by price, after the main card's actions and lighter than it. */
+.more-pairs { border-top: 1px solid var(--color-border); padding-top: var(--space-3); }
+.more-pairs-title { margin: 0 0 var(--space-2); font-size: var(--text-base); font-weight: 600; }
+.more-pairs-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.more-pair { display: flex; flex-direction: column; gap: var(--space-1); }
+.more-pair + .more-pair { border-top: 1px dashed var(--color-border); padding-top: var(--space-3); }
+.more-pair-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }
+.more-pair-amount { font-size: var(--text-base); font-weight: 700; font-variant-numeric: tabular-nums; }
+.more-pair-dates { font-size: var(--text-sm); color: var(--color-text); }
+.more-pair-actions { margin-top: var(--space-1); }
+/* Body size and text colour: the coverage line must not read as fine print (R10). */
+.coverage { margin: 0; font-size: inherit; color: var(--color-text); }
+
 /* FD-15, FD-16: long labels under a price; wrap instead of clipping in calendar cells. */
 .price-labels { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-1); }
 .price-labels .badge { white-space: normal; }

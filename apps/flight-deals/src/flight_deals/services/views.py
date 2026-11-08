@@ -12,7 +12,7 @@ from typing import Any, Literal, TypeVar
 from flight_deals.domain.airlines import AIRLINES, lookup_airline
 from flight_deals.domain.airports import place_label, route_label
 from flight_deals.domain.currency import format_money, minor_to_major_int
-from flight_deals.domain.dates import first_pair
+from flight_deals.domain.dates import expand_pairs, first_pair
 from flight_deals.domain.flight_summary import FlightFacts, FlightSummary, flight_summary
 from flight_deals.domain.links import google_flights_url
 from flight_deals.domain.messages import (
@@ -27,6 +27,7 @@ from flight_deals.domain.messages import (
     WEB_BOOKING_FALLBACK_NOTE,
     WEB_TEXTS,
     WEEKDAY_OPTION_LABELS,
+    coverage_text,
     date_range_text,
     date_range_weekday_text,
     health_no_embedded_note,
@@ -177,6 +178,39 @@ def return_flight_view(obs: ObservationRecord | None, currency: str) -> FlightSu
         return None
     leg = obs.return_leg
     return None if leg is None else flight_summary(leg, trip_type="round_trip", returning=True)
+
+
+def coverage_counts(checked: int, spec: WatchSpec, today: date) -> tuple[int, int] | None:
+    """FD-19: (pairs with a price, pairs ahead); None for a single pair."""
+    total = len(expand_pairs(spec, today))
+    if total <= 1:
+        return None
+    return min(checked, total), total
+
+
+def coverage_label(checked: int, spec: WatchSpec, today: date) -> str | None:
+    counts = coverage_counts(checked, spec, today)
+    return None if counts is None else coverage_text(*counts)
+
+
+def list_page_notes(rows: list[dict[str, Any]]) -> dict[str, bool]:
+    """Which page notes the list shows; the extra pairs count like the main card (FD-19 R4)."""
+    priced = [r for r in rows if r["min_price"]]
+    items = [(r, item) for r in priced for item in (r, *r["more_pairs"])]
+    round_trip = any(
+        (item["flight"] is not None and item["flight"].is_outbound_only)
+        or (row["is_round_trip"] and (item["split_ticket_label"] or item["overhead_bin_label"]))
+        for row, item in items
+    )
+    return {
+        "priced": bool(priced),
+        "round_trip": round_trip,
+        "return_listed": any(r["return_flight"] for r in priced),
+        "overhead_one_way": not round_trip and any(item["overhead_bin_label"] for _, item in items),
+        "booking": any(item["booking_url"] for _, item in items),
+        # Any card, priced or not: a window with no price yet is n = 0 < total too.
+        "sampled": any(r["coverage_incomplete"] for r in rows),
+    }
 
 
 def kind_badge(price_kind: str, as_of_basis: str) -> str | None:
@@ -527,6 +561,25 @@ class ViewService:
             return {"booking_url": None, "booking_note": None}
         return self._booking(watch, first, watch.revision)
 
+    def _more_pair(
+        self, watch: Watch, obs: ObservationRecord, now: datetime, stale_hours: int
+    ) -> dict[str, Any]:
+        """One of the list card's next pairs by price: amount, dates, fetched time, marks,
+        outbound flight and link, all from this one observation (FD-19 R2, R3, R5, R6).
+        Display only: no delta, no return flight (R8)."""
+        spec = watch.spec
+        return {
+            "amount": format_money(obs.amount_minor, obs.currency),
+            "dates_weekday_label": date_range_weekday_text(obs.depart_date, obs.return_date),
+            "dates": date_range_text(obs.depart_date, obs.return_date),
+            "fetched_label": fetched_label(obs.fetched_at),
+            "stale": self._is_stale(obs.fetched_at, now, stale_hours),
+            "flight": flight_view(obs, spec.trip_type),
+            "overhead_bin_label": overhead_bin_label(obs.overhead_bin_excluded, spec.trip_type),
+            "split_ticket_label": split_ticket_label(obs.split_ticket, spec.trip_type),
+            **self._booking(watch, DatePair(obs.depart_date, obs.return_date), watch.revision),
+        }
+
     def _future_watch_booking(self, watch: Watch, today: date) -> dict[str, str | None]:
         """Manual-check link of a card without a price: the first pair still ahead, never
         a departed date (FD-12, list card rule)."""
@@ -549,19 +602,33 @@ class ViewService:
             spec = watch.spec
             # One observation query per watch, as before FD-4 (C-34); only the rows a
             # snapshot reads (ADR-0002 FD-8 Decision 1).
-            snapshot = Snapshot.build(
-                self._repo.snapshot_observations_for_watch(
-                    watch.id,
-                    revision=watch.revision,
-                    currency=spec.currency,
-                    today=today,
-                    midnight=midnight,
-                ),
+            observations = self._repo.snapshot_observations_for_watch(
+                watch.id,
                 revision=watch.revision,
                 currency=spec.currency,
                 today=today,
+                midnight=midnight,
+            )
+            snapshot = Snapshot.build(
+                observations, revision=watch.revision, currency=spec.currency, today=today
             )
             cheapest = snapshot.cheapest
+            # FD-19 R1: the detail page's ranking over the same population as the main
+            # card; the card lists the next two after the main card's pair.
+            ranked = cheapest_pairs(
+                observations, revision=watch.revision, currency=spec.currency, today=today
+            )
+            more = (
+                [
+                    o
+                    for o in ranked
+                    if (o.depart_date, o.return_date)
+                    != (cheapest.depart_date, cheapest.return_date)
+                ][:2]
+                if cheapest is not None
+                else []
+            )
+            coverage = coverage_counts(len(ranked), spec, today)
             streak = no_embedded_streak(item.recent_rounds, self._streak_rounds)
             if cheapest is not None:
                 # Card price, flight and button come from this one observation (FD-12).
@@ -620,6 +687,12 @@ class ViewService:
                     ),
                     "return_flight": return_flight_view(cheapest, spec.currency),
                     **booking,
+                    "is_round_trip": spec.trip_type == "round_trip",
+                    "more_pairs": [self._more_pair(watch, o, now, stale_hours) for o in more],
+                    "coverage_label": (
+                        coverage_text(*coverage) if coverage and cheapest is not None else None
+                    ),
+                    "coverage_incomplete": coverage is not None and coverage[0] < coverage[1],
                     "delta": delta_view(snapshot.delta_since_previous_run()),
                     "last_scanned": format_taipei(watch.last_scanned_at) or None,
                     # Replaces the price block of a card without a price (#47).
@@ -650,6 +723,7 @@ class ViewService:
             )
         return {
             "watches": rows,
+            "notes": list_page_notes(rows),
             "disclaimer": DISCLAIMER,
         }
 
@@ -840,6 +914,7 @@ class ViewService:
             "has_prices": bool(current_obs),
             "top": top,
             "best": top[0] if top else None,
+            "coverage_label": coverage_label(len(priced), spec, taipei_date(now)),
             "is_round_trip": spec.trip_type == "round_trip",
             # Round-trip amounts and labels can still sit in the folded record table when
             # no price ranks (other currency, all departed); the note stays visible (FD-16).

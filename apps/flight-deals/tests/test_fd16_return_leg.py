@@ -57,6 +57,7 @@ from tests.test_fd12_pages import (
     RETURN_EXPLAIN,
     flexible_round_trip,
     get,
+    main_card,
     priced_one_way,
 )
 from tests.test_fd12_telegram import LONG_NAME, detail
@@ -652,7 +653,8 @@ def test_list_mixes_return_flights(harness: Harness, lookup: Lookup) -> None:
     assert page.count_visible(LISTED) == 1 and RETURN_EXPLAIN not in page.html
     assert page.count_visible(ROUND_TRIP_NOTE) == 1
     cards = page.main.find_all(None, "watch-card")
-    assert sorted(len(c.find_all(None, "flight")) for c in cards) == [1, 2]
+    main_cards = [main_card(page, int(c.attrs["data-watch-id"])) for c in cards]
+    assert sorted(len(c.find_all("div", "flight")) for c in main_cards) == [1, 2]
 
 
 def test_list_with_one_way_and_round_trip_has_the_round_trip_note(
