@@ -423,9 +423,9 @@ def test_nothing_sent_counts_nothing(harness: Harness, lookup: Lookup) -> None:
     assert harness.repo.latest_scan_run_for_watch(watch_id).queries_used == 2
 
 
-def test_older_cheaper_price_keeps_the_card_without_a_new_return(
+def test_older_cheaper_price_is_checked_again_and_gets_its_return(
     harness: Harness, lookup: Lookup, monkeypatch: pytest.MonkeyPatch
-) -> None:  # G: the cheapest of this round is looked up, never attached to an older price
+) -> None:  # FD-18: the main card's pair is pinned into the next round
     harness.source.prices[("2026-12-10", "2026-12-15")] = 7_000
     harness.source.prices[("2026-12-11", "2026-12-16")] = 9_000
     harness.source.flights[("2026-12-10", "2026-12-15")] = SPLIT
@@ -434,18 +434,16 @@ def test_older_cheaper_price_keeps_the_card_without_a_new_return(
     lookup.result = ReturnLegResult("no_match", 1)
     harness.scan(watch_id)
     harness.clock.advance(hours=7)
-    harness.source.prices[("2026-12-11", "2026-12-16")] = 8_000
     lookup.result = ReturnLegResult("ok", 1, LEG)
 
     def only_second(pairs: Any, limit: int, offset: int) -> Any:
-        return [p for p in pairs if p.depart == date(2026, 12, 11)], offset, False
+        return [p for p in pairs if p.depart == date(2026, 12, 11)], offset, True
 
     monkeypatch.setattr(scan_module, "sample_pairs", only_second)
     harness.scan(watch_id)
-    assert lookup.calls[-1][0].pair.depart == date(2026, 12, 11)
-    page = get(harness, f"/watches/{watch_id}")
-    card = page.main.find_all("section", "price-card")[0]
-    assert "7,000" in card.text() and "BR 185" not in card.text()
+    assert lookup.calls[-1][0].pair.depart == date(2026, 12, 10)
+    card = get(harness, f"/watches/{watch_id}").main.find_all("section", "price-card")[0]
+    assert "7,000" in card.text() and "BR 185" in card.text()
 
 
 @pytest.mark.parametrize(

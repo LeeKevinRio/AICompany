@@ -6,7 +6,7 @@ import logging
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, cast
 
 from flight_deals.domain.dates import expand_pairs, is_expired, sample_pairs
@@ -27,8 +27,10 @@ from flight_deals.domain.rules import (
 )
 from flight_deals.domain.timeutil import taipei_date
 from flight_deals.ports import Clock, FlightPriceSource, Redactor, ReturnLegLookup
+from flight_deals.services.digest import taipei_midnight
 from flight_deals.services.health import HealthService
 from flight_deals.services.notifications import NotificationService
+from flight_deals.services.price_snapshot import Snapshot
 from flight_deals.services.settings import SettingsService
 from flight_deals.services.source_query import ERROR_SUMMARY_LIMIT, SourceQuery, skipped_entry
 from flight_deals.storage.repository import AlertStateRecord, Repository
@@ -155,6 +157,13 @@ class ScanService:
         sampled, next_offset, truncated = sample_pairs(
             pairs, settings.max_pairs_per_scan, watch.sample_offset
         )
+        # FD-18: the main card's pair is checked again every round, first, so its price stays
+        # fresh and its return flight can be looked up. One extra pair at most.
+        pinned = self._main_card_pair(watch, pairs, now)
+        if pinned is not None and pinned not in sampled:
+            sampled = [pinned, *sampled]
+        elif pinned is not None:
+            sampled = [pinned, *(p for p in sampled if p != pinned)]
         run_id = self._repo.insert_scan_run(
             watch_id=watch.id,
             revision=watch.revision,
@@ -189,9 +198,14 @@ class ScanService:
             for pair in sampled:
                 if queries >= hourly_left:
                     global_hit = True
-                    results.append(self._skipped_entry(pair, "global_hourly_limit"))
+                    skipped = self._skipped_entry(pair, "global_hourly_limit")
+                    if pair == pinned:
+                        skipped["pinned"] = True
+                    results.append(skipped)
                     continue
                 outcome = self._query_pair(watch, pair, run_id)
+                if pair == pinned:
+                    outcome.entry["pinned"] = True
                 results.append(outcome.entry)
                 queries = self._spent
                 any_success |= outcome.success
@@ -253,6 +267,27 @@ class ScanService:
         for source, error in self._opened_sources:
             self._notifications.send_ops_failure(source, error)
         return ScanOutcome(watch.id, status, run_id, queries, notification_id)
+
+    def _main_card_pair(
+        self, watch: Watch, pairs: list[DatePair], now: datetime
+    ) -> DatePair | None:
+        """The pair the main card shows now (the snapshot minimum), if still scannable."""
+        spec = watch.spec
+        today = taipei_date(now)
+        observations = self._repo.snapshot_observations_for_watch(
+            watch.id,
+            revision=watch.revision,
+            currency=spec.currency,
+            today=today,
+            midnight=taipei_midnight(now),
+        )
+        cheapest = Snapshot.build(
+            observations, revision=watch.revision, currency=spec.currency, today=today
+        ).cheapest
+        if cheapest is None:
+            return None
+        pair = DatePair(cheapest.depart_date, cheapest.return_date)
+        return pair if pair in set(pairs) else None
 
     def _lookup_return_leg(
         self, watch: Watch, run_id: int, priced: list[_PairOutcome], hourly_left: int
