@@ -14,6 +14,10 @@ Two jobs, one tool:
   evaluated, days M1 did not evaluate, accumulated R deferrals, skipped batches.
   Categories N190-A .. N190-D.
 
+* N-199 (N-197 (b) after-the-fact checks, spec N-199 section 1-6): N199-A an executed buy whose
+  batch is still planned or skipped; N199-B an executed buy plus an unsettled pending buy on
+  one batch that has left planned; N199-C two or more executed buys on one batch.
+
 Output is facts only: ids, dates, shares, prices and the trial figures of N177-A. It states
 no conclusion and no advice. The one fixed label that is not a bare fact is the one n172
 already used for rows the tool refuses to put a number on.
@@ -35,6 +39,11 @@ Private data (RC-6): the report holds holdings and cash. Keep it on the machine 
 it; never commit it, and do not paste its contents anywhere. ``--out-dir`` inside a git work
 tree is refused (RC-5). Free text read from the DB (rule summaries and the like) is never
 copied into the report; only short tokens are (RC-3).
+Only the CEO reads the report files; no agent reads them.
+The ban is the default and an exception must be provable: only a report produced in the same
+test run from a synthetic DB the test itself built under ``tmp_path`` may be read. Never run
+this tool by hand against any DB that a test did not build. The values to record (script
+hash, DB hashes, run time, counts) are printed on stdout so that no report file is needed.
 """
 
 from __future__ import annotations
@@ -49,13 +58,13 @@ import sqlite3
 import sys
 from collections.abc import Mapping, Sequence
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-SCRIPT_VERSION = "1"
+SCRIPT_VERSION = "2"
 SCHEMA_VERSION = 1
 DB_PATH_ENV_VAR = "STOCK_DESK_DB_PATH"
 PRODUCTION_DB_NAME = "stock-desk.db"
@@ -254,6 +263,57 @@ WHERE (rule_id = 'M1' AND action = 'defer')
 ORDER BY data_date, id
 """
 
+#: N199-A (N-197 (b) failure variant): an executed buy whose batch never left planned,
+#: or was skipped afterwards. The book did not take the fill.
+N199_FILL_NOT_BOOKED_SQL = """
+SELECT d.id, d.symbol, d.batch_no, d.rule_id, d.shares, d.data_date, d.execution_date,
+       d.created_at, d.settled_at, d.settled_open_price, b.status
+FROM playbook_directives AS d
+JOIN playbook_batches AS b ON b.symbol = d.symbol AND b.batch_no = d.batch_no
+WHERE d.action = 'buy' AND d.status = 'executed' AND d.settled = 1
+  AND d.batch_no IS NOT NULL AND b.status IN ('planned', 'skipped')
+ORDER BY d.symbol, d.batch_no, d.id
+"""
+
+#: N199-B (N-197 (b) concurrent variant, and every other source of the same shape):
+#: an executed buy plus an unsettled pending buy on one batch that has left planned
+#: (the condition of the store's BATCH_LEFT_PLANNED_SQL, G1).
+N199_SAME_BATCH_BLOCKED_SQL = """
+SELECT e.id, e.symbol, e.batch_no, e.rule_id, e.execution_date, e.settled_at,
+       p.id, p.rule_id, p.shares, p.data_date, p.execution_date, p.created_at, b.status
+FROM playbook_directives AS e
+JOIN playbook_batches AS b ON b.symbol = e.symbol AND b.batch_no = e.batch_no
+JOIN playbook_directives AS p
+  ON p.symbol = e.symbol AND p.batch_no = e.batch_no AND p.id <> e.id
+WHERE e.action = 'buy' AND e.status = 'executed' AND e.settled = 1
+  AND e.batch_no IS NOT NULL
+  AND p.action = 'buy' AND p.status = 'pending' AND p.settled = 0
+  AND b.status <> 'planned'
+ORDER BY e.symbol, e.batch_no, e.id, p.id
+"""
+
+#: N199-C (required, risk R6): two or more executed buys on one batch -- the later stage of the
+#: failure variant (a re-issued R1 filled) and the two-buy race (tracking :382).
+N199_MULTI_EXECUTED_BUY_SQL = """
+SELECT d.symbol, d.batch_no, COUNT(*), b.status
+FROM playbook_directives AS d
+LEFT JOIN playbook_batches AS b ON b.symbol = d.symbol AND b.batch_no = d.batch_no
+WHERE d.action = 'buy' AND d.status = 'executed' AND d.settled = 1
+  AND d.batch_no IS NOT NULL
+GROUP BY d.symbol, d.batch_no
+HAVING COUNT(*) >= 2
+ORDER BY d.symbol, d.batch_no
+"""
+
+#: Detail for N199-A and N199-C: every buy line of one batch, oldest first.
+N199_BATCH_BUYS_SQL = """
+SELECT id, rule_id, status, settled, shares, data_date, execution_date, created_at,
+       settled_at, settled_open_price
+FROM playbook_directives
+WHERE symbol = ? AND batch_no = ? AND action = 'buy'
+ORDER BY id
+"""
+
 #: N190-C / N190-D: every deferral and skip line that names a batch.
 DEFER_ROWS_SQL = """
 SELECT id, symbol, batch_no, rule_id, action, execution_date, rule_summary
@@ -295,7 +355,26 @@ LIMITATIONS: dict[str, str] = {
         "時區：created_at、settled_at、fetched_at 是 UTC ISO；data_date 是台北交易日。"
         "只比較時間先後，不換算日界。"
     ),
+    "L12": (
+        "N199-A、N199-C 無法判定當時現金是否已扣：現金沒有異動歷史；N-177a 之前的逐批買進"
+        "先寫現金、再寫批次，N-177a 之後兩者在同一交易。"
+    ),
+    "L13": (
+        "N199-B 的條件與結算的 G1 擋下類相同，不區分並發、跨日重發（ADR-0035 V4）或 N-172a "
+        "之前的重複；DB 不記錄某一列是否曾被嘗試結算，未到預定執行日的列也列入。"
+    ),
+    "L14": (
+        "N199-B 的秒數是待結算列 created_at 減已成交列 settled_at（都是 UTC ISO），"
+        "只是時間差，不表示原因。"
+    ),
 }
+
+N199_A_CONDITION = "條件：買進列 settled=1、status=executed，所屬批次仍為 planned 或 skipped。"
+N199_B_CONDITION = (
+    "條件：同一批次有 settled=1、status=executed 的買進列，另有 settled=0、status=pending "
+    "的買進列，且批次狀態不是 planned。"
+)
+N199_C_CONDITION = "條件：同一批次有兩筆以上 settled=1、status=executed 的買進列。"
 
 CAT_S1 = "低於 S1 一般門檻"
 CAT_S1_DEFENSE = "僅低於 S1 防守門檻"
@@ -499,6 +578,10 @@ class Snapshot:
     index_bars: dict[str, Bar]
     m1_rows: list[M1Row]
     defer_rows: list[DeferRow]
+    n199_fill_not_booked: list[tuple[Any, ...]] = field(default_factory=list)
+    n199_same_batch_blocked: list[tuple[Any, ...]] = field(default_factory=list)
+    n199_multi_executed: list[tuple[Any, ...]] = field(default_factory=list)
+    n199_batch_buys: dict[tuple[str, int], list[tuple[Any, ...]]] = field(default_factory=dict)
 
 
 def first_s2_per_symbol(
@@ -669,6 +752,15 @@ def load(conn: sqlite3.Connection, *, since: date | None, until: date) -> Snapsh
         DeferRow(int(r[0]), str(r[1]), int(r[2]), str(r[3]), str(r[4]), str(r[5]), str(r[6]))
         for r in conn.execute(DEFER_ROWS_SQL)
     ]
+    n199_fill_not_booked = [tuple(r) for r in conn.execute(N199_FILL_NOT_BOOKED_SQL)]
+    n199_same_batch_blocked = [tuple(r) for r in conn.execute(N199_SAME_BATCH_BLOCKED_SQL)]
+    n199_multi_executed = [tuple(r) for r in conn.execute(N199_MULTI_EXECUTED_BUY_SQL)]
+    n199_batch_buys: dict[tuple[str, int], list[tuple[Any, ...]]] = {}
+    hit_batches = {(str(r[1]), int(r[2])) for r in n199_fill_not_booked} | {
+        (str(r[0]), int(r[1])) for r in n199_multi_executed
+    }
+    for key in sorted(hit_batches):
+        n199_batch_buys[key] = [tuple(r) for r in conn.execute(N199_BATCH_BUYS_SQL, key)]
     return Snapshot(
         since=resolved_since,
         until=until,
@@ -696,6 +788,10 @@ def load(conn: sqlite3.Connection, *, since: date | None, until: date) -> Snapsh
         index_bars=index_bars,
         m1_rows=m1_rows,
         defer_rows=defer_rows,
+        n199_fill_not_booked=n199_fill_not_booked,
+        n199_same_batch_blocked=n199_same_batch_blocked,
+        n199_multi_executed=n199_multi_executed,
+        n199_batch_buys=n199_batch_buys,
     )
 
 
@@ -1286,6 +1382,105 @@ def classify_n190_defers(snap: Snapshot) -> dict[str, Any]:
     return {"defer_counts": defer_counts, "skipped_batches": skipped}
 
 
+# ------------------------------------------------------------------ N-199 classification
+
+
+def _n199_buy(row: Sequence[Any]) -> dict[str, Any]:
+    """One buy line of N199_BATCH_BUYS_SQL, as the detail columns of N199-A / N199-C."""
+    return {
+        "id": int(row[0]),
+        "rule_id": str(row[1]),
+        "shares": int(row[4]),
+        "execution_date": str(row[6]),
+        "created_at": str(row[7]),
+        "settled_at": _opt_str(row[8]),
+        "settled_open_price": _opt_str(row[9]),
+    }
+
+
+def classify_n199(snap: Snapshot) -> dict[str, Any]:
+    fill_not_booked: list[dict[str, Any]] = []
+    for r in snap.n199_fill_not_booked:
+        others = [
+            {
+                "id": int(b[0]),
+                "rule_id": str(b[1]),
+                "status": str(b[2]),
+                "settled": int(b[3]),
+                "data_date": str(b[5]),
+                "execution_date": str(b[6]),
+            }
+            for b in snap.n199_batch_buys.get((str(r[1]), int(r[2])), [])
+            if int(b[0]) != int(r[0])
+        ]
+        fill_not_booked.append(
+            {
+                "id": int(r[0]),
+                "symbol": str(r[1]),
+                "batch_no": int(r[2]),
+                "rule_id": str(r[3]),
+                "shares": int(r[4]),
+                "data_date": str(r[5]),
+                "execution_date": str(r[6]),
+                "created_at": str(r[7]),
+                "settled_at": _opt_str(r[8]),
+                "settled_open_price": _opt_str(r[9]),
+                "batch_status": str(r[10]),
+                "other_buys": others,
+            }
+        )
+    blocked: list[dict[str, Any]] = []
+    for r in snap.n199_same_batch_blocked:
+        created = _instant(r[11])
+        settled = _instant(r[5])
+        seconds = (
+            None if created is None or settled is None else int((created - settled).total_seconds())
+        )
+        blocked.append(
+            {
+                "symbol": str(r[1]),
+                "batch_no": int(r[2]),
+                "batch_status": str(r[12]),
+                "executed": {
+                    "id": int(r[0]),
+                    "rule_id": str(r[3]),
+                    "execution_date": str(r[4]),
+                    "settled_at": _opt_str(r[5]),
+                },
+                "pending": {
+                    "id": int(r[6]),
+                    "rule_id": str(r[7]),
+                    "shares": int(r[8]),
+                    "data_date": str(r[9]),
+                    "execution_date": str(r[10]),
+                    "created_at": str(r[11]),
+                },
+                "seconds_pending_created_after_executed_settled": seconds,
+            }
+        )
+    multi: list[dict[str, Any]] = []
+    for r in snap.n199_multi_executed:
+        buys = [
+            _n199_buy(b)
+            for b in snap.n199_batch_buys.get((str(r[0]), int(r[1])), [])
+            if str(b[2]) == "executed" and int(b[3]) == 1
+        ]
+        multi.append(
+            {
+                "symbol": str(r[0]),
+                "batch_no": int(r[1]),
+                "batch_status": _opt_str(r[3]),
+                "count": int(r[2]),
+                "buys": buys,
+            }
+        )
+    return {
+        "fill_not_booked": fill_not_booked,
+        "same_batch_blocked": blocked,
+        "multi_executed_buys": multi,
+    }
+
+
 # ------------------------------------------------------------------ report assembly
 
 
@@ -1357,6 +1552,7 @@ def build_result(
         },
         "n177": n177,
         "n190": n190,
+        "n199": classify_n199(snap),
         "limitations": sorted(LIMITATIONS, key=lambda c: int(c[1:])),
         "diff_vs_previous": None
         if previous is None
@@ -1400,6 +1596,7 @@ ENUM_VALUES: dict[str, frozenset[str]] = {
     "action": frozenset({"buy", "sell", "defer", "skip", "none"}),
     "status": frozenset({"pending", "executed", "missed", "planned", "open", "closed", "skipped"}),
     "source": frozenset(),
+    "batch_status": frozenset({"planned", "open", "closed", "skipped"}),
 }
 
 
@@ -1448,6 +1645,7 @@ def render_markdown(result: Mapping[str, Any]) -> str:
     meta = result["meta"]
     n177 = result["n177"]
     n190 = result["n190"]
+    n199 = result["n199"]
     gate = result["gate"]
     out: list[str] = ["# N-177 / N-190 唯讀偵測與回溯報告", ""]
     out += [
@@ -1486,6 +1684,12 @@ def render_markdown(result: Mapping[str, Any]) -> str:
                 ["N190-B M1 未評估的日子", len(n190["m1_unevaluated_days"])],
                 ["N190-C 有 R 順延紀錄的批次", len(n190["defer_counts"])],
                 ["N190-D 被跳過的批次", len(n190["skipped_batches"])],
+                ["N199-A 已判定成交、批次未記入的買進", len(n199["fill_not_booked"])],
+                [
+                    "N199-B 同批已有成交買進，另有 G1 擋下類的待結算買進",
+                    len(n199["same_batch_blocked"]),
+                ],
+                ["N199-C 同批兩筆以上已判定成交的買進", len(n199["multi_executed_buys"])],
             ],
         ),
         GATE_LINE_TEMPLATE.format(n=gate["n177_affected_count"]),
@@ -1772,6 +1976,115 @@ def render_markdown(result: Mapping[str, Any]) -> str:
         ],
     )
 
+    out += ["## N199-A 已判定成交、批次未記入的買進", ""]
+    out += [N199_A_CONDITION, ""]
+    out += _table(
+        [
+            "id",
+            "標的",
+            "批次",
+            "規則",
+            "股數",
+            "資料日",
+            "預定執行日",
+            "created_at",
+            "settled_at",
+            "成交判定價",
+            "批次狀態",
+            "同批其他買進列",
+        ],
+        [
+            [
+                r["id"],
+                r["symbol"],
+                r["batch_no"],
+                r["rule_id"],
+                r["shares"],
+                r["data_date"],
+                r["execution_date"],
+                r["created_at"],
+                r["settled_at"],
+                r["settled_open_price"],
+                r["batch_status"],
+                "；".join(
+                    f"{o['id']}:{o['rule_id']}:{o['status']}:settled={o['settled']}"
+                    f":{o['data_date']}:{o['execution_date']}"
+                    for o in r["other_buys"]
+                )
+                or "-",
+            ]
+            for r in n199["fill_not_booked"]
+        ],
+    )
+
+    out += ["## N199-B 同批已有成交買進，另有 G1 擋下類的待結算買進", ""]
+    out += [N199_B_CONDITION, ""]
+    out += _table(
+        [
+            "標的",
+            "批次",
+            "批次狀態",
+            "已成交列 id",
+            "規則",
+            "預定執行日",
+            "settled_at",
+            "待結算列 id",
+            "規則",
+            "股數",
+            "資料日",
+            "預定執行日",
+            "created_at",
+            "待結算列建立時間減已成交列 settled_at（秒）",
+        ],
+        [
+            [
+                r["symbol"],
+                r["batch_no"],
+                r["batch_status"],
+                r["executed"]["id"],
+                r["executed"]["rule_id"],
+                r["executed"]["execution_date"],
+                r["executed"]["settled_at"],
+                r["pending"]["id"],
+                r["pending"]["rule_id"],
+                r["pending"]["shares"],
+                r["pending"]["data_date"],
+                r["pending"]["execution_date"],
+                r["pending"]["created_at"],
+                CACHE_UNDETERMINED
+                if r["seconds_pending_created_after_executed_settled"] is None
+                else r["seconds_pending_created_after_executed_settled"],
+            ]
+            for r in n199["same_batch_blocked"]
+        ],
+    )
+
+    out += ["## N199-C 同批兩筆以上已判定成交的買進", ""]
+    out += [N199_C_CONDITION, ""]
+    out += _table(
+        [
+            "標的",
+            "批次",
+            "批次狀態",
+            "筆數",
+            "買進列（id:規則:股數:預定執行日:settled_at:成交判定價）",
+        ],
+        [
+            [
+                r["symbol"],
+                r["batch_no"],
+                r["batch_status"],
+                r["count"],
+                "；".join(
+                    f"{b['id']}:{b['rule_id']}:{b['shares']}:{b['execution_date']}"
+                    f":{b['settled_at']}:{b['settled_open_price']}"
+                    for b in r["buys"]
+                ),
+            ]
+            for r in n199["multi_executed_buys"]
+        ],
+    )
+
     if result["diff_vs_previous"] is not None:
         out += ["## 與前次報告的比對", ""]
         out += ["以（標的，第一張 S2 id）為鍵，不同的列不沿用前次的選擇。", ""]
@@ -1930,6 +2243,13 @@ def main(
         return EXIT_REFUSED
     print(f"n177_n190_backtrack_probe version={SCRIPT_VERSION}")
     print(f"gate_affected_symbols={result['gate']['n177_affected_count']}")
+    print(f"n199_a_rows={len(result['n199']['fill_not_booked'])}")
+    print(f"n199_b_rows={len(result['n199']['same_batch_blocked'])}")
+    print(f"n199_c_rows={len(result['n199']['multi_executed_buys'])}")
+    print(f"script_sha256_lf={result['meta']['script_sha256_lf']}")
+    print(f"db_sha256_before={result['meta']['db_sha256_before']}")
+    print(f"db_sha256_after={result['meta']['db_sha256_after']}")
+    print(f"run_at_utc={result['meta']['run_at_utc']}")
     print(f"report_md={_ascii(md_path.resolve())}")
     print(f"report_json={_ascii(json_path.resolve())}")
     return EXIT_OK
