@@ -1,11 +1,11 @@
 # ADR-0042：stock-desk 排程台結算的 claim 與動帳併入同一個寫鎖交易（N-198／N-169F2；補充 ADR-0035、ADR-0041，不取代）
 
-- 狀態：proposed
+- 狀態：accepted（CEO #111，2026-11-08）
 - 日期：2026-11-07（同日修正版二：回應 [風控-ADR42] R1、R2、R4、S5，以及 [風控-ADR42 回審] R9～R11、S6、S9）
 - 決策者：
   - tech-architect：草案、修正版、修正版二；
   - risk-compliance-officer：2026-11-07 審查，CONDITIONAL APPROVE，決策 P1 核可，附 R1～R4；同日回審，CONDITIONAL APPROVE，R1～R4 符合，附 R9～R11；同日再回審（[風控-ADR42 回審二]），CONDITIONAL APPROVE，R9～R11 符合，CEO 通知全文改版；同日第三次回審（[風控-ADR42 回審三]），CONDITIONAL APPROVE，R14 符合，流程名詞對照確認，附 R18。本 ADR 依第三次回審的判定更新；
-  - CEO：核可，待定。
+  - CEO：2026-11-08 核可（決策包 #111）。
 - 落檔附記：tech-writer 2026-11-07 依 [風控-ADR42 回審二] 第二節第 4 點落檔；第 3 點 (a)(b)(c) 為依 [風控-ADR42 回審二] 授權替換，第 1 點為只刪字。同日依 [TA-177S] 修訂八與 TA 的 R14～R16 改寫套用 E-1～E-3；E-2 (6b) 兩點依 [風控-ADR42 回審三] 授權插入。
 - 來源簡稱（都在 `work/reviews/` 下）：
   - [TA-177S]：`2026-11-07-N177實作規格與偵測回溯工具-tech-architect.md`（修訂一 1.3 的 R-α、修訂四第 4 節、修訂六、修訂七、修訂八）；
@@ -356,4 +356,4 @@ def claim_and_settle(
    - 部署之前，coordinator 先核對該點「授權範圍」列出的各項事實和要部署的版本一致。不一致時回風控；風控回覆之前，不部署 N-198。
 
 ## 待決
-- CEO：核可。
+- 無。CEO 已於 2026-11-08 核可（#111）。
