@@ -40,7 +40,7 @@ def test_main_card_pair_is_added_first(harness: Harness, monkeypatch: pytest.Mon
     run = harness.repo.latest_scan_run_for_watch(watch_id)
     assert [e["depart"] for e in run.query_results] == ["2026-12-10", "2026-12-11"]
     assert run.query_results[0].get("pinned") is True
-    assert "pinned" not in run.query_results[1]
+    assert run.query_results[1].get("pinned") is True  # FD-20: the card's second pair
     assert run.limit_reached  # sampling itself is unchanged
     assert harness.repo.get_watch(watch_id).sample_offset == 1  # as sample_pairs returned
 
@@ -136,7 +136,7 @@ def test_departed_pair_is_not_pinned(harness: Harness, monkeypatch: pytest.Monke
     scan = harness.services.scan
     stale_pairs = [DatePair(date(2026, 12, 10), date(2026, 12, 15))]
     # Even when handed the departed pair, the helper finds no current main card for it.
-    assert scan._main_card_pair(watch, stale_pairs, harness.clock.now) is None
+    assert scan._card_pairs(watch, stale_pairs, harness.clock.now) == []
     monkeypatch.setattr(scan_module, "sample_pairs", only(date(2026, 12, 11)))
     harness.scan(watch_id)
     run = harness.repo.latest_scan_run_for_watch(watch_id)

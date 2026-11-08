@@ -63,6 +63,11 @@ def snapshot_min(observations: Iterable[ObservationRecord]) -> ObservationRecord
     )
 
 
+# FD-19, FD-20: a list card shows the main card plus the next pairs by price, and every
+# round checks those pairs again.
+CARD_PAIRS = 3
+
+
 def cheapest_pairs(
     observations: Iterable[ObservationRecord], *, revision: int, currency: str, today: date
 ) -> list[ObservationRecord]:

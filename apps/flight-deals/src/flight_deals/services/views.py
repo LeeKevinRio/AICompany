@@ -78,6 +78,7 @@ from flight_deals.services.digest import taipei_midnight
 from flight_deals.services.health import HealthService, describe_source, no_embedded_streak
 from flight_deals.services.notifications import safe_booking_url
 from flight_deals.services.price_snapshot import (
+    CARD_PAIRS,
     PriceDelta,
     Snapshot,
     cheapest_pairs,
@@ -624,7 +625,7 @@ class ViewService:
                     for o in ranked
                     if (o.depart_date, o.return_date)
                     != (cheapest.depart_date, cheapest.return_date)
-                ][:2]
+                ][: CARD_PAIRS - 1]
                 if cheapest is not None
                 else []
             )
