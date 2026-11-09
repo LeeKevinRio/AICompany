@@ -168,6 +168,7 @@
 - **Q-2**（問 risk-compliance-officer）：**已裁示（風控 2026-11-09）**。摘要：並發提醒畫面版只放 F-1～F-3（REBALANCE 與資金確認不得同時執行、重疊時 REBALANCE 不寫入並顯示被取代、資金確認在後會覆寫現金與 TOTAL_DEPLOY）；**不列結算**（N-195、N-196 合入後 REBALANCE 與結算等於循序）；不照抄更正版危害敘述；「目前沒有畫面入口」與「N-197a 上線前有效」不上畫面，改由部署時 CEO 更新通知處理（FR-17）；F-1 按鈕一項待 Q-3(a)；前提為 base 含 N-177a、N-195、N-196、N-197a，N-209 若早於 N-197a 上線則本範圍作廢。出處：`work/reviews/2026-11-09-ADR0043修訂一單項確認與N209Q2裁示-風控.md` 第 5 點、RC-6。
 - **Q-3**（問 tech-architect）：(a) 規則集尚未確認、TOTAL_DEPLOY 鍵不存在、批次表為空時，REBALANCE 後端的實際行為與回傳類型，FR-2、FR-5 的畫面據此定；(b) API 的 ok、`insufficient_data`、`superseded` 回應是否都帶目前 TOTAL_DEPLOY 與寫入時間，若不帶，前端要另外讀取的來源。
 - **Q-4**（問 tech-architect、frontend-engineer）：前端對 REBALANCE 請求不得自動重試（FR-8、FR-10）；確認現有 `QueryClient` 預設與該 mutation 的重試設定不會造成重送。
+- **Q-6**（問 tech-architect，併入 Q-3、Q-4；風控 RC-7；**TA 回答中，PM 僅登錄題目、不預設答案**）：REBALANCE 完成後的畫面更新會不會送出 `/today`（`/today` 會先結算）？若會且 N-169F2 不在 N-209 的 base 內，須在字面定稿前回風控；風控偏好改從不結算的讀取取得 TOTAL_DEPLOY。
 - **Q-5**（問 CEO，**PM 預設，不阻擋**）：入口是否要保留「最近一次 REBALANCE 結果」的常駐顯示？**PM 預設**：v0 只呈現當次結果；歷史顯示列為後續需求。
 
 **待 CEO 回答**：無阻擋性題目。Q-5 為選答，不答則依預設。
