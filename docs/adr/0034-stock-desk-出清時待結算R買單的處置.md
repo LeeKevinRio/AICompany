@@ -4,6 +4,27 @@
 - 補充一（tech-architect 2026-11-01，回應 `work/reviews/2026-11-01-N168開工前解讀點-dev-lead.md` P2(e)(f)、P3、P6）：Decision 1 的待成交買單於鎖內再分「W-B1 類／G1 擋下類」、L4 戳記範圍、計數口徑、W-B2L 的 API 形狀與欄位名、合併時點，以補充一為準；C-B3、C-B4、C-B8、C-B9 依補充一細化。全文見 `work/reviews/2026-11-01-ADR0034補充一-tech-architect.md` 第「B. 補充一全文」節；本檔原文不改（比照 ADR-0033、0035、0037 補充先例，CEO 可推翻改為另立取代 ADR）。
 - 補充二（risk-compliance-officer 2026-11-01，裁示 N-168 開工前字面題 P2～P5）：新增 W-B1b `EMERGENCY_EXIT_BLOCKED_ENTRY_NOTE`、W-B6b `PENDING_ENTRY_BLOCKED_NOTE`、W-B1d `PENDING_ENTRY_SAME_BATCH_NOTE` 三句定稿、出清三支 message 新組合順序、`/today` 區塊順序（FROZEN → W-B6 → W-B1d → ENTRY → W-B6b）、D5 理由改寫與 ENTRY／A 句排除規則；必改 1～8。全文見 `work/reviews/2026-11-01-N168字面裁示P2至P5-風控.md`；本檔原文不改。
 - 補充三（risk-compliance-officer 2026-11-04，裁示 N-168 停止點 S3～S6 與釐清七 E-30）：N2／W-B3 順序改為 SUMMARY → W-B3 → N2、W-B2L（F-11）與 W-B3（D7）改字面並取代 10-31 版、新增 W-B2LS／W-B2LSr／W-B2LSf、`remaining_shares` 為 0 的批次不列入、撤回 `_format_shares` 改印原始整數（`/today` 格式並存為已知殘留 N-187）、禁用字豁免範圍與組合單位斷言、股數剛好抵銷殘留及三個回審觸發條件。全文見 `work/reviews/2026-11-04-ADR0034補充三-tech-writer.md`；本檔原文不改。
+- 補充四（tech-architect 2026-11-08 起草，2026-11-09 依風控 `work/reviews/2026-11-09-N207與ADR0043審查-風控.md` R-3～R-6 修訂；狀態 proposed，依 J-9 生效；回應 N-207 與 CEO #119）：以下條款與 ADR-0043 D3 第 7 點逐字同列，以條款編號對照，兩者合稱「本判定」。兩處若有不一致，qa-reviewer 依 C-B11 字面判 BLOCKING，並回 TA 修正。
+  - **J-1 判定**：ADR-0034 附錄 C 的 C-B11「R、S、P 的引擎邏輯不改」，以及 Consequences「被約束」中「R、S、P 的引擎邏輯不改（C-B11）」一句，判定為 N-168 的範圍約束，不是 engine 永久不得修改的架構決策。
+  - **J-2 理由**：C-B11 列在「B-2a 約束清單（交 dev-lead）」，目的是防止 N-168 在實作 B-2a 時順手改動 R、S、P，讓「照常結算、停損停利照常評估」的語意可以驗證；N-168 已於 9253032 合併。先例：ADR-0035 補充六對 `settle()` 零 diff 的判定；ADR-0040 補充一 E-2 對 C-B8 與 C-B11 關係的判定。
+  - **J-3 延伸適用**：同一判定適用於 ADR-0035 附錄 B 的 N172-C3（N-172a 的範圍）、ADR-0041「限制」與「與其他 ADR 的關係」中的「engine 零 diff（C-B11）」（N-177a 的範圍）、ADR-0042 N198-C1 的 engine.py 零 diff（N-198 的範圍）。ADR-0040 Decision 12 的限定範圍豁免在本判定之前成立，不需要撤回。
+  - **J-4 不放寬所屬單**：J-3 所列約束，對其所屬單自身的 diff 仍然完全有效。N-177a 與 N-198 在本判定起草時（2026-11-08）都尚未合入：ADR-0041「engine 零 diff」對 N-177a 的 diff、N198-C1 對 N-198 的 diff，qa-reviewer 照原字面判定。N172-C3 對 N-172a 亦同。本判定的意思只是「這些約束不約束 N-207」，不是放寬它們自己。
+  - **J-5 仍然有效的不變式**（日後改動 engine，以及依 J-6 視同改動 engine 的變更，都必須遵守）：
+    - **I-1 B-2a 語意（CEO #79）**：出清當時未結算的 R 買單照常結算並標示（L4 落檔戳記）；停損停利照常評估。
+    - **I-2 C-B8**：engine 只照抄標示，不做判斷。
+    - **I-3 C-B10**：不得自動替帶標示的批次產生 EMERGENCY 賣單。C-B10 是 CEO #80 永久紅線（ADR-0034 Decision 6）的實作約束，不是範圍約束。本判定不影響 #80，#80 亦不得以範圍判定的方式解除；重開的唯一途徑仍依 ADR-0034 Decision 6（CEO 修改豁免框架，並經新一輪風控審查）。
+    - **I-4**：engine 不讀寫 TOTAL_DEPLOY 戳記、名單狀態或任何 I/O。可檢查的形式：`engine.py` 的 import 清單零 diff；`engine.py` 不出現 `TotalDeployStamp`、`entry_gate`、`entry_stopped`、`entry_stopped_on`、`high_volatility_prev`、`high_volatility_changed_on`、`engine_exclusions` 這些名稱。`batch_round` 是批次身分，不屬名單狀態。
+    - **I-5**：open 批次在任何名單狀態、戳記閘、輪次之下，都交給 engine 評估 S、P 與 EMERGENCY。
+  - **J-6 防繞道**：日後任何改動 R、S、P 判斷邏輯或股數計算的變更，須有自己的 ADR、經風控審查並經 CEO 核可。在 engine 之外以過濾或改寫 engine 輸入、或後處理 engine 輸出，而改變 R、S、P 判斷結果或股數者，視同改動引擎邏輯，適用同一要求。不得把本判定讀成「engine 從此開放修改」。
+  - **J-7 不構成先例**：本判定不構成日後豁免的先例。日後對 engine 或任何 accepted ADR 護欄條文所做的範圍判定，不得以本判定作為成立依據，須各自陳明理由、經風控審查並經 CEO 核可。
+  - **J-8 N-207 的承載**：以下三項都由 ADR-0043 承載，已經風控審查，隨 CEO 核可 ADR-0043 生效：
+    - N-207 對 `planned_batch_shares` 的改動（ADR-0043 D3 第 5 點）；
+    - 以 `engine_batches` 過濾 engine 輸入（D3 第 6 點）；
+    - 「規則已全數評估」旗標的範圍處理（D3 第 6 點）。
+
+    其中 engine 輸入過濾正屬 J-6 所稱「在 engine 之外以過濾輸入而改變 R 系列結果」，是經由 J-6 的程序成立，不是 J-6 的例外。
+  - **J-9 生效**：本判定自 CEO 核可 ADR-0043（含 ADR-0034 補充四）之日起生效；核可須明示包含補充四。核可前以 proposed 狀態落檔，qa-reviewer 依 C-B11 字面對 N-207 的 engine diff 判 BLOCKING；N-207 的合併以本判定生效為前提。
+  - **J-10 原檔與註記**：ADR-0034 原文不改（比照補充一～三先例，CEO 可推翻改為另立取代 ADR）。本判定生效後，由 tech-writer 在 ADR-0035、0041、0042 檔頭各加一行指向 ADR-0043 D3 第 7 點的註記；生效前不加。
 - 日期：2026-10-31（tech-architect 草案日期 2026-10-31）
 - 決策者：tech-architect（草案與技術評估）；risk-compliance-officer（方案裁示 CONDITIONAL APPROVE B-2a，2026-10-31；字面逐字定稿）；CEO #79（採 B-2a、標示來源採 L4）、#80（B-2b 列為永久紅線）於 2026-10-31 裁定。
 - 與 ADR-0033 的關係：
@@ -231,27 +252,3 @@
 - **T-B16**：守門測試，確認只有 R1 會產生 buy（[TA] Q3：目前唯一會產生 buy 的地方是 `engine.py:952-958`）。
 
 與 0033 附錄 B 的關係（[TA] Q5）：0033 的 T-3 原本的斷言要擴充，加上「也沒有任何 UPDATE」；T-5 原子性要涵蓋戳記的回滾；0033 的 T-1～T-6、F-T1～F-T6 其餘不變。
-
-## 補充四（狀態 proposed，依 J-9 生效）
-
-- 補充四（tech-architect 2026-11-08 起草，2026-11-09 依風控 `work/reviews/2026-11-09-N207與ADR0043審查-風控.md` R-3～R-6 修訂；狀態 proposed，依 J-9 生效；回應 N-207 與 CEO #119）：以下條款與 ADR-0043 D3 第 7 點逐字同列，以條款編號對照，兩者合稱「本判定」。兩處若有不一致，qa-reviewer 依 C-B11 字面判 BLOCKING，並回 TA 修正。
-  - **J-1 判定**：ADR-0034 附錄 C 的 C-B11「R、S、P 的引擎邏輯不改」，以及 Consequences「被約束」中「R、S、P 的引擎邏輯不改（C-B11）」一句，判定為 N-168 的範圍約束，不是 engine 永久不得修改的架構決策。
-  - **J-2 理由**：C-B11 列在「B-2a 約束清單（交 dev-lead）」，目的是防止 N-168 在實作 B-2a 時順手改動 R、S、P，讓「照常結算、停損停利照常評估」的語意可以驗證；N-168 已於 9253032 合併。先例：ADR-0035 補充六對 `settle()` 零 diff 的判定；ADR-0040 補充一 E-2 對 C-B8 與 C-B11 關係的判定。
-  - **J-3 延伸適用**：同一判定適用於 ADR-0035 附錄 B 的 N172-C3（N-172a 的範圍）、ADR-0041「限制」與「與其他 ADR 的關係」中的「engine 零 diff（C-B11）」（N-177a 的範圍）、ADR-0042 N198-C1 的 engine.py 零 diff（N-198 的範圍）。ADR-0040 Decision 12 的限定範圍豁免在本判定之前成立，不需要撤回。
-  - **J-4 不放寬所屬單**：J-3 所列約束，對其所屬單自身的 diff 仍然完全有效。N-177a 與 N-198 在本判定起草時（2026-11-08）都尚未合入：ADR-0041「engine 零 diff」對 N-177a 的 diff、N198-C1 對 N-198 的 diff，qa-reviewer 照原字面判定。N172-C3 對 N-172a 亦同。本判定的意思只是「這些約束不約束 N-207」，不是放寬它們自己。
-  - **J-5 仍然有效的不變式**（日後改動 engine，以及依 J-6 視同改動 engine 的變更，都必須遵守）：
-    - **I-1 B-2a 語意（CEO #79）**：出清當時未結算的 R 買單照常結算並標示（L4 落檔戳記）；停損停利照常評估。
-    - **I-2 C-B8**：engine 只照抄標示，不做判斷。
-    - **I-3 C-B10**：不得自動替帶標示的批次產生 EMERGENCY 賣單。C-B10 是 CEO #80 永久紅線（ADR-0034 Decision 6）的實作約束，不是範圍約束。本判定不影響 #80，#80 亦不得以範圍判定的方式解除；重開的唯一途徑仍依 ADR-0034 Decision 6（CEO 修改豁免框架，並經新一輪風控審查）。
-    - **I-4**：engine 不讀寫 TOTAL_DEPLOY 戳記、名單狀態或任何 I/O。可檢查的形式：`engine.py` 的 import 清單零 diff；`engine.py` 不出現 `TotalDeployStamp`、`entry_gate`、`entry_stopped`、`entry_stopped_on`、`high_volatility_prev`、`high_volatility_changed_on`、`engine_exclusions` 這些名稱。`batch_round` 是批次身分，不屬名單狀態。
-    - **I-5**：open 批次在任何名單狀態、戳記閘、輪次之下，都交給 engine 評估 S、P 與 EMERGENCY。
-  - **J-6 防繞道**：日後任何改動 R、S、P 判斷邏輯或股數計算的變更，須有自己的 ADR、經風控審查並經 CEO 核可。在 engine 之外以過濾或改寫 engine 輸入、或後處理 engine 輸出，而改變 R、S、P 判斷結果或股數者，視同改動引擎邏輯，適用同一要求。不得把本判定讀成「engine 從此開放修改」。
-  - **J-7 不構成先例**：本判定不構成日後豁免的先例。日後對 engine 或任何 accepted ADR 護欄條文所做的範圍判定，不得以本判定作為成立依據，須各自陳明理由、經風控審查並經 CEO 核可。
-  - **J-8 N-207 的承載**：以下三項都由 ADR-0043 承載，已經風控審查，隨 CEO 核可 ADR-0043 生效：
-    - N-207 對 `planned_batch_shares` 的改動（ADR-0043 D3 第 5 點）；
-    - 以 `engine_batches` 過濾 engine 輸入（D3 第 6 點）；
-    - 「規則已全數評估」旗標的範圍處理（D3 第 6 點）。
-
-    其中 engine 輸入過濾正屬 J-6 所稱「在 engine 之外以過濾輸入而改變 R 系列結果」，是經由 J-6 的程序成立，不是 J-6 的例外。
-  - **J-9 生效**：本判定自 CEO 核可 ADR-0043（含 ADR-0034 補充四）之日起生效；核可須明示包含補充四。核可前以 proposed 狀態落檔，qa-reviewer 依 C-B11 字面對 N-207 的 engine diff 判 BLOCKING；N-207 的合併以本判定生效為前提。
-  - **J-10 原檔與註記**：ADR-0034 原文不改（比照補充一～三先例，CEO 可推翻改為另立取代 ADR）。本判定生效後，由 tech-writer 在 ADR-0035、0041、0042 檔頭各加一行指向 ADR-0043 D3 第 7 點的註記；生效前不加。
