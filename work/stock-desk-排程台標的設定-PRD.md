@@ -428,7 +428,7 @@ Q-C4～Q-C10 維持 PM 預設值，標註為 coordinator 定案、CEO 可推翻�
 | 3 檔數與 n_targets 不同步 | FR-4、11、26、28、41 | AC-02、11、31、33、63、66 |
 | 4 手填批數與參數不一致 | FR-3、27 | AC-01、32 |
 | 5 重新加入靜默無效 | FR-14～17、42、43 | AC-17、46～52、68 |
-| 6 代號格式未檢查 | FR-5 | AC-03～05、04b、45 |
+| 6 代號格式未檢查 | FR-5 | AC-03～05、04b、45、91 |
 | 7 寫錯 DB 檔 | FR-6 | AC-07 |
 | 8 與 REBALANCE、資金確認無先後 | FR-21～24、39、48 | AC-25～30、56～58、61、62、76、78、79 |
 
@@ -565,11 +565,14 @@ Q-C4～Q-C10 維持 PM 預設值，標註為 coordinator 定案、CEO 可推翻�
 | 25 | 規則集未確認時 TD 的來源與設定時間標示 | FR-52、AC-89（RC-35） |
 | 26 | 形狀拒絕訊息（只陳述事實、不含正規化提示與替代代號） | FR-5、AC-04（data-engineer 第 3 節） |
 | 27 | RC-22 CEO 通知（coordinator 擬稿，風控定稿；非畫面字面） | FR-46、AC-73 |
+| 28 | **W-05m：K 結尾代號拒絕句**（v3.4，RC-43）。風控已退回 creative-lead 擬稿，尚無草稿；紅線見 AC-91（開頭為未寫入任何資料；只陳述規則並引用輸入的代號；不寫「不符合台股代號格式」；交易所文件查證前不寫「外幣計價」；不提供替代代號） | FR-5、AC-91 |
+| 29 | **N-207 部署通知**（v3.4，RC-45(a)；非畫面字面）：coordinator 擬稿、風控逐字定稿，CEO 第一次使用「設定標的名單」前送達並書面確認 | FR-53、AC-92 |
 
 ### 下游
 - 本 PRD v3 交 tech-architect：依風控審查修訂 ADR-0043 與 ADR-0034 補充四（R-2～R-6、R-8～R-10、R-12），並回答 Q-T12；修訂後送風控單項確認。AC 同步給 qa-reviewer、qa-automation、qa-e2e。
 - 交 creative-lead：依上方 20 項字面擬稿，送風控逐字定稿。
 - 變更清單（含每條被修改的 AC 編號）已列於文首變更紀錄，qa 以 v3 為準重新對照測試案例。
 - 與 N-209 的關係：N-209（`work/stock-desk-REBALANCE畫面入口-PRD.md`，v1.3）須先上線；N-207 字面提及 REBALANCE 入口須待其合入。N-210（FR-50）與 N-209 並行，是 N-207 上線前的閘。
+- v3.4 通知對象：risk-compliance-officer（W-05m、N-207 部署通知回送定稿；P-7、P-8 回報）、creative-lead（W-05m 擬稿）、coordinator（FR-53 擬稿、P-6／P-7／P-8 記入交件紀錄、列給 CEO 的殘留）、tech-architect（P-8 SQL、RC-38 檢查方法）、dev-lead／devops-sre（R3、R5 git 指令執行者，AC-94）、qa-reviewer／qa-automation／qa-e2e（AC-04、57、90～94）、CEO（C-8 N-210a／b 是否在 N-207 部署前合入）。
 - v3.3 通知對象：tech-architect（FR-50、FR-47 P-6／P-7、Q-C15 事實部分、ADR-0043 D1 第 4 點、D7 第 6 點）、creative-lead（上方追加字面表）、risk-compliance-officer（Q-C15～Q-C17、全部字面定稿）、data-engineer（形狀規則已引用，補查仍待）、dev-lead（AC-04、AC-04b 契約測試）、qa-reviewer／qa-automation／qa-e2e（AC-04、04b、57、73、76、84～90）、coordinator（RC-22 CEO 通知擬稿、N-210 登錄、P-6／P-7 記入交件紀錄）。
 - 本 PRD 為 draft，未 commit。待 CEO 回答：Q-C11（ADR-0043 改 accepted 前）；Q-C4～Q-C10 為 coordinator 定案的 PM 預設，CEO 可推翻，若推翻會更新本 PRD 並通知下游。
