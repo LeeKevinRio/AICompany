@@ -1,10 +1,11 @@
 # 排程台標的設定與季度換標的 PRD（N-207）
 
-- 狀態：**draft v3**（未 commit。已吸收風控 2026-11-09 審查 R-7、R-8、R-11、R-13～R-15、R-17、R-18 與 CEO #123、#125；待 TA 依風控修訂 ADR-0043、creative-lead 擬字面並由風控逐字定稿、CEO 回答 Q-C11 後定稿）
+- 狀態：**draft v3.2**（未 commit。已吸收風控 2026-11-09 審查 R-7、R-8、R-11、R-13～R-15、R-17、R-18 與 CEO #123、#125；待 TA 依風控修訂 ADR-0043、creative-lead 擬字面並由風控逐字定稿、CEO 回答 Q-C11 後定稿）
 - 日期：2026-11-09（v2 為 2026-11-08）
 - 作者：product-manager
 - 來源：CEO #118；dev-lead 查證 `work/reviews/2026-11-08-N203排程台標的寫入路徑查證-dev-lead.md`（以下簡稱「N203 查證」）；CEO 裁決一、裁決四（`work/stock-desk-快市排程-企劃.md:276`、`:280`）；CEO #112～#114；ADR-0035、ADR-0041、ADR-0042；N-204（高波動清單未接線，併入本單）；**v2 新增**：TA 架構評估 `work/reviews/2026-11-08-N207架構評估-tech-architect.md`（以下簡稱「TA 評估」）；CEO 2026-11-08 裁示 #119～#122（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md`）。
 - 變更紀錄：
+  - **v3.2**（2026-11-09）：依風控 2026-11-09 第二輪意見 S-4（`work/reviews/2026-11-09-補遺確認RC7結案與Q7意見-風控.md`），R-1 與 AC-75 的「從 0 起編」改為「`batch_no` 最小值不等於 1」，連負值一起涵蓋（原因：`BatchState.batch_no` 要求 `ge=1`，小於 1 的列會讓讀取 raise）。判定範圍只擴大不縮小。驗收條件的放寬或刪減：無。
   - **v3.1**（2026-11-09）：新增 Q-C13（標的設定入口名稱）、Q-C14（組合凍結說明句顯示條件），皆為 PM 建議，待風控定稿；回答 creative-lead 字面草稿待查 T-12（`{ROSTER_ENTRY}` 部分）與 T-22（產品面）。FR 與 AC 皆無變更；驗收條件的放寬或刪減：無。
   - v0：初稿。
   - **v3（本版）**：依風控 2026-11-09 審查（`work/reviews/2026-11-09-N207與ADR0043審查-風控.md`，以下簡稱「風控審查」）與 CEO #123～#125 改版。下游請以 v3 為準。
@@ -240,7 +241,7 @@ Q-C4～Q-C10 維持 PM 預設值，標註為 coordinator 定案、CEO 可推翻�
   - 盤點列數為 0：不需通知，記錄於 release note。
 - **FR-47**（R-14，併列 R-1；上線前閘門，非畫面功能）：部署前唯讀盤點（只回傳數字）遇到下列任一情況，須**停下並回報**，不得直接上線：
   - R-14：實際啟用檔數大於 `n_targets`，回報 CEO 與 TA；
-  - R-1：任一檔第 1 輪批數不等於 `batches_per_target`、`batch_no` 最大值大於 `batches_per_target`、從 0 起編、或有斷號，回報 TA 與風控；
+  - R-1：任一檔第 1 輪批數不等於 `batches_per_target`、`batch_no` 最大值大於 `batches_per_target`、`batch_no` 最小值不等於 1（連負值一起涵蓋）、或有斷號，回報 TA 與風控；
   - R-13：`high_volatility=1` 列數大於 0，依 FR-46 處理。
 - **FR-48**（R-17）：N-209（REBALANCE 畫面入口，CEO #124）合入前，本單不得上線。N-209 未合入時，所有待生效相關字面不得提到「REBALANCE 入口」。
 - **FR-49**（R-18）：「待生效」只用於戳記閘（FR-21）。高波動改用「M 月 D 日起適用」或「尚未適用」。
@@ -343,7 +344,7 @@ Q-C4～Q-C10 維持 PM 預設值，標註為 coordinator 定案、CEO 可推翻�
 - **AC-72**（FR-45）Given 某標的已停止（情境一：沒有 open；情境二：同時有 open 與 planned），或某標的待生效，其 planned 批次被排除；When 當日無任何規則命中；Then 「今日規則已全數評估……」原句不得單獨出現：旗標為 false，或改為寫出「已停止新進場 N 檔、待生效 M 檔未評估進場規則」的變體句；engine 相對 base 零 diff。Given 沒有任何 planned 批次被排除；Then 原句照舊。
 - **AC-73**（FR-46）Given 盤點 `high_volatility=1` 的列數大於 0 且 CEO 已確認保留；When 部署後首次開啟本機畫面；Then 一次性通知列出受影響代號、門檻由 BIAS25 15% 變 20%、「自部署起適用」，且不含「待生效」；關閉後不再出現。
 - **AC-74**（FR-46）Given 盤點列數為 0；When 部署；Then 畫面無部署通知，release note 有記錄。
-- **AC-75**（FR-47）Given 上線前唯讀盤點結果為啟用檔數大於 `n_targets`，或第 1 輪批數不等於 `batches_per_target`、`batch_no` 最大值大於 `batches_per_target`、從 0 起編、有斷號之一；When 準備上線；Then 上線被擋下並回報（檔數超額回 CEO 與 TA，批次編號異常回 TA 與風控）；回報有留存才可繼續。
+- **AC-75**（FR-47）Given 上線前唯讀盤點結果為啟用檔數大於 `n_targets`，或第 1 輪批數不等於 `batches_per_target`、`batch_no` 最大值大於 `batches_per_target`、`batch_no` 最小值不等於 1（連負值一起涵蓋）、有斷號之一；When 準備上線；Then 上線被擋下並回報（檔數超額回 CEO 與 TA，批次編號異常回 TA 與風控）；回報有留存才可繼續。
 - **AC-76**（FR-48）Given N-209 尚未合入；When 準備上線本單；Then 不得上線。Given N-209 尚未合入；When 掃描待生效相關字面；Then 無「REBALANCE 入口」字樣。
 - **AC-77**（FR-49）Given 所有畫面與 API 回應；When 掃描；Then 「待生效」只出現在戳記閘相關位置，高波動相關字面（名單列、效果揭露句、部署通知）改用「M 月 D 日起適用」或「尚未適用」。
 - **AC-78**（FR-21，R-10(a)）Given 待生效說明句與標籤；When 檢查字面；Then 資金確認只被寫為「首次設定時」的解開方式，不出現通用的解開說法；說明句不得暗示可用重送資金確認代替 REBALANCE。
