@@ -50,10 +50,13 @@
 {%- endmacro %}
 
 {#- Price age and staleness badges next to a price. -#}
-{% macro price_meta(fetched, stale=false, rounds=none, kind=none, source=none) -%}
+{#- refresh: the watch whose scan a stale price can start (FD-21); none hides the button. -#}
+{% macro price_meta(fetched, stale=false, rounds=none, kind=none, source=none, refresh=none) -%}
 <span class="price-time">{{ fetched }}</span>
 {%- if source %}<span class="price-source">・{{ source }}</span>{% endif %}
-{%- if stale %} <span class="badge warn">{{ ui.stale_badge }}</span>{% endif %}
+{%- if stale %} <span class="badge warn">{{ ui.stale_badge }}</span>
+{%- if refresh %} <button type="button" class="small refresh" data-action="scan-now" data-watch-id="{{ refresh.id }}" data-busy-label="查價中…" aria-label="{{ ui.refresh_label }}（{{ refresh.name }}）">{{ ui.refresh_button }}</button>{% endif %}
+{%- endif %}
 {%- if rounds %} <span class="badge warn">{{ rounds }}</span>{% endif %}
 {%- if kind %} <span class="badge warn">{{ kind }}</span>{% endif %}
 {%- endmacro %}

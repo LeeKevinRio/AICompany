@@ -814,7 +814,10 @@ class Repository:
         queries_used: int,
         global_limit_reached: bool,
         error_summary: str | None,
+        sampled_pairs: Sequence[DatePair] | None = None,
     ) -> None:
+        """Close a run. ``sampled_pairs`` replaces the stored list when given (FD-21 adds
+        the pairs that moved onto the card during the round)."""
         with self.db.connect() as conn:
             conn.execute(
                 "UPDATE scan_run SET finished_at = ?, status = ?, query_results = ?,"
@@ -829,6 +832,11 @@ class Repository:
                     scan_run_id,
                 ),
             )
+            if sampled_pairs is not None:
+                conn.execute(
+                    "UPDATE scan_run SET sampled_pairs = ? WHERE id = ?",
+                    (json.dumps([p.as_json() for p in sampled_pairs]), scan_run_id),
+                )
 
     def queries_used_since(self, since: datetime) -> int:
         """Outbound queries of scans, explorations and comparisons started at or after

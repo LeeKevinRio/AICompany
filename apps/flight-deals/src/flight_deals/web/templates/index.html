@@ -27,6 +27,7 @@
 </div>
 <div class="watch-grid">
   {% for w in watches %}
+  {%- set refresh = w if (not w.expired and w.enabled) else none %}
   <article class="watch-card" data-watch-id="{{ w.id }}" aria-labelledby="watch-name-{{ w.id }}">
     <header class="card-head">
       <h2 class="card-title" id="watch-name-{{ w.id }}"><a href="/watches/{{ w.id }}">{{ w.name }}</a></h2>
@@ -46,7 +47,7 @@
       </div>
       {{- price_labels(w.split_ticket_label, w.overhead_bin_label) }}
       <div class="price-sub">{{ price_line(w.price_caption, w.pax_note, w.pax_summary, w.cabin_label) }}</div>
-      <div class="price-meta">{{ price_meta(w.cheapest_fetched_label, w.stale, w.stale_rounds_label) }}</div>
+      <div class="price-meta">{{ price_meta(w.cheapest_fetched_label, w.stale, w.stale_rounds_label, refresh=refresh) }}</div>
       <div class="price-dates">{{ w.dates_weekday_label }}</div>
     </div>
     {{ flight(w.flight) }}
@@ -102,7 +103,7 @@
           </div>
           {% if w.pax_note %}<div class="price-sub">{{ w.pax_note }}</div>{% endif %}
           {{- price_labels(p.split_ticket_label, p.overhead_bin_label) }}
-          <div class="price-meta">{{ price_meta(p.fetched_label, p.stale) }}</div>
+          <div class="price-meta">{{ price_meta(p.fetched_label, p.stale, refresh=refresh) }}</div>
           {{ flight(p.flight, compact=true, leg=true) }}
           {% if p.booking_url %}
           <div class="more-pair-actions">{{ ext_link(p.booking_url, ui.booking_button_short, p.dates, "button small booking") }}</div>

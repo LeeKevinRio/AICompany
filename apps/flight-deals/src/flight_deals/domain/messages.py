@@ -1612,6 +1612,9 @@ class UiTexts:
     kind_cached: str = "快取價，非即時"
     data_time_unknown: str = "資料時間未知"
     stale_badge: str = "可能已過期"
+    # FD-21: next to the stale badge on the list card; runs the same scan as 「立即查價」.
+    refresh_button: str = "刷新"
+    refresh_label: str = "刷新價格"
     # #27 (R9).
     unembedded_form_hint: str = "依實測，此組合常無法自動查價，可能需人工查價。"
     # #39.

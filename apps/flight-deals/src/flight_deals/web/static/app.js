@@ -542,6 +542,7 @@
   // ---- scan now with polling ----------------------------------------------
 
   const POLL_INTERVAL_MS = 2000; // must not go below 2 seconds
+  // FD-21: a manual scan with refill measured ~54 s; see REFILL_QUERY_LIMIT in scan.py.
   const POLL_LIMIT_MS = 90000;
   // Bumped on every pagehide/pageshow so a poll loop started before a bfcache
   // restore stops, and a new click always gets its own live token.
@@ -572,7 +573,20 @@
 
   async function scanNow(button, id) {
     const token = ++pollGeneration;
-    setBusy(button, true);
+    // FD-21: a list card has several buttons for the same scan (「立即查價」 and each
+    // 「刷新」); they all show the busy state together.
+    const group = Array.prototype.slice.call(
+      document.querySelectorAll(
+        '[data-action="scan-now"][data-watch-id="' + CSS.escape(String(id)) + '"]'
+      )
+    );
+    if (group.indexOf(button) === -1) group.push(button);
+    const busy = function (on) {
+      group.forEach(function (b) {
+        setBusy(b, on);
+      });
+    };
+    busy(true);
     const base = await readScanStatus(id);
     if (token !== pollGeneration) return;
     const baseRunId = base ? base.scan_run_id : null;
@@ -581,7 +595,7 @@
     if (token !== pollGeneration) return;
     if (!result.ok) {
       // 409 means disabled or expired; show the server message, do not poll.
-      setBusy(button, false);
+      busy(false);
       flash(firstError(result.data), "error");
       return;
     }
@@ -604,7 +618,7 @@
         return;
       }
     }
-    setBusy(button, false);
+    busy(false);
     flash(
       sawRunning
         ? "仍在查價中，完成後請重新整理"

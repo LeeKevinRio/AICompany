@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, cast
@@ -37,7 +37,14 @@ from flight_deals.storage.repository import AlertStateRecord, Repository
 
 log = logging.getLogger(__name__)
 
-__all__ = ["ERROR_SUMMARY_LIMIT", "ScanOutcome", "ScanService"]
+__all__ = ["ERROR_SUMMARY_LIMIT", "REFILL_QUERY_LIMIT", "ScanOutcome", "ScanService"]
+
+# FD-21: at most this many extra pairs per round so the card ends the round showing prices
+# checked in that round (see ``ScanService._refill_card``). A pair may use more than one
+# query (retries). The list page's 「刷新」 runs a whole manual scan and polls for at most
+# POLL_LIMIT_MS (app.js, 90 s); a full round measured ~54 s, so check that limit before
+# raising this one.
+REFILL_QUERY_LIMIT = 9
 
 
 @dataclass(frozen=True)
@@ -193,17 +200,14 @@ class ScanService:
             hourly_left = settings.global_hourly_query_limit - self._repo.queries_used_since(
                 now - timedelta(hours=1)
             )
-            for pair in sampled:
-                if queries >= hourly_left:
-                    global_hit = True
-                    skipped = self._skipped_entry(pair, "global_hourly_limit")
-                    if pair in pinned:
-                        skipped["pinned"] = True
-                    results.append(skipped)
-                    continue
+
+            def run_pair(pair: DatePair, *, refill: bool = False) -> None:
+                nonlocal queries, any_success, any_failure
                 outcome = self._query_pair(watch, pair, run_id)
-                if pair in pinned:
+                if pair in pinned or refill:
                     outcome.entry["pinned"] = True
+                if refill:
+                    outcome.entry["refill"] = True
                 results.append(outcome.entry)
                 queries = self._spent
                 any_success |= outcome.success
@@ -213,6 +217,18 @@ class ScanService:
                     priced.append(outcome)
                 if outcome.error:
                     errors.append(outcome.error)
+
+            for pair in sampled:
+                if queries >= hourly_left:
+                    global_hit = True
+                    skipped = self._skipped_entry(pair, "global_hourly_limit")
+                    if pair in pinned:
+                        skipped["pinned"] = True
+                    results.append(skipped)
+                    continue
+                run_pair(pair)
+            if not global_hit:
+                self._refill_card(watch, pairs, now, sampled, run_pair, hourly_left)
             if global_hit:
                 errors.append("已達全域每小時查詢上限，部分日期本輪未查")
             self._lookup_return_leg(watch, run_id, priced, hourly_left)
@@ -230,13 +246,14 @@ class ScanService:
                 run_id,
                 finished_at=finished,
                 status=status,
+                sampled_pairs=sampled,
                 query_results=results,
                 queries_used=queries,
                 global_limit_reached=global_hit,
                 error_summary=self._redact(summary)[:ERROR_SUMMARY_LIMIT] if summary else None,
             )
         except Exception as exc:
-            self._abort_run(run_id, results, self._spent, global_hit, exc)
+            self._abort_run(run_id, results, self._spent, global_hit, exc, sampled)
             raise
 
         current = self._repo.get_watch(watch.id)
@@ -287,6 +304,39 @@ class ScanService:
         scannable = set(pairs)
         shown = [DatePair(o.depart_date, o.return_date) for o in ranked[:CARD_PAIRS]]
         return [p for p in shown if p in scannable]
+
+    def _refill_card(
+        self,
+        watch: Watch,
+        pairs: list[DatePair],
+        now: datetime,
+        sampled: list[DatePair],
+        run_pair: Callable[..., None],
+        hourly_left: int,
+    ) -> None:
+        """Check the pairs that moved onto the card during this round (FD-21).
+
+        A re-checked card pair can go up and let an older, cheaper price move onto the card.
+        Those pairs are checked too, until every pair the card shows was tried this round,
+        ``REFILL_QUERY_LIMIT`` pairs were added, or the hourly limit is reached. Reaching the
+        limit here only stops the refill: these pairs were never part of the round's sample,
+        so the run's status and its global-limit flag do not change; a refill query that
+        fails still counts like any other (the run becomes ``partial``). Pairs already tried
+        this round (even failed or unpriced ones) are never tried again.
+        """
+        added = 0
+        while added < REFILL_QUERY_LIMIT:
+            tried = set(sampled)
+            moved = [p for p in self._card_pairs(watch, pairs, now) if p not in tried]
+            if not moved:
+                return
+            for pair in moved:
+                if added >= REFILL_QUERY_LIMIT or self._spent >= hourly_left:
+                    return
+                added += 1
+                run_pair(pair, refill=True)
+                # After the query, so a crash leaves sampled_pairs matching query_results.
+                sampled.append(pair)
 
     def _lookup_return_leg(
         self, watch: Watch, run_id: int, priced: list[_PairOutcome], hourly_left: int
@@ -361,6 +411,7 @@ class ScanService:
         queries: int,
         global_hit: bool,
         exc: Exception,
+        sampled: Sequence[DatePair] | None = None,
     ) -> None:
         """Close a crashed run as failed, keeping the queries already spent."""
         message = self._redact(f"掃描中斷：{type(exc).__name__}: {exc}")[:ERROR_SUMMARY_LIMIT]
@@ -369,6 +420,7 @@ class ScanService:
                 run_id,
                 finished_at=self._clock(),
                 status="failed",
+                sampled_pairs=sampled,
                 query_results=results,
                 queries_used=queries,
                 global_limit_reached=global_hit,
