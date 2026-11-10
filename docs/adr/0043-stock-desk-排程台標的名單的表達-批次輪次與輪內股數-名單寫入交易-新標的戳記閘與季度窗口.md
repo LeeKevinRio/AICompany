@@ -5,6 +5,7 @@
 - 2026-11-09 併入 TA 補遺-1（RC-2，風控確認）
 - 2026-11-10 併入 TA 補遺 5c 與補遺二-1b、1c（RC-11，風控免回送）
 - 2026-11-10 依風控 RC-21、RC-22、RC-24 併入 TA C-T05、C-T13 約束
+- 2026-11-10 依風控 RC-22、RC-44 同步 D7 第 6 點
 - 決策者：
   - tech-architect：草案與修訂一；
   - risk-compliance-officer：2026-11-09 CONDITIONAL APPROVE（R-1～R-18）；修訂後的 D3 第 7 點與 ADR-0034 補充四風控 2026-11-09 確認（見 work/reviews/2026-11-09-ADR0043修訂一單項確認與N209Q2裁示-風控.md），其餘段落不必回送；
@@ -323,9 +324,9 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
 4. **接線**：`evaluate_today` 在算出 `data_date` 之後、建 snapshot 之前，讀一次 `symbol_states(data_date)`，同一份結果同時交給 `build_market_snapshot(high_volatility=effective)` 與 engine。`:417`（出清）與 `:1840`（REBALANCE）不傳，因為它們不評估 P3。
 5. 畫面上的生效日期以 `calendar.next_trading_day(changed_on)` 呈現，有日曆退回判定的已知限制。判定只看第 2 點，不看這個日期。字面用「M 月 D 日起適用」或「尚未適用」，不得用「待生效」（風控 R-18；「待生效」只留給 D6 的戳記閘）。
 6. **既有標記（風控 R-13）**：
-   - 既有列中 `high_volatility=1` 而 `changed_on` 為 NULL 的，部署當下立即生效：這些標的的 P3 過熱減碼門檻由 BIAS25 大於 15% 提高為大於 20%，減碼變少，屬放寬賣出規則。
+   - 既有列中 `high_volatility=1` 而 `changed_on` 為 NULL 的，部署當下立即適用：這些標的的 P3 過熱減碼門檻由 BIAS25 大於 15% 提高為大於 20%，減碼變少，屬放寬賣出規則。
    - 部署前唯讀盤點列數大於 0 時，停止部署（N-207 §9 STOP-3）。CEO 要明示保留或取消：
-     - 保留：需要一次性的部署通知，在本機畫面列出受影響代號、門檻變化與「自部署起適用」；
+     - 保留：需要 app 外 CEO 通知（N-207 部署通知，coordinator 擬稿、風控逐字定稿；CEO 書面確認收到並裁示保留或取消前不得部署）＋名單頁常駐規則說明（W-27）（風控 2026-11-10 RC-22）；
      - 取消：取消路徑由 TA 另行設計並送風控，不得以手動改 DB 處理。
    - 列數為 0 時，不需要通知，在 release note 記錄即可。
 
