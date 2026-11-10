@@ -25,6 +25,7 @@
     其中 engine 輸入過濾正屬 J-6 所稱「在 engine 之外以過濾輸入而改變 R 系列結果」，是經由 J-6 的程序成立，不是 J-6 的例外。
   - **J-9 生效**：本判定自 CEO 核可 ADR-0043（含 ADR-0034 補充四）之日起生效；核可須明示包含補充四。核可前以 proposed 狀態落檔，qa-reviewer 依 C-B11 字面對 N-207 的 engine diff 判 BLOCKING；N-207 的合併以本判定生效為前提。
   - **J-10 原檔與註記**：ADR-0034 原文不改（比照補充一～三先例，CEO 可推翻改為另立取代 ADR）。本判定生效後，由 tech-writer 在 ADR-0035、0041、0042 檔頭各加一行指向 ADR-0043 D3 第 7 點的註記；生效前不加。
+  - 2026-11-10 CEO #136 核可 ADR-0043，明示包含本補充四；本補充四自當日起為 accepted，依 J-9 生效。
 - 日期：2026-10-31（tech-architect 草案日期 2026-10-31）
 - 決策者：tech-architect（草案與技術評估）；risk-compliance-officer（方案裁示 CONDITIONAL APPROVE B-2a，2026-10-31；字面逐字定稿）；CEO #79（採 B-2a、標示來源採 L4）、#80（B-2b 列為永久紅線）於 2026-10-31 裁定。
 - 與 ADR-0033 的關係：

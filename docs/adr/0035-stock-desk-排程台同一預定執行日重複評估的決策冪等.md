@@ -1,6 +1,7 @@
 # ADR-0035：stock-desk 排程台同一預定執行日重複評估的決策冪等（補充 ADR-0033、ADR-0034，不取代）
 
 - 狀態：accepted（CEO #83、#86、#88，2026-10-31 裁定；落檔前提：新字面經風控逐字定稿後才可合併、N-174(c) 揭露句為 N-172a 的合併門檻、`GET /today` 上線排序見 Decision 12，詳見 Decision 5、Decision 11 與 Consequences）
+- 註記（依 ADR-0034 補充四 J-10，2026-11-10 CEO #136 核可後生效）：ADR-0034 補充四 J-3 對本檔附錄 B 的 N172-C3「engine 零 diff」作範圍判定，見 ADR-0043 D3 第 7 點；本檔原文不改。
 - 補充一（tech-architect 2026-11-01，回應 `work/reviews/2026-11-01-N172a實作交件-dev-lead.md`「下一步」2(a)、2(d)）：Decision 6′「原子化」項的 SQL 寫法以補充一 S-1 為準；新增 N172-C12（字面定位）與 N172-T22。全文見 `work/reviews/2026-11-01-ADR0035補充一-tech-architect.md` 第「B. 補充一全文」節；本檔原文不改（比照 ADR-0033、ADR-0037 補充先例，CEO 可推翻改為另立取代 ADR）。
 - 補充二（risk-compliance-officer 2026-11-01，裁示 N-172a 解讀點 (b)(c)(d)）：Decision 4 第 3 點 `INDEX_DATA_GAP_DEFER_NOTE` 維持只看 M1 順延列（R3 跳過日不渲染屬有意取捨）；`SAME_DAY_EARLIER_LINES_DATA_GAP_NOTE` 修訂兩處字、`{line_count}` 只計 `ORDER_ACTIONS` 列；新增 `SAME_DAY_EARLIER_DECISIONS_DATA_GAP_NOTE`（B 句）。逐字定稿與必改 1～8 見 `work/reviews/2026-11-01-N172a解讀點bcd裁示-風控.md`；本檔原文不改。
 - 補充三（tech-architect 2026-11-01）：Consequences「N-168 的 W-B1 清單以 (symbol, batch_no) 去重計批數」一語由 ADR-0034 補充一 S-2 取代（計數單位隨字面單位詞：「筆」計列數）；「股數逐列顯示、不得加總」維持；風控 2026-11-01 P3 裁示同此口徑並新增 W-B1d。本檔原文不改。
