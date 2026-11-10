@@ -1,6 +1,7 @@
 # ADR-0044：stock-desk 排程台 REBALANCE 之後，未結算的 R 系列買進列如何處置
 
-- 狀態：proposed
+- 狀態：accepted（CEO #137 於 2026-11-10 核可，原文：「核可（Recommended）。ADR-0044 改為 accepted，內容依寫法 A、時序選項 1、選擇修正。殘留 R-a～R-g 全部已有裁示。N-210a、N-210b 可以開工」）
+  - 狀態變更紀錄：本 ADR 原為 proposed；2026-11-10 CEO #137 核可後改為 accepted。同次修訂：store 方法暫稱由 portfolio_with_stamp 改為 portfolio_and_stamp，語意不變（dev-lead v3.1 交件要求，避免和既有命名衝突；第 89 行、第 362 行，於 accepted 之前的同一次修訂一起做）。來源：`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` #137。
 - 日期：2026-11-10（修訂一，同日：併入風控 C-1～C-9，增列 (iii-c)、R-f、R-g；定稿，同日：併入風控 RC-52 三項 required 與 suggested、RC-53 條件 1～3、RC-53 時序選擇）
 - 決策者：
   - tech-architect：草案、修訂一、定稿；
@@ -86,7 +87,7 @@
   - `record_directives`（REBALANCE 的無單列、測試）與 `commit_emergency_exit` 寫入 NULL。
   - app/ 內的 R1 buy 只來自 `commit_evaluation`。
 - **來源**：
-  - `evaluate_today` 把 `:2200` 的 `portfolio_state()` 換成一個新的 store 方法，暫稱 `portfolio_with_stamp()`。它只做一次 `_state_map()`，同時產生 `PortfolioState` 與 `TotalDeployStamp`，建構函式與 `portfolio_state()`、N-197a 的 `_total_deploy_stamp` 共用。
+  - `evaluate_today` 把 `:2200` 的 `portfolio_state()` 換成一個新的 store 方法，暫稱 `portfolio_and_stamp()`。它只做一次 `_state_map()`，同時產生 `PortfolioState` 與 `TotalDeployStamp`，建構函式與 `portfolio_state()`、N-197a 的 `_total_deploy_stamp` 共用。
   - 交給 `evaluate()` 的 portfolio 與交給 `commit_evaluation` 的 stamp，必須來自同一個回傳值。
 - **判定**：
   - `td_basis` 不為 NULL 時，與現行戳記（Decision 3 同一次讀取的原始字串）逐字比對：
@@ -359,7 +360,7 @@
   - **`settle`、`claim_and_settle`，以及兩者呼叫的 store helper，其 SQL 字串都不含 `td_basis`**（AST 收集這些函式本體的字串常數；風控 RC-53 條件 2）；
   - `store.py` 內 `td_basis` 只出現在以下位置（白名單）：`_MIGRATIONS` 該欄定義、`_insert_directives`、`commit_evaluation`（轉交參數）、encode／decode helper、`/today` 旗標讀取方法；
   - `commit_evaluation` 的 `td_basis` 參數沒有預設值（AST）；
-  - `evaluate_today` 交給 `evaluate()` 的 portfolio 與交給 `commit_evaluation` 的 stamp，來自同一次 `portfolio_with_stamp()` 呼叫（AST）；
+  - `evaluate_today` 交給 `evaluate()` 的 portfolio 與交給 `commit_evaluation` 的 stamp，來自同一次 `portfolio_and_stamp()` 呼叫（AST）；
   - `engine.py` 零 diff。
 - **C-N210-13**（寫法 A）：migration 測試。舊 DB 補上欄位，舊列為 NULL，判定走 (iii-a)，`td_flag_basis == "time_order"`。
 - **C-N210-14**（寫法 A）：交錯測試。在評估讀取戳記之後、`commit_evaluation` 之前注入一次 REBALANCE commit → 該列為 yes、`td_flag_basis == "recorded"`。把比對換成 (iii-a) 時，這個測試會失敗，作為效力證明；失敗輸出附在 PR 說明，不 commit。
