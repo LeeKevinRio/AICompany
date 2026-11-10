@@ -492,7 +492,7 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
    - **殘留（風控 R-12）**：
      - 資料落後的那幾天（until < 台北今日，但 data_date ≤ until），名單入口已放行，engine 仍處於凍結。
      - 這比 FR-40 的字面寬，但不會增加買進：engine 照樣壓住 R 系列，新批次也還在閘後。
-     - CEO 要在本 ADR 改為 accepted 之前，明示回答 Q-C11；這不擋 proposed 落檔。
+     - Q-C11 已由 CEO #129、#135 裁示。
      - 名單頁的事實說明句：常駐，條件式規則陳述（風控 2026-11-10 RC-31；字面由 creative-lead 擬、風控逐字定稿）。
    - 判定不儲存（ADR-0033 C-9）。這不是 ADR-0034 VETO-1 所禁止的「以讀取時比較 `emergency_until` 推導標示」，因為本處是寫入前置條件，不是批次標示。
    - 本次評估剛觸發、尚未寫入的 S3 讀不到，視同「名單先、評估後」的循序結果。
@@ -709,3 +709,28 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
 | L11 | B = 0；11-13:1（週五）, 11-15:0（週日） | 11-15（週日） | 0 | 1 | W-25f，M/D = 11/16 | 資料日最晚 11-13 → E(11-13) = 0 → 15%；11-16 起取消已適用 | 標記從未適用；舊第三子句在任何資料日都不成立（RC-77） |
 | L12 | E18 | 11-10 | 0 | 0 | 不顯示 | 15% | 壞 value 整檔退回，與 L13 同型；不再出現不實的 W-25f（H-3，CEO #131） |
 | L13 | E15 | 11-10 | 0 | 0 | 不顯示 | 15% | 壞 `changed_on` 整檔退回（H-3） |
+
+## 附錄：D7 實作約束 C-D7-1～C-D7-7（TA 規格逐字轉錄，供引用定位；qa-reviewer 逐條檢查）
+
+來源：`work/reviews/2026-11-10-ADR0043D7修訂定稿v2全文-tech-architect.md` 的 D 塊（tech-architect，2026-11-10；qa-reviewer 核對 PASS）。
+
+**N207-C21 替換全文**（取代修一檔「修一-4」的 N207-C21；依第二段 C 的判定，CEO #131 不影響這一條，原文照用）：
+
+> **N207-C21 `high_volatility` 的執行期解析（BLOCKING）**
+> - **單一解析函式**：依 ADR-0043 D7 第 2 點，使用 `app/playbook/store.py` 的 `parse_high_volatility_flag(raw: object) -> int`，本體與 AST 檢查依該點「單一性檢查」1～7 項。原定的 `high_volatility_marked` 撤回，app/ 內出現次數為 0。
+> - **解析時點**：`playbook_symbols.high_volatility` 與歷程列的原始值，只在 `_read_high_volatility` 內經解析函式轉為 0 或 1。`SymbolState`（pydantic）不得收到原始值，只能收到解析函式與 E、T 的輸出；欄位型別由 v3 定。
+>   - 理由：pydantic 的 bool 遇到 2、'x'、0.5 會 raise，整頁會 500。
+>   - `build_market_snapshot(high_volatility=…)`（`models.py:175` 為 bool）由 E 轉入，不得再讀或再解析原始值。
+> - **共用**：engine 輸入（N207-C15）、W-25d～f 標籤、W-27 顯示旗標，三者都只讀 store 的同一份結果。讀 `high_volatility` 的 SQL 依 D7 第 2 點第 6 項封閉。
+> - **不採 raise**：評估與名單頁讀取讀到異常值不 raise。部署前的異常值由盤點 P-4c 與 STOP-4 處理；寫入路徑依 D7 第 3 點 (a′) 拒絕。
+
+**N207-T30**：最後一點「涉及 `high_volatility_prev` 的情境，依 D7 修訂後補上」改為「歷程表情境依 ADR-0043 附錄 D7-T：E15～E18、W8～W11。種入 B 的 fixture 與 E16 共用」。其餘不變。
+
+**其他約束**（C-D7-1～C-D7-7）：
+- **C-D7-1**：D7 第 2 點「單一性檢查」1～7 項都要有測試（P3），而且都是 BLOCKING。
+- **C-D7-2**：(a′) 排在 (c) 之前。實作 W8、W11 時，歷程同時有壞 `changed_on` 或壞 value、而且新值等於 T，也必須拒絕，不得回冪等的結果。
+- **C-D7-3**：W8 的回應不得新增使用者可見字面。前端與 `wording.py` 對這個原因碼的 grep，計數必須為 0，直到風控定稿專用字面為止。
+- **C-D7-4**：R 的 SQL 必須帶 `WHERE date(taipei_date) IS taipei_date`，以 W10 釘住；`taipei_date` 的寫入來源以 D4 第 3 點 (b) 的同一次時鐘讀取為準。
+- **C-D7-5**：「今日仍用高波動門檻」與「不受這次取消影響」在 app/ 與前端的 grep 計數都為 0（RC-77、RC-87）。W-25f 只實作 RC-84 全文。
+- **C-D7-6**：`engine.py` 的名稱檢查擴到 D7 第 2 點所列 10 個名稱。
+- **C-D7-7**（CEO #131）：`high_volatility_value_valid` 只用於歷程列的 value，不用於 B。歷程任一列判為 False 時整檔退回，`parse_high_volatility_flag` 只處理基準值 B 和已經通過驗證的歷程值。這項由 E16（B 是壞值時不整檔退回）、E18、L12、W8、W11 釘住。
