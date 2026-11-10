@@ -596,34 +596,33 @@ def test_detail_main_card_comes_first_with_cta_and_disclaimer(harness: Harness) 
     cards = main.find_all("section", "price-card")
     assert len(cards) == 1
     price_card = cards[0]
-    # Order in the document: disclaimer, sampled-only note, main card, then everything else.
+    # Order in the document (FD-22 ruling package E #40 replaces "sampled-only note"): the
+    # disclaimer, the collapsed price-notes panel, the main card, then everything else.
     seq = [
         n
         for n in main.descendants()
         if "disclaimer" in n.classes
-        or "sampled-note" in n.classes
         or "price-card" in n.classes
         or (n.tag == "section" and "card" in n.classes)
-        or n.tag == "details"
+        or (n.tag == "details" and "notes-more" in n.classes)
     ]
-    assert [("disclaimer" in n.classes, "sampled-note" in n.classes) for n in seq[:2]] == [
-        (True, False),
-        (False, True),
-    ]
+    assert "disclaimer" in seq[0].classes
+    assert seq[1].tag == "details" and "notes-more" in seq[1].classes
     assert "price-card" in seq[2].classes
     assert all("price-card" not in n.classes for n in seq[3:])
     text = price_card.text()
     assert BEST_TITLE in text and "TWD 8,000" in text
     assert "中國南方航空" in text and "CZ 3088 → CZ 3575" in text and "03:30" in text
-    assert "當地時間" in text
     cta = link_with_text(price_card, BOOKING_BUTTON)
     assert len(cta) == 1
     assert cta[0].attrs["href"].endswith("tfs=2026-12-11_2026-12-16")
+    # booking_hint stays under the main button; the return-leg and time sentences moved into
+    # the collapsed panel (FD-22 ruling package E #40).
     assert BOOKING_HINT in text
-    assert RETURN_EXPLAIN in text
+    assert RETURN_EXPLAIN not in text and "當地時間" not in text
     assert_one_disclaimer(page)
-    assert page.count(SAMPLED_ONLY_NOTE) == 1 and page.count_visible(SAMPLED_ONLY_NOTE) == 1
-    assert page.count_visible(RETURN_EXPLAIN) == 1
+    assert page.count(SAMPLED_ONLY_NOTE) == 1 and page.count_in_details(SAMPLED_ONLY_NOTE) == 1
+    assert page.count(RETURN_EXPLAIN) == 1 and page.count_in_details(RETURN_EXPLAIN) == 1
     assert_wording_clean(page)
 
 
@@ -682,7 +681,9 @@ def test_detail_single_adult_has_summary_but_no_per_price_total(harness: Harness
     watch_id = priced_round_trip(harness)
     page = get(harness, f"/watches/{watch_id}")
     price_card = page.main.find_all("section", "price-card")[0]
-    assert ONE_ADULT in price_card.text()
+    # FD-22 ruling D#24 (applied to the detail page too): one adult in economy keeps only the
+    # total-price caption on a round trip; the party stays in the watch settings fold.
+    assert "來回總價" in price_card.text() and ONE_ADULT not in price_card.text()
     assert "1 人總價" not in page.price_text()
 
 
@@ -998,10 +999,13 @@ def test_required_visible_items_are_never_inside_details(harness: Harness) -> No
     for page in (detail, listing):
         assert page.count_in_details(DISCLAIMER) == 0
     # FD-22 ruling section 1: on the list the other sentences live in the collapsed panel.
+    # On the detail page (package E #40) the return-leg sentence is in the panel too, while
+    # booking_hint stays under the main button.
+    assert detail.count_in_details(BOOKING_HINT) == 0
     for needle in (RETURN_EXPLAIN, BOOKING_HINT):
-        assert detail.count_in_details(needle) == 0, needle
-        assert listing.count_in_details(needle) == 1, needle
-    assert detail.count_in_details(SAMPLED_ONLY_NOTE) == 0
+        assert listing.count(needle) == 1 and listing.count_in_details(needle) == 1, needle
+    assert detail.count(RETURN_EXPLAIN) == 1 and detail.count_in_details(RETURN_EXPLAIN) == 1
+    assert detail.count(SAMPLED_ONLY_NOTE) == 1 and detail.count_in_details(SAMPLED_ONLY_NOTE) == 1
     # The stale badge of the main card and of a list card is outside every <details>.
     for page, selector in ((detail, "price-card"), (listing, "price-block")):
         holder = next(
@@ -1075,8 +1079,9 @@ def test_price_source_note_once_on_every_page_with_prices(harness: Harness) -> N
         "/notifications",
     ):
         page = get(harness, url)
-        if url == "/":
-            # FD-22 ruling section 1: the list keeps it once, first in the collapsed panel.
+        if url in ("/", f"/watches/{watch_id}"):
+            # FD-22 ruling section 1 and package E: the list and the detail page keep it once,
+            # first in the collapsed panel.
             assert page.count(PRICE_SOURCE_NOTE) == 1
             assert page.count_in_details(PRICE_SOURCE_NOTE) == 1
             assert_one_disclaimer(page)
@@ -1089,10 +1094,11 @@ def test_price_source_note_once_on_every_page_with_prices(harness: Harness) -> N
 
 
 def test_price_source_note_sits_right_after_the_disclaimer(harness: Harness) -> None:  # M2
-    watch_id = priced_round_trip(harness)
+    priced_round_trip(harness)
     # FD-22 ruling section 1 replaces M2 for the list ("/"): there the summary line and the
-    # collapsed panel follow DISCLAIMER (see test_fd22_list_simplify).
-    for url in (f"/watches/{watch_id}", f"/explorations/{done_exploration(harness)}"):
+    # collapsed panel follow DISCLAIMER (see test_fd22_list_simplify); package E #40 does the
+    # same for the detail page (see test_fd22_detail_simplify).
+    for url in (f"/explorations/{done_exploration(harness)}",):
         html = get(harness, url).html
         between = html.split(DISCLAIMER, 1)[1].split(PRICE_SOURCE_NOTE, 1)[0]
         assert "<details" not in between and "<section" not in between, url
@@ -1134,7 +1140,7 @@ def test_local_time_sentence_on_results_and_in_list_help(harness: Harness) -> No
         assert page.count_visible(LOCAL_TIME) == 1 and page.count(LOCAL_TIME) == 1
     priced_round_trip(harness)
     listing = get(harness, "/")
-    assert listing.count_in_details(LOCAL_TIME) == 1
+    assert listing.count(LOCAL_TIME) == 1 and listing.count_in_details(LOCAL_TIME) == 1
 
 
 def test_flight_column_heading_round_trip(harness: Harness) -> None:  # M5
@@ -1290,8 +1296,9 @@ def test_split_ticket_note_once_and_visible_on_round_trip_pages(harness: Harness
     ):
         page = get(harness, url)
         assert page.count(ROUND_TRIP_NOTE) == 1, url
-        if url == "/":
-            # FD-22 ruling section 1 (replaces the FD-16 "always visible" rule on the list).
+        if url in ("/", f"/watches/{watch_id}"):
+            # FD-22 ruling section 1 and package E #40 (replace the FD-16 "always visible"
+            # rule on the list and the detail page).
             assert page.count_in_details(ROUND_TRIP_NOTE) == 1
         else:
             assert page.count_visible(ROUND_TRIP_NOTE) == 1, url
@@ -1363,8 +1370,8 @@ def test_split_ticket_note_stays_on_a_detail_page_without_a_main_card(
     page = get(harness, f"/watches/{watch_id}")
     assert not page.main.find_all("section", "price-card")
     assert page.count(ROUND_TRIP_NOTE) == 1
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1
-    assert page.count_in_details(ROUND_TRIP_NOTE) == 0
+    # FD-22 package E #40: in the collapsed panel, still once on the page.
+    assert page.count_in_details(ROUND_TRIP_NOTE) == 1
 
 
 def test_round_trip_note_stays_when_every_date_has_departed(harness: Harness) -> None:
@@ -1373,7 +1380,7 @@ def test_round_trip_note_stays_when_every_date_has_departed(harness: Harness) ->
     harness.clock.advance(days=120)
     page = get(harness, f"/watches/{watch_id}")
     assert DETAIL_ALL_DEPARTED in page.html
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1
+    assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
 
 
 def test_one_way_detail_without_a_main_card_has_no_split_ticket_note(harness: Harness) -> None:

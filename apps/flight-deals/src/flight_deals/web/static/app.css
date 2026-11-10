@@ -866,3 +866,189 @@ details.more > summary.icon-btn::after, details.more[open] > summary.icon-btn::a
 @media (max-width: 380px) {
   .site-nav { gap: var(--space-1) var(--space-2); }
 }
+
+/* FD-22: a two-column table (settings, data maintenance) fits the phone width instead of
+   hiding its numbers behind the wrapper's horizontal scroll. */
+.table-wrap > table.data.fit { min-width: 0; }
+
+/* FD-22 round 2: detail page, notification log, settings and health. Every selector is scoped
+   to a detail-only or page-only class (.price-card, .pair-table, .heat-grid, .stack-table,
+   .steps, .diagnostics, .route-line), so the list page is not re-laid-out. */
+.route-line { margin: 0 0 var(--space-3); }
+.price-caption { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--color-text); }
+.price-card .price-dates { display: flex; align-items: center; color: var(--color-text); }
+.price-card .price-labels .badge, .price-card .price-meta .badge { display: inline-flex; align-items: center; }
+.price-card .flight-leg .icon, table.pair-table .flight-leg .icon { margin-right: 2px; }
+td.cell-dates .icon { margin-right: var(--space-1); }
+
+/* Distribution grid (#42, #43): corner words 低 / 高 (the middle third shows none), a clock
+   for a possibly stale price, and a key whose swatches sit next to their words. Text colour on
+   the heat colours, as the rest of the cell, never muted. */
+.heat-grid .heat { position: relative; }
+.heat-grid .heat-date { padding-right: var(--space-4); }
+.heat-grid .heat-rank {
+  position: absolute;
+  top: 2px;
+  right: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--color-text);
+}
+/* The clock follows the date inside its line, so it wraps with the text and never sits on the
+   return day or the party note; the date line leaves room for the corner word. */
+.heat-grid .heat-clock {
+  display: inline-flex;
+  margin-left: var(--space-1);
+  vertical-align: middle;
+  color: var(--color-text);
+}
+.heat-grid .heat-clock .icon { margin: 0; vertical-align: baseline; }
+.heat-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+.heat-key li { display: inline-flex; align-items: center; gap: var(--space-1); }
+.heat-key .icon { margin: 0; }
+.heat-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--color-input-border);
+  border-radius: 2px;
+}
+.heat-range { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--color-text); }
+
+/* Setup steps keep long addresses inside the card. */
+.steps, .steps li, .steps code { overflow-wrap: anywhere; }
+
+@media (max-width: 600px) {
+  /* One card per row; the head row stays for readers but is not drawn. Every cell is kept. */
+  .table-wrap > table.pair-table, .table-wrap > table.stack-table { min-width: 0; }
+  table.pair-table, table.pair-table tbody, table.pair-table tr, table.pair-table td,
+  table.stack-table, table.stack-table tbody, table.stack-table tr, table.stack-table td { display: block; }
+  table.pair-table thead, table.stack-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  table.pair-table tr { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-border); }
+  table.pair-table td, table.stack-table td { padding: 0; border: 0; }
+  table.pair-table td.cell-price { order: 1; }
+  table.pair-table td.cell-dates { order: 2; font-size: var(--text-sm); }
+  table.pair-table td.cell-flight { order: 3; min-width: 0; }
+  table.pair-table td.cell-link { order: 4; }
+  table.pair-table .cell-amount { font-size: var(--text-lg); }
+  table.pair-table td.cell-link a { display: inline-flex; align-items: center; min-height: var(--touch-target); }
+
+  table.stack-table tr {
+    padding: var(--space-3);
+    margin-bottom: var(--space-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+  }
+  table.stack-table td { padding: 2px 0; white-space: normal; overflow-wrap: anywhere; font-size: var(--text-base); }
+  table.stack-table td.num { white-space: normal; }
+  table.stack-table:not(.notif-table) td[data-label]::before {
+    content: attr(data-label) "：";
+    color: var(--color-muted);
+    font-size: var(--text-sm);
+  }
+  .table-wrap:has(> table.stack-table) { overflow-x: visible; }
+
+  /* Notification log card (FD-22 ruling M1): line 1 time, type, "送出"; line 2 watch and price
+     (the price wraps as a whole under a long name); line 3 the reason in full; line 4 result,
+     tries and the message fold. Time, watch, type, price and message labels are read aloud
+     only; their words equal the desktop head. Nothing is clipped or shortened. */
+  table.notif-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+  table.notif-table tr::after { content: ""; order: 4; flex: 0 0 100%; height: 0; }
+  table.notif-table td.n-time {
+    order: 1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 var(--space-2);
+  }
+  table.notif-table .n-created { font-weight: 700; }
+  table.notif-table td.n-kind { order: 2; }
+  table.notif-table .n-sent { font-size: var(--text-sm); }
+  table.notif-table td.n-watch { order: 5; flex: 0 1 auto; min-width: 0; }
+  table.notif-table td.n-price { order: 6; flex: 0 0 auto; }
+  table.notif-table td.n-reason { order: 7; flex: 1 0 100%; }
+  table.notif-table td.n-result { order: 8; flex: 0 1 auto; }
+  table.notif-table td.n-tries { order: 9; }
+  table.notif-table td.n-body { order: 10; flex: 1 1 auto; min-width: 0; }
+  table.notif-table .n-kind-chip {
+    display: inline-block;
+    padding: 2px var(--space-3);
+    border-radius: var(--radius-pill);
+    background: var(--color-neutral-bg);
+    color: var(--color-neutral-text);
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+  table.notif-table .n-amount { white-space: nowrap; font-weight: 700; }
+  table.notif-table td.n-price .muted { display: inline; margin-left: var(--space-1); }
+  /* Labels are real elements (read by every screen reader), not generated content. */
+  table.notif-table .n-label {
+    display: inline;
+    color: var(--color-muted);
+    font-size: var(--text-sm);
+  }
+  table.notif-table td.n-time > .n-label,
+  table.notif-table td.n-watch > .n-label,
+  table.notif-table td.n-kind > .n-label,
+  table.notif-table td.n-price > .n-label,
+  table.notif-table td.n-body > .n-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  /* A row without a price: no orphan dash on screen; readers still hear "價格：—". */
+  table.notif-table td.n-noprice {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  table.notif-table td.n-body pre.message { max-width: 100%; }
+}
+
+/* Desktop: the table head names each column, so the in-cell labels stay out of the way. */
+@media (min-width: 601px) {
+  table.notif-table .n-label { display: none; }
+}
+
+/* Folded inner records: one frame (the group's), so the inner folds drop their own box. */
+details.diagnostics > .fold-body > details.fold { margin: 0; }
+details.diagnostics > .fold-body > details.fold > summary {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+  background: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+details.diagnostics > .fold-body > details.fold:first-child > summary { border-top: 0; }
+details.diagnostics > .fold-body { padding-top: var(--space-1); }

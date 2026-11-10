@@ -194,8 +194,11 @@ def test_detail_page_shows_the_same_coverage(harness: Harness) -> None:
     watch_id = four_pairs(harness)
     page = get(harness, f"/watches/{watch_id}")
     assert page.count_visible("已查到價格 4／共 4 組日期") == 1
-    sampled = page.main.find_all("p", "sampled-note")[0]
-    assert "已查到價格 4／共 4 組日期" in sampled.text()
+    # FD-22 package E #40: coverage sits once on its own line under the summary (P8), not
+    # inside the sampled-only sentence, which moved into the collapsed panel.
+    coverage = page.main.find_all("p", "coverage")[0]
+    assert coverage.text() == "已查到價格 4／共 4 組日期" and not coverage.in_details()
+    assert page.count("已查到價格 4／共 4 組日期") == 1
 
 
 # ---- each row (R2, R3, R5, R6, R7, R8) --------------------------------------------------

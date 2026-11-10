@@ -7,7 +7,7 @@
 <div class="page-head">
   <h1>探索出發日價格</h1>
 </div>
-<p>對所選月份（最多連續 3 個月）內符合出發星期的每個出發日各查一次，最多 31 次查詢；完成後以價格日曆與最便宜前 5 個日期呈現。</p>
+<p>{{ ui.explore_intro }}</p>
 {% if active %}
 <p class="notice"><a href="/explorations/{{ active.id }}">探索進行中（{{ active.done }}/{{ active.total }}）</a>，同一時間只能進行一個探索；排程掃描會在探索完成後依序執行。</p>
 {% endif %}

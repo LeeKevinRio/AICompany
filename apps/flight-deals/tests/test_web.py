@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from flight_deals.app import create_app
 from flight_deals.config import Config
+from flight_deals.domain.messages import SAMPLED_ONLY_NOTE, WEB_TEXTS
 from flight_deals.web.server import WEB_DIR
 from tests.conftest import CLIENT_HEADERS, FakeClock, FakeNotifier, Harness, ScriptedSource
 
@@ -171,10 +172,12 @@ def test_detail_sections(harness: Harness) -> None:  # AC-D1..D5, AC-B3
     assert "本次取樣的日期組合" in page and "達上限" in page
     # Current-revision rows link the exact tfs search (FD-5 Decision 7).
     assert "https://www.google.com/travel/flights/search?tfs=" in page
-    assert 'badge warn">可能已過期' not in page
+    # FD-22: the chip may carry a decorative clock icon before the words.
+    stale_chip = r'badge warn">(?:<svg.*?</svg>)?可能已過期'
+    assert not re.search(stale_chip, page)
     harness.clock.advance(hours=30)
     stale_page = harness.client.get(f"/watches/{watch_id}").text
-    assert stale_page.count('badge warn">可能已過期') >= 4  # AC-D4
+    assert len(re.findall(stale_chip, stale_page)) >= 4  # AC-D4
 
 
 def test_empty_detail_state(harness: Harness) -> None:  # AC-D6
@@ -382,9 +385,11 @@ def test_list_column_and_sampling_notes(harness: Harness) -> None:
     harness.scan(watch_id)
     page = harness.client.get(f"/watches/{watch_id}").text
     # FD-12 FR-10 (R7): each sentence exactly once on the detail page, not repeated in
-    # the top list or the old-settings section.
+    # the top list or the old-settings section. FD-22 package E #40: the page now also carries
+    # the verbatim summary line, which starts with the same words; the full sentence is once.
     assert "已查到最低價" in page and "舊設定的價格紀錄" in page
-    assert page.count("只涵蓋已取樣的日期") == 1
+    assert page.count(SAMPLED_ONLY_NOTE) == 1
+    assert page.count(WEB_TEXTS.page_summary_round_trip) == 1
     assert page.count("價格為查到當下的參考值") == 1
     assert "muted-badge" not in page
 

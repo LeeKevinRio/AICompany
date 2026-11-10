@@ -40,16 +40,16 @@ from flight_deals.domain.trip_labels import static_texts as trip_static_texts
 
 DISCLAIMER = "價格為查到當下的參考值，實際以航空公司或訂票網站為準。"
 # #46 (FD-13 risk ruling): always next to DISCLAIMER, once per page or Telegram message
-# showing prices. On the web list page it sits in the collapsed price-notes panel
-# (FD-22 ruling section 1); other pages and Telegram are unchanged.
+# showing prices. On the web list and detail pages it sits in the collapsed price-notes panel
+# (FD-22 ruling section 1 and package E); other pages and Telegram are unchanged.
 # Never explain the gap or call either figure more accurate: the
 # 2026-11-03 sample is small and stops at Google's booking page.
 PRICE_SOURCE_NOTE = (
     "價格取自 Google 預設排序的結果；「最低價格」分頁的數字可能較低，但兩者都可能與訂票頁金額不同。"
 )
 # FD-16 risk ruling: always visible with round-trip prices, whatever the marks say. On the
-# web list page it sits in the collapsed price-notes panel (FD-22 ruling section 1); other
-# pages and Telegram are unchanged. The
+# web list and detail pages it sits in the collapsed price-notes panel (FD-22 ruling section 1
+# and package E); other pages and Telegram are unchanged. The
 # same flights can have several prices and ways to buy, and a missing mark proves nothing.
 ROUND_TRIP_NOTE = (
     "標示來自 Google，沒有標示不代表單張機票或含手提行李。"
@@ -1582,8 +1582,9 @@ class UiTexts:
     best_card_title: str = "已查到最低價"
     price_prefix: str = "查到"
     price_column: str = "查到價格"
-    # #43 (R10): visible once on every page with round-trip prices. On the web list page it
-    # sits in the collapsed price-notes panel (FD-22 ruling section 1); other pages unchanged.
+    # #43 (R10): visible once on every page with round-trip prices. On the web list and detail
+    # pages it sits in the collapsed price-notes panel (FD-22 ruling section 1 and package E);
+    # other pages unchanged.
     return_leg_explain: str = (
         "只列去程航班；回程需在 Google Flights 選擇，價格可能因回程不同而改變。"
     )
@@ -1605,7 +1606,20 @@ class UiTexts:
         "若一直沒有資料，請到「設定與健康」頁確認資料源狀態。"
     )
     # #15 (R7).
-    distribution_legend: str = "只含已取樣日期。顏色：綠＝較便宜三分之一、紅＝較貴三分之一。"
+    # FD-22 ruling section 2 (verbatim): the legend, the two corner words of a distribution
+    # cell (the middle third shows none) and the trend caption template.
+    distribution_legend: str = "只含已取樣日期。低＝較便宜三分之一、高＝較貴三分之一。"
+    heat_low: str = "低"
+    heat_mid: str = "中"
+    heat_high: str = "高"
+    trend_caption: str = "最高 {high}・最低 {low}（每點為一次掃描的最低價）"
+    # FD-22 ruling P10: label of the one group holding the record and diagnostic folds.
+    diagnostics_summary: str = "紀錄與診斷"
+    # FD-22 ruling M1 (verbatim): label of the fold holding the older notifications; N is the
+    # real number of folded entries. The log lists the newest 20 and folds the rest.
+    older_notifications: str = "顯示更早的通知（{count} 筆）"
+    # FD-22 ruling P13 (verbatim): opening line of the exploration page.
+    explore_intro: str = "每個出發日各查一次（最多 31 次），完成後顯示價格日曆。"
     # #17, #18.
     limit_reached_note: str = "日期組合超過單輪上限，本輪取樣查詢，下輪輪換。"
     global_limit_note: str = "已達每小時查詢上限，部分日期未查。"
@@ -1669,14 +1683,23 @@ def _short_taipei(moment: datetime) -> str:
     return format_taipei(moment)[5:].replace("-", "/")
 
 
-def fetched_range_label(first: datetime, last: datetime) -> str:
+def fetched_range_label(first: datetime, last: datetime, now: datetime | None = None) -> str:
     """Visible line above the exploration calendar (cells carry no time each):
-    "查到時間：11/01 14:31～14:33"; another day shows its date, one moment shows once."""
-    start, end = _short_taipei(min(first, last)), _short_taipei(max(first, last))
+    "查到時間：11/01 14:31～14:33"; another day shows its date, one moment shows once.
+    With ``now`` (detail page, FD-22 S1) an end that is not in the current Taipei year
+    shows the year on both ends, like the list-card time (P2)."""
+    low, high = min(first, last), max(first, last)
+    with_year = now is not None and any(
+        format_taipei(m)[:4] != format_taipei(now)[:4] for m in (low, high)
+    )
+    if with_year:
+        start, end, date_len = format_taipei(low), format_taipei(high), 10
+    else:
+        start, end, date_len = _short_taipei(low), _short_taipei(high), 5
     if start == end:
         return f"查到時間：{start}"
-    if start[:5] == end[:5]:
-        end = end[6:]
+    if start[:date_len] == end[:date_len]:
+        end = end[date_len + 1 :]
     return f"查到時間：{start}～{end}"
 
 

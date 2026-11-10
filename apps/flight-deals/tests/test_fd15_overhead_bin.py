@@ -251,11 +251,9 @@ def test_one_way_uses_its_own_wording(harness: Harness) -> None:
     for url in ("/", f"/watches/{watch_id}"):
         page = get(harness, url)
         assert ONE_WAY in page.html and ROUND_TRIP not in page.html, url
-        if url == "/":  # FD-22 ruling section 1: inside the collapsed panel on the list
-            assert page.count(OVERHEAD_BIN_NOTE) == 1
-            assert page.count_in_details(OVERHEAD_BIN_NOTE) == 1
-        else:
-            assert page.count_visible(OVERHEAD_BIN_NOTE) == 1, url
+        # FD-22 ruling section 1 and package E #40: inside the collapsed panel on both pages.
+        assert page.count(OVERHEAD_BIN_NOTE) == 1, url
+        assert page.count_in_details(OVERHEAD_BIN_NOTE) == 1, url
 
 
 def test_detail_main_card_and_unmarked_row(harness: Harness) -> None:
@@ -264,8 +262,8 @@ def test_detail_main_card_and_unmarked_row(harness: Harness) -> None:
     card = page.main.find_all("section", "price-card")[0]
     assert ROUND_TRIP in card.text()
     assert ROUND_TRIP not in card.find_all(None, "flight")[0].text()
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1
-    assert page.count_in_details(ROUND_TRIP_NOTE) == 0
+    # FD-22 package E #40: once, inside the collapsed panel.
+    assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
 
 
 def test_note_appears_for_a_label_only_in_the_other_pairs_table(harness: Harness) -> None:
@@ -279,7 +277,8 @@ def test_note_appears_for_a_label_only_in_the_other_pairs_table(harness: Harness
     card = page.main.find_all("section", "price-card")[0]
     assert ROUND_TRIP not in card.text()  # the cheapest pair is not marked
     assert ROUND_TRIP in page.html
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1
+    # FD-22 package E #40: once, inside the collapsed panel.
+    assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
 
 
 def test_note_appears_for_an_other_currency_row(harness: Harness) -> None:
@@ -288,7 +287,8 @@ def test_note_appears_for_an_other_currency_row(harness: Harness) -> None:
     page = get(harness, f"/watches/{watch_id}")
     assert not page.main.find_all("section", "price-card")
     assert ROUND_TRIP in page.html
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1
+    # FD-22 package E #40: once, inside the collapsed panel.
+    assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
 
 
 def test_note_stays_when_only_departed_rows_are_marked(harness: Harness) -> None:
@@ -297,7 +297,8 @@ def test_note_stays_when_only_departed_rows_are_marked(harness: Harness) -> None
     page = get(harness, f"/watches/{watch_id}")
     assert DETAIL_ALL_DEPARTED in page.html
     assert not page.main.find_all("section", "price-card")
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1
+    # FD-22 package E #40: once, inside the collapsed panel.
+    assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
     assert page.count_in_details(ROUND_TRIP) >= 1  # only the folded records show it
 
 

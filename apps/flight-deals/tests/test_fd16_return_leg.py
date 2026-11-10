@@ -612,8 +612,9 @@ def test_detail_card_shows_labels_and_return_flight(harness: Harness, lookup: Lo
     for flight in flights:
         assert SPLIT_TICKET_LABEL not in flight.text()
     assert SPLIT_TICKET_LABEL in card.text()
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1
-    assert page.count_visible(LISTED) == 1
+    # FD-22 package E #40: the return-leg sentences sit once in the collapsed panel.
+    assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
+    assert page.count(LISTED) == 1 and page.count_in_details(LISTED) == 1
     assert RETURN_EXPLAIN not in page.html
     assert OVERHEAD_BIN_NOTE not in page.html
 
@@ -630,16 +631,18 @@ def test_no_return_flight_keeps_the_old_sentence(harness: Harness, lookup: Looku
     watch_id = scanned(harness)
     page = get(harness, f"/watches/{watch_id}")
     assert len(page.main.find_all("section", "price-card")[0].find_all(None, "flight")) == 1
-    assert page.count_visible(RETURN_EXPLAIN) == 1 and LISTED not in page.html
+    # FD-22 package E #40: in the collapsed panel.
+    assert page.count(RETURN_EXPLAIN) == 1 and page.count_in_details(RETURN_EXPLAIN) == 1
+    assert LISTED not in page.html
 
 
 def test_unmarked_price_shows_nothing_but_keeps_the_note(harness: Harness, lookup: Lookup) -> None:
     watch_id = scanned(harness, flight=ONE_TICKET)
     page = get(harness, f"/watches/{watch_id}")
-    assert SPLIT_TICKET_LABEL not in page.html and "單張機票" not in page.html.replace(
-        ROUND_TRIP_NOTE, ""
-    )
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1
+    # FD-22 ruling section 2: the verbatim summary line says "單張機票" too.
+    leftover = page.html.replace(ROUND_TRIP_NOTE, "").replace(WEB_TEXTS.page_summary_round_trip, "")
+    assert SPLIT_TICKET_LABEL not in page.html and "單張機票" not in leftover
+    assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
 
 
 def test_list_mixes_return_flights(harness: Harness, lookup: Lookup) -> None:
@@ -651,7 +654,8 @@ def test_list_mixes_return_flights(harness: Harness, lookup: Lookup) -> None:
     harness.scan(other)
     page = get(harness, "/")
     # FD-22 ruling section 1: the list keeps these once, inside the collapsed panel.
-    assert page.count_in_details(LISTED) == 1 and RETURN_EXPLAIN not in page.html
+    assert page.count(LISTED) == 1 and page.count_in_details(LISTED) == 1
+    assert RETURN_EXPLAIN not in page.html
     assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
     cards = page.main.find_all(None, "watch-card")
     main_cards = [main_card(page, int(c.attrs["data-watch-id"])) for c in cards]
@@ -665,7 +669,8 @@ def test_list_with_one_way_and_round_trip_has_the_round_trip_note(
     priced_one_way(harness)
     page = get(harness, "/")
     # FD-22 ruling section 1: inside the collapsed panel on the list.
-    assert page.count_in_details(ROUND_TRIP_NOTE) == 1 and OVERHEAD_BIN_NOTE not in page.html
+    assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
+    assert OVERHEAD_BIN_NOTE not in page.html
 
 
 def test_one_way_marked_bag_keeps_its_own_note(harness: Harness) -> None:
@@ -676,7 +681,9 @@ def test_one_way_marked_bag_keeps_its_own_note(harness: Harness) -> None:
     )
     harness.scan(watch_id)
     page = get(harness, f"/watches/{watch_id}")
-    assert page.count_visible(OVERHEAD_BIN_NOTE) == 1 and ROUND_TRIP_NOTE not in page.html
+    # FD-22 package E #40: in the collapsed panel.
+    assert page.count(OVERHEAD_BIN_NOTE) == 1 and page.count_in_details(OVERHEAD_BIN_NOTE) == 1
+    assert ROUND_TRIP_NOTE not in page.html
 
 
 def test_summary_of_a_return_flight() -> None:

@@ -652,21 +652,25 @@ def test_route_line_keeps_codes_and_puts_full_names_in_title_and_sr_text(
 # ---- the detail page is untouched by the shared macros --------------------------------
 
 
-def test_detail_page_keeps_its_old_markers(harness: Harness) -> None:
+def test_detail_page_keeps_its_markers_in_the_round_two_form(harness: Harness) -> None:
+    """Round 1 left the detail page alone; round 2 (package E) gives it the same icon forms
+    while the words and the no-refresh-button rule stay (see test_fd22_detail_simplify)."""
     watch_id = marked_pairs(harness)
     harness.clock.advance(hours=200)
     page = get(harness, f"/watches/{watch_id}")
     main = page.main
-    # Full fetch time, no list-only icons, labels not recoloured.
-    assert "查到時間 2026-10-25 12:00" in page.html
-    assert not main.find_all("svg")
+    # P2: "查到 MM/DD HH:MM" with the prefix, never the old long form.
+    assert "查到 10/25 12:00" in page.html and "查到時間 2026-10-25 12:00" not in page.html
+    assert main.find_all("svg") and all(
+        s.attrs.get("aria-hidden") == "true" for s in main.find_all("svg")
+    )
     assert not main.find_all(None, "icon-btn") and not main.find_all("button", "refresh")
-    assert not [b for b in main.find_all("span", "badge") if "mark" in b.classes]
     stale = [b for b in main.find_all("span", "badge") if WEB_TEXTS.stale_badge in b.text()]
     assert stale and all(b.text() == WEB_TEXTS.stale_badge for b in stale)
-    # Outbound word and the party line stay as before.
+    # Outbound word stays; D#24 drops the party line next to a one adult economy round trip.
     assert any("去程" in f.text() for f in main.find_all("div", "flight"))
-    assert "來回總價・1 位成人・經濟艙" in main.find_all(None, "price-card")[0].text()
+    card_text = main.find_all(None, "price-card")[0].text()
+    assert "來回總價" in card_text and "1 位成人・經濟艙" not in card_text
     # DISCLAIMER stays outside every <details>.
     assert page.count_in_details(DISCLAIMER) == 0 and page.count(DISCLAIMER) == 1
 

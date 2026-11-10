@@ -493,7 +493,14 @@ def test_one_traveller_has_summary_lines_and_no_note_next_to_prices(harness: Har
     assert detail["watch"]["pax_summary"] == "1 位成人・經濟艙"
     for url in ("/", f"/watches/{watch_id}"):
         html = harness.client.get(url).text
-        assert "1 人總價" not in html and "1 位成人・經濟艙" in html, url
+        assert "1 人總價" not in html, url
+        # The party summary is in the list's collapsed conditions (FD-22 D#24). The detail
+        # page drops it next to the price too (FD-22 ruling D#24 applied to the detail page,
+        # task FD-22 round 2) and keeps the party in its watch settings fold.
+        if url == "/":
+            assert "1 位成人・經濟艙" in html, url
+        else:
+            assert "<dt>人數</dt><dd>1 位成人</dd>" in html and "<dt>艙等</dt>" in html, url
 
 
 def test_several_travellers_get_a_note_on_every_price(harness: Harness) -> None:

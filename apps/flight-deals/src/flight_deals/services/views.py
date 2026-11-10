@@ -30,6 +30,7 @@ from flight_deals.domain.messages import (
     coverage_text,
     date_range_text,
     date_range_weekday_text,
+    fetched_range_label,
     health_no_embedded_note,
     overhead_bin_label,
     reason_label,
@@ -187,6 +188,10 @@ def coverage_counts(checked: int, spec: WatchSpec, today: date) -> tuple[int, in
     if total <= 1:
         return None
     return min(checked, total), total
+
+
+# Notification log: how many entries show before the "older" fold (FD-22 ruling M1).
+NOTIFICATIONS_SHOWN = 20
 
 
 def coverage_label(checked: int, spec: WatchSpec, today: date) -> str | None:
@@ -526,6 +531,7 @@ class ViewService:
             "stops": "直飛" if obs.stops == 0 else (f"轉機 {obs.stops} 次" if obs.stops else "—"),
             "fetched_text": format_taipei(obs.fetched_at),
             "fetched_label": fetched_label(obs.fetched_at),
+            "fetched_short": fetched_short_label(obs.fetched_at, now),
             "stale": self._is_stale(obs.fetched_at, now, stale_hours),
             "source": source_label(obs.source),
             "source_key": obs.source,
@@ -906,7 +912,12 @@ class ViewService:
                 "id": watch.id,
                 "name": spec.name,
                 "route": route_label(spec.origin, spec.destination),
+                **route_view(spec),
                 "trip": TRIP_TYPE_LABELS[spec.trip_type],
+                # FD-22 D#24 on the detail page too: only one adult in economy drops the line.
+                "pax_default": (
+                    spec.adults == 1 and spec.children == 0 and spec.cabin == "economy"
+                ),
                 "date_mode": "固定日期" if spec.date_mode == "fixed" else "彈性窗",
                 "dates": dates_text(spec),
                 "depart_date": spec.depart_date.isoformat() if spec.depart_date else None,
@@ -953,6 +964,8 @@ class ViewService:
             "top": top,
             "best": top[0] if top else None,
             "coverage_label": coverage_label(len(priced), spec, taipei_date(now)),
+            # For the decorative coverage bar (same numbers as the label).
+            "coverage_counts": coverage_counts(len(priced), spec, taipei_date(now)),
             "is_round_trip": spec.trip_type == "round_trip",
             # Round-trip amounts and labels can still sit in the folded record table when
             # no price ranks (other currency, all departed); the note stays visible (FD-16).
@@ -968,6 +981,16 @@ class ViewService:
             "top_empty_note": DETAIL_ALL_DEPARTED if all_departed else None,
             "trend": trend,
             "distribution": distribution,
+            # FD-22 #42: one visible fetch-time range above the grid replaces the per-cell time.
+            "distribution_fetched_label": (
+                fetched_range_label(
+                    min(d["fetched_at"] for d in distribution),
+                    max(d["fetched_at"] for d in distribution),
+                    now,
+                )
+                if distribution
+                else None
+            ),
             "weekdays": weekdays,
             "recent_prices": recent_prices,
             "old_prices": old,
@@ -1024,6 +1047,10 @@ class ViewService:
             "height": CHART_HEIGHT,
             "low_text": low_text,
             "high_text": high_text,
+            # FD-22 ruling section 2 (verbatim template); empty without a drawn line.
+            "caption": (
+                WEB_TEXTS.trend_caption.format(high=high_text, low=low_text) if svg_points else ""
+            ),
         }
 
     def _distribution(
@@ -1057,6 +1084,7 @@ class ViewService:
                     "level": level,
                     "stale": self._is_stale(obs.fetched_at, now, stale_hours),
                     "fetched_text": format_taipei(obs.fetched_at),
+                    "fetched_at": obs.fetched_at,
                 }
             )
         by_weekday: dict[int, list[int]] = defaultdict(list)
@@ -1182,7 +1210,12 @@ class ViewService:
                     "text": record.message_text,
                 }
             )
-        return {"notifications": rows}
+        return {
+            "notifications": rows,
+            # FD-22 M1: newest first, cut by count only; the rest sits in one folded block.
+            "recent_notifications": rows[:NOTIFICATIONS_SHOWN],
+            "older_notifications": rows[NOTIFICATIONS_SHOWN:],
+        }
 
     def settings_page(self) -> dict[str, Any]:
         now = self._clock()

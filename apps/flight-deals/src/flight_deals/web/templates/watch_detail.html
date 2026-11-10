@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import ext_link, flight, price_labels, price_line, delta_badge, price_meta, fold, help_note with context %}
+{% from "_macros.html" import ext_link, flight, price_labels, price_line, delta_badge, price_meta, fold, help_note, icon with context %}
 {% block title %}{{ watch.name }}{% endblock %}
 {# The disclaimer sits next to the main price card; the footer copy is dropped (C-101). #}
 {% block footer_disclaimer %}{% endblock %}
@@ -19,12 +19,35 @@
     <button type="button" class="danger" data-action="delete-watch" data-watch-id="{{ watch.id }}" data-watch-name="{{ watch.name }}" data-redirect="/">刪除</button>
   </div>
 </div>
+{# Route line in the first-round form (FD-22 P4). A one-way route keeps "・單程", so a one
+   adult economy one-way price can drop its party line without losing the trip type. #}
+<p class="card-meta route-line" title="{{ watch.route_title }}"><span aria-hidden="true">{{ watch.route_text }}</span><span class="sr-only">{{ watch.route_sr }}</span></p>
 
+{# FD-22 risk ruling (package E #40): DISCLAIMER and one summary line stay visible above the
+   main card, outside any <details>. Coverage appears once, right under the summary. The rest
+   sits in the one collapsed price-notes panel. booking_hint stays under the main button and
+   delta_explain stays visible in the card. #}
 <div class="page-notes">
   <p class="disclaimer">{{ disclaimer }}</p>
-  {% if has_prices %}<p class="price-source-note">{{ ui.price_source_note }}</p>{% endif %}
-  {% if has_prices and not is_round_trip and (top + recent_prices)|selectattr("overhead_bin_label")|list %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
-  {% if has_prices %}<p class="sampled-note">{{ sampled_only_note }}{% if coverage_label %} <span class="coverage">{{ coverage_label }}</span>{% endif %}</p>{% endif %}
+  {% if has_prices %}
+  <p class="page-summary">{{ ui.page_summary_round_trip if is_round_trip else ui.page_summary_priced }}</p>
+  {% if coverage_label %}<div class="coverage-block">
+    <progress class="coverage-bar" value="{{ coverage_counts[0] }}" max="{{ coverage_counts[1] }}" aria-hidden="true"></progress>
+    <p class="coverage">{{ coverage_label }}</p>
+  </div>{% endif %}
+  <details class="notes-more">
+    <summary>{{ icon("i-chevron", "chevron") }}{{ ui.price_notes_summary }}</summary>
+    <div class="notes-more-body">
+      <p class="price-source-note">{{ ui.price_source_note }}</p>
+      <p class="sampled-note">{{ sampled_only_note }}</p>
+      {% if best and best.flight and best.flight.is_outbound_only %}<p class="return-explain">{{ ui.return_leg_explain_listed if best.return_flight else ui.return_leg_explain }}</p>
+      <p class="return-explain">{{ ui.round_trip_note }}</p>
+      {% elif round_trip_note_without_card %}<p class="return-explain">{{ ui.round_trip_note }}</p>
+      {% elif not is_round_trip and (top + recent_prices)|selectattr("overhead_bin_label")|list %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
+      <p class="time-explain">{{ ui.local_time_explain }}</p>
+    </div>
+  </details>
+  {% endif %}
 </div>
 
 {# The manual-check link sits in the no-price card; an ended watch has no date left to check. #}
@@ -48,50 +71,48 @@
         <span class="price-amount">{{ best.amount_text }}</span>
         {{ delta_badge(best_delta, "較前一輪 ") }}
       </div>
-      {{- price_labels(best.split_ticket_label, best.overhead_bin_label) }}
-      <div class="price-sub">{{ price_line(watch.price_caption, watch.pax_note, watch.pax_summary, watch.cabin_label) }}</div>
-      <div class="price-meta">{{ price_meta(best.fetched_label, best.stale, none, best.kind_badge, best.source_text) }}{% if best.currency_mismatch %} <span class="badge warn">幣別不符，不參與通知</span>{% endif %}</div>
-      <div class="price-dates">{{ best.dates_weekday }}</div>
+      {{- price_labels(best.split_ticket_label, best.overhead_bin_label, icons=true) }}
+      {%- set sub = price_line(watch.price_caption, watch.pax_note, watch.pax_summary, watch.cabin_label, default_pax=watch.pax_default) %}
+      {% if sub|trim %}<div class="price-sub">{{ sub }}</div>{% endif %}
+      <div class="price-meta">{{ price_meta(best.fetched_short, best.stale, none, best.kind_badge, best.source_text, icons=true) }}{% if best.currency_mismatch %} <span class="badge warn">幣別不符，不參與通知</span>{% endif %}</div>
+      <div class="price-dates">{{ icon("i-calendar") }}{{ best.dates_weekday }}</div>
     </div>
     <div class="flight-col">
-      {{ flight(best.flight) }}
-      {{ flight(best.return_flight) }}
+      {{ flight(best.flight, icons=true) }}
+      {{ flight(best.return_flight, icons=true) }}
     </div>
   </div>
-  {% if best.flight and best.flight.is_outbound_only %}<p class="return-explain">{{ ui.return_leg_explain_listed if best.return_flight else ui.return_leg_explain }}</p>
-  <p class="return-explain">{{ ui.round_trip_note }}</p>{% endif %}
   <div class="cta">
     {{ ext_link(best.booking_url or best.link, ui.booking_button, best.dates, "button primary cta-button") }}
     <p class="cta-hint">{{ ui.booking_hint }}</p>
     {% if best.booking_note %}<p class="hint">{{ best.booking_note }}</p>{% endif %}
   </div>
-  {# After the button: labels and the return flight must not push it off the phone's first screen. #}
-  <p class="flight-note">{{ ui.local_time_explain }}</p>
   {% if best_delta %}<div class="delta-explain"><p>{{ ui.delta_explain }}</p>{{ help_note(ui.delta_explain_detail) }}</div>{% endif %}
 </section>
 {% if source_note %}<p class="note muted source-note">{{ source_note }}</p>{% endif %}
 {% elif top_empty_note %}
 <p class="notice" id="top-empty-note">{{ top_empty_note }}</p>
 {% endif %}
-{% if round_trip_note_without_card %}<p class="return-explain">{{ ui.round_trip_note }}</p>{% endif %}
 {% if has_prices and not best and manual_check %}{{ help_note(ui.manual_check_explain) }}{% endif %}
 
+{#- FD-22 #41: the caption ("來回總價") is printed once under the block title, not in the head. -#}
 {% macro price_head() -%}
-<tr><th>日期</th><th>{{ ui.price_column }}{% if watch.price_caption %}<span class="th-sub">{{ watch.price_caption }}</span>{% endif %}</th><th>航班</th><th>連結</th></tr>
+<tr><th>日期</th><th>{{ ui.price_column }}</th><th>航班</th><th>連結</th></tr>
 {%- endmacro %}
 
+{#- On a phone the table becomes one card per row (.pair-table, app.css); every cell stays. -#}
 {% macro price_rows(rows) %}
 {% for p in rows %}
     <tr>
-      <td>{{ p.dates_weekday }}</td>
+      <td class="cell-dates">{{ icon("i-calendar") }}{{ p.dates_weekday }}</td>
       <td class="cell-price">
         <div class="cell-amount">{{ p.amount_text }}</div>
-        {{- price_labels(p.split_ticket_label, p.overhead_bin_label) }}
+        {{- price_labels(p.split_ticket_label, p.overhead_bin_label, icons=true) }}
         {% if watch.pax_note %}<div class="price-sub">{{ watch.pax_note }}</div>{% endif %}
-        <div class="price-meta">{{ price_meta(p.fetched_label, p.stale, none, p.kind_badge, p.source_text) }}</div>
+        <div class="price-meta">{{ price_meta(p.fetched_short, p.stale, none, p.kind_badge, p.source_text, icons=true) }}</div>
         {% if p.currency_mismatch %}<div><span class="badge warn">幣別不符，不參與通知</span></div>{% endif %}
       </td>
-      <td class="cell-flight">{{ flight(p.flight) }}</td>
+      <td class="cell-flight">{{ flight(p.flight, icons=true) }}</td>
       <td class="cell-link">{{ ext_link(p.booking_url or p.link, ui.booking_button_short, p.dates) }}{% if p.booking_note %}<div class="hint">{{ p.booking_note }}</div>{% endif %}</td>
     </tr>
 {% endfor %}
@@ -102,17 +123,18 @@
 {% set others = top[1:] %}
 <section class="card">
   <h2>{{ ui.other_pairs_title }}</h2>
+  {% if watch.price_caption %}<p class="price-caption">{{ watch.price_caption }}</p>{% endif %}
   {% if top_explain %}{{ help_note(top_explain) }}{% endif %}
-  <div class="table-wrap" tabindex="0" role="region" aria-label="其他日期組合（可橫向捲動）">
-  <table class="data flights">
+  <div class="table-wrap" tabindex="0" role="region" aria-label="其他日期組合">
+  <table class="data flights pair-table">
     <thead>{{ price_head() }}</thead>
     <tbody>{{ price_rows(others[:5]) }}</tbody>
   </table>
   </div>
   {% if others|length > 5 %}
   {% call fold("其餘日期組合", others[5:]|length) %}
-  <div class="table-wrap" tabindex="0" role="region" aria-label="其餘日期組合（可橫向捲動）">
-  <table class="data flights">
+  <div class="table-wrap" tabindex="0" role="region" aria-label="其餘日期組合">
+  <table class="data flights pair-table">
     <thead>{{ price_head() }}</thead>
     <tbody>{{ price_rows(others[5:]) }}</tbody>
   </table>
@@ -132,7 +154,7 @@
       <rect class="chart-bg" x="0" y="0" width="{{ trend.width }}" height="{{ trend.height }}"></rect>
       <polyline class="chart-line" points="{{ trend.svg_points }}"></polyline>
     </svg>
-    <figcaption class="muted">最高 {{ trend.high_text }}・最低 {{ trend.low_text }}（目前設定版本，每點為一次掃描的最低價）</figcaption>
+    <figcaption class="muted trend-caption">{{ trend.caption }}</figcaption>
   </figure>
   {% endif %}
   <details {% if not trend.svg_points %}open{% endif %}>
@@ -151,16 +173,24 @@
 <section class="card">
   <h2>依出發日的價格分布</h2>
   <p class="distribution-legend">{{ ui.distribution_legend }}</p>
+  {# Decorative key (FD-22 #43): each swatch sits next to its word. The sentence above and the
+     per-cell screen-reader text carry the meaning, so the key is hidden from readers. #}
+  <ul class="heat-key" aria-hidden="true">
+    <li><span class="heat-swatch heat-cheap"></span>{{ ui.heat_low }}</li>
+    <li><span class="heat-swatch heat-mid"></span>{{ ui.heat_mid }}</li>
+    <li><span class="heat-swatch heat-pricey"></span>{{ ui.heat_high }}</li>
+    <li>{{ icon("i-clock") }}{{ ui.stale_badge }}</li>
+  </ul>
+  {% if distribution_fetched_label %}<p class="price-time heat-range">{{ distribution_fetched_label }}</p>{% endif %}
   <div class="heat-grid">
     {% for d in distribution %}
     <div class="heat heat-{{ d.level }}" title="{{ d.depart }} {{ d.weekday }} {{ d.amount_text }}">
-      <div class="heat-date">{{ d.depart[5:] }} {{ d.weekday }}</div>
+      {% if d.level == "cheap" %}<span class="heat-rank" aria-hidden="true">{{ ui.heat_low }}</span>{% elif d.level == "pricey" %}<span class="heat-rank" aria-hidden="true">{{ ui.heat_high }}</span>{% endif %}
+      <div class="heat-date">{{ d.depart[5:]|replace("-", "/") }} {{ d.weekday }}{% if d.stale %}<span class="heat-clock">{{ icon("i-clock") }}<span class="sr-only">{{ ui.stale_badge }}</span></span>{% endif %}</div>
       <div class="heat-price">{{ d.amount_text }}</div>
       {% if watch.pax_note %}<div>{{ watch.pax_note }}</div>{% endif %}
-      <div class="heat-time">{{ d.fetched_text }}</div>
       <span class="sr-only">{% if d.level == "cheap" %}（較便宜三分之一）{% elif d.level == "pricey" %}（較貴三分之一）{% else %}（中段）{% endif %}</span>
-      {% if d.return %}<div class="muted">回 {{ d.return[5:] }}</div>{% endif %}
-      {% if d.stale %}<div class="badge warn">{{ ui.stale_badge }}</div>{% endif %}
+      {% if d.return %}<div class="muted">回 {{ d.return[5:]|replace("-", "/") }}</div>{% endif %}
     </div>
     {% endfor %}
   </div>
@@ -177,11 +207,22 @@
   {% endcall %}
   {% endif %}
 </section>
+{% endif %}
 
+{# FD-22 P10: the two limit sentences stay outside the folded group, always visible. #}
+{% if last_run %}
+{% if last_run.limit_reached %}<p class="notice">{{ ui.limit_reached_note }}</p>{% endif %}
+{% if last_run.global_limit_reached %}<p class="notice">{{ ui.global_limit_note }}</p>{% endif %}
+{% endif %}
+
+{% if has_prices or last_run or runs or old_prices %}
+{% call fold(ui.diagnostics_summary, none, "", "diagnostics") %}
+{% if has_prices %}
 {% call fold("最近價格紀錄", recent_prices|length) %}
   {% if retention_note %}<p class="muted">{{ retention_note }}</p>{% endif %}
-  <div class="table-wrap" tabindex="0" role="region" aria-label="最近價格紀錄（可橫向捲動）">
-  <table class="data compact flights">
+  {% if watch.price_caption %}<p class="price-caption">{{ watch.price_caption }}</p>{% endif %}
+  <div class="table-wrap" tabindex="0" role="region" aria-label="最近價格紀錄">
+  <table class="data compact flights pair-table">
     <thead>{{ price_head() }}</thead>
     <tbody>{{ price_rows(recent_prices) }}</tbody>
   </table>
@@ -190,8 +231,6 @@
 {% endif %}
 
 {% if last_run %}
-{% if last_run.limit_reached %}<p class="notice">{{ ui.limit_reached_note }}</p>{% endif %}
-{% if last_run.global_limit_reached %}<p class="notice">{{ ui.global_limit_note }}</p>{% endif %}
 {% call fold("本次取樣的日期組合", last_run.pairs|length, "組") %}
   <p>
     {{ last_run.started }}（{{ last_run.trigger }}）・{{ last_run.status }}・
@@ -240,6 +279,7 @@
 {% endcall %}
 {% endif %}
 
+{# The old-revision sentence stays with its table (risk ruling P10). #}
 {% if old_prices %}
 {% call fold("舊設定的價格紀錄", old_prices|length) %}
   <p class="muted">{{ ui.old_revision_note }}</p>
@@ -264,6 +304,8 @@
   </div>
 {% endcall %}
 {% endif %}
+{% endcall %}
+{% endif %}
 
 <details class="fold settings-fold">
   <summary><span class="fold-title">監看設定</span><span class="fold-sub">{{ watch.settings_summary }}</span></summary>
@@ -285,7 +327,6 @@
       <dt>去程出發時段</dt><dd>{{ watch.dep_window_label or "不限" }}</dd>
       <dt>此監看紀錄新低通知</dt><dd>{% if watch.notify_on_new_low %}開啟{% else %}關閉{% endif %}</dd>
       <dt>設定版本</dt><dd>第 {{ watch.revision }} 版</dd>
-      <dt>上次查價</dt><dd>{{ watch.last_scanned or ui.not_scanned }}</dd>
       {% if watch.consecutive_failed_scans %}<dt>連續查價失敗</dt><dd>{{ watch.consecutive_failed_scans }} 次</dd>{% endif %}
     </dl>
   </div>

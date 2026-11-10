@@ -1,32 +1,50 @@
 {% extends "base.html" %}
 {% block title %}通知紀錄{% endblock %}
-{# The log shows prices, so #46 sits next to the disclaimer here too (risk-gate M2). #}
+{# The log shows prices, so #46 sits next to the disclaimer here too (risk-gate M2). It is judged
+   on every notification, folded or not (FD-22 ruling M1 4c). #}
 {% block footer_disclaimer %}{{ disclaimer }}{% if notifications|rejectattr("price", "eq", "—")|list %}{{ ui.price_source_note }}{% endif %}{% endblock %}
-{% block content %}
-<div class="page-head"><h1>通知紀錄</h1></div>
-{% if not notifications %}
-<div class="empty"><p>尚無通知紀錄。</p><p class="muted">符合通知條件的價格、資料源異常告警與測試訊息都會記錄在這裡。</p></div>
-{% else %}
-<div class="table-wrap" tabindex="0" role="region" aria-label="通知紀錄（可橫向捲動）">
-<table class="data">
+
+{#- One table of notifications. On a phone each row is a four-line card (app.css, .stack-table):
+    time and type, watch and price, reason, result. Each cell holds a real label element (.n-label,
+    text = data-label + "："): hidden on desktop, screen-reader only for five cells on a phone,
+    visible for reason, result and tries. -#}
+{% macro log_table(items) %}
+<div class="table-wrap" tabindex="0" role="region" aria-label="通知紀錄">
+<table class="data stack-table notif-table">
   <thead>
     <tr><th>建立時間</th><th>監看</th><th>類型</th><th>觸發原因</th><th>價格</th><th>結果</th><th>嘗試</th><th>內容</th></tr>
   </thead>
   <tbody>
-  {% for n in notifications %}
+  {% for n in items %}
     <tr>
-      <td>{{ n.created }}{% if n.sent %}<div class="muted">送出 {{ n.sent }}</div>{% endif %}</td>
-      <td>{% if n.watch_id and n.watch != "（已刪除）" %}<a href="/watches/{{ n.watch_id }}">{{ n.watch }}</a>{% else %}{{ n.watch }}{% endif %}</td>
-      <td>{{ n.kind }}</td>
-      <td>{{ n.reasons }}</td>
-      <td class="num">{{ n.price }}{% if n.pax_note %}<div class="muted">{{ n.pax_note }}</div>{% endif %}{% if n.item_count > 1 %}<div class="muted">共 {{ n.item_count }} 筆</div>{% endif %}</td>
-      <td><span class="badge notif-{{ n.status_key }}">{{ n.status }}</span>{% if n.error %}<div class="muted error-text">{{ n.error }}</div>{% endif %}</td>
-      <td class="num">{{ n.attempts }}/{{ n.max_attempts }}</td>
-      <td><details><summary>查看</summary><pre class="message">{{ n.text }}</pre></details></td>
+      <td class="n-time" data-label="建立時間"><span class="n-label">建立時間：</span><span class="n-created">{{ n.created }}</span>{% if n.sent %}<div class="muted n-sent">送出 {{ n.sent }}</div>{% endif %}</td>
+      <td class="n-watch" data-label="監看"><span class="n-label">監看：</span>{% if n.watch_id and n.watch != "（已刪除）" %}<a href="/watches/{{ n.watch_id }}">{{ n.watch }}</a>{% else %}{{ n.watch }}{% endif %}</td>
+      <td class="n-kind" data-label="類型"><span class="n-label">類型：</span><span class="n-kind-chip">{{ n.kind }}</span></td>
+      <td class="n-reason" data-label="觸發原因"><span class="n-label">觸發原因：</span>{{ n.reasons }}</td>
+      <td class="num n-price{% if n.price == "—" %} n-noprice{% endif %}" data-label="價格"><span class="n-label">價格：</span><span class="n-amount">{{ n.price }}</span>{% if n.pax_note %}<div class="muted">{{ n.pax_note }}</div>{% endif %}{% if n.item_count > 1 %}<div class="muted">共 {{ n.item_count }} 筆</div>{% endif %}</td>
+      <td class="n-result" data-label="結果"><span class="n-label">結果：</span><span class="badge notif-{{ n.status_key }}">{{ n.status }}</span>{% if n.error %}<div class="muted error-text">{{ n.error }}</div>{% endif %}</td>
+      <td class="num n-tries" data-label="嘗試"><span class="n-label">嘗試：</span>{{ n.attempts }}/{{ n.max_attempts }}</td>
+      <td class="n-body" data-label="內容"><span class="n-label">內容：</span><details><summary>查看</summary><pre class="message">{{ n.text }}</pre></details></td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head"><h1>通知紀錄</h1></div>
+{% if not notifications %}
+<div class="empty"><p>尚無通知紀錄。</p><p class="muted">符合通知條件的價格、資料源異常告警與測試訊息都會記錄在這裡。</p></div>
+{% else %}
+{{ log_table(recent_notifications) }}
+{% if older_notifications %}
+<details class="fold older-notifications">
+  <summary><span class="fold-title">{{ ui.older_notifications.format(count=older_notifications|length) }}</span></summary>
+  <div class="fold-body">
+  {{ log_table(older_notifications) }}
+  </div>
+</details>
+{% endif %}
 {% endif %}
 {% endblock %}
