@@ -199,13 +199,19 @@ def test_read_only_uri_does_not_create_a_missing_file(tmp_path: Path) -> None:
     assert lines == [f"{label}\tERROR" for label in ALL_LABELS]
 
 
-def test_path_with_special_characters_is_opened(tmp_path: Path) -> None:
-    folder = tmp_path / "a b#c?d%"
+@pytest.mark.parametrize(
+    "folder_name", ["a b#c?d%", "含 中文?#路徑", "x?mode=rw#y", " lead trail "]
+)
+def test_path_with_special_characters_is_opened(tmp_path: Path, folder_name: str) -> None:
+    folder = tmp_path / folder_name
     folder.mkdir()
     path = folder / "x.db"
     with closing(sqlite3.connect(path)) as conn, conn:
         for statement in _SCHEMA:
             conn.execute(statement)
+    uri = runner.read_only_uri(str(path))
+    assert uri == path.resolve().as_uri() + "?mode=ro"
+    assert uri.count("?") == 1 and "#" not in uri and " " not in uri
     assert results(path)["P-1"] == "0"
 
 
@@ -226,15 +232,37 @@ def test_output_has_one_tab_separated_line_per_item_and_no_symbol(db: Path) -> N
     for i, symbol in enumerate(seeded):
         add_batch(db, symbol, i + 1, "bogus")
         add_symbol(db, symbol, 7)
+    # Symbols flagged high_volatility = 1: exactly what p4b_LOCAL_ONLY.sql would list.
+    flagged = ["HVONE1", "HVONE2", "6488"]
+    for symbol in flagged:
+        add_symbol(db, symbol, 1)
+    with closing(sqlite3.connect(db)) as conn:
+        p4b_sql = (PREFLIGHT_DIR / "p4b_LOCAL_ONLY.sql").read_text(encoding="utf-8")
+        listed = {row[0] for row in conn.execute(p4b_sql)}
+    assert set(flagged) <= listed  # sanity: p4b would leak these, so this test can discriminate
     lines, ok = runner.run(str(db))
     assert ok and len(lines) == len(ALL_LABELS)
     text = "\n".join(lines)
-    for symbol in seeded:
+    for symbol in seeded + flagged:
         assert symbol not in text
     for line in lines:
         label, value = line.split("\t")
         assert re.fullmatch(r"[0-9]+(,[0-9]+)*", value), line
         assert label in ALL_LABELS
+
+
+def test_items_is_a_fixed_tuple_and_the_runner_never_scans_a_directory() -> None:
+    assert isinstance(runner.ITEMS, tuple)
+    assert all(isinstance(entry, tuple) for entry in runner.ITEMS)
+    tree = ast.parse(RUNNER_PATH.read_text(encoding="utf-8"))
+    banned = {"glob", "rglob", "listdir", "iterdir", "scandir", "walk", "fnmatch"}
+    used = {
+        node.attr if isinstance(node, ast.Attribute) else node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute | ast.Name)
+    }
+    assert not used & banned
+    assert not any("p4b" in stem.lower() for _, stem in runner.ITEMS)
 
 
 def test_cli_prints_lines_and_exits_zero(db: Path) -> None:
@@ -447,6 +475,64 @@ def test_p3_header_states_its_pre_deployment_scope_and_has_no_entry_stopped_cond
     assert "must NOT be used again to decide R-14" in head
     code = "\n".join(line for line in text.splitlines() if not line.startswith("--"))
     assert "entry_stopped" not in code
+
+
+# --- runner output: multi-value lines ---------------------------------------------------
+
+
+def test_multi_value_lines_are_pinned_verbatim(db: Path) -> None:
+    _fill(db, "A", [1, 2, 3, 4])  # max above bpt
+    _fill(db, "B", [2, 3])  # min is 2
+    _fill(db, "C", [0, 1, 2])  # min below 1
+    _fill(db, "D", [1, 3])  # gap
+    add_params(db, 1, PAST, make_params(n_targets=9))
+    lines, ok = runner.run(str(db))
+    assert ok
+    # P-2 order: max_gt_bpt,min_ne_1,min_lt_1,gaps,non_integer_rows ; P-3: symbols,n_targets
+    assert lines[1] == "P-2\t1,2,1,1,0"
+    assert lines[4] == "P-3\t4,9"
+
+
+def test_runner_docstring_documents_the_cell_order() -> None:
+    doc = runner.__doc__ or ""
+    assert "``max_gt_bpt,min_ne_1,min_lt_1,gaps,non_integer_rows``" in doc
+    assert "``distinct_symbols,n_targets``" in doc
+    assert "type(v) is int" in doc
+
+
+@pytest.mark.parametrize(
+    "select",
+    [
+        "SELECT 1, NULL, 3, 4, 5",
+        "SELECT 1, 'x', 3, 4, 5",
+        "SELECT 1, 2.5, 3, 4, 5",
+        "SELECT 1, 2, 3, 4, x'01'",
+        "SELECT NULL",
+    ],
+)
+def test_any_bad_cell_turns_the_whole_line_into_error(
+    db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    select: str,
+) -> None:
+    fake = tmp_path / "fake"
+    fake.mkdir()
+    (fake / "p2.sql").write_text(select + ";", encoding="utf-8")
+    monkeypatch.setattr(runner, "SQL_DIR", fake)
+    lines, ok = runner.run(str(db))
+    assert not ok
+    assert lines[1] == "P-2\tERROR"
+    assert runner.main([str(db)]) == 1
+    assert capsys.readouterr().out.splitlines()[1] == "P-2\tERROR"
+
+
+def test_bool_cell_is_not_an_integer() -> None:
+    for row in ((True, 1), (1, False), (1.0,), ("1",), (None, 1)):
+        with pytest.raises(ValueError):
+            runner._format_row(row)
+    assert runner._format_row((1, 0, 12)) == "1,0,12"  # comma only, no spaces
 
 
 # --- P-1 --------------------------------------------------------------------------------
@@ -787,3 +873,94 @@ def test_p9_property_equivalence_with_python_rules(db: Path) -> None:
             conn.execute("INSERT INTO playbook_symbols (symbol) VALUES (?)", (symbol,))
             assert runner.run_item(conn, "p9a") == ("1" if symbol.endswith("K") else "0"), symbol
             assert runner.run_item(conn, "p9c") == ("1" if p9c_expected(symbol) else "0"), symbol
+
+
+# --- the error path never leaks (F3, F4, TA A-leak c) -----------------------------------
+
+TOKEN = "SECRETPATHTOKEN"
+
+
+def _cli(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-I", str(RUNNER_PATH), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _assert_clean(done: subprocess.CompletedProcess[str]) -> None:
+    assert done.returncode != 0
+    assert done.stderr == ""
+    assert TOKEN not in done.stdout
+    assert "Traceback" not in done.stdout
+    for line in done.stdout.splitlines():
+        assert line.endswith("\tERROR"), line
+        assert "/" not in line
+
+
+def test_cli_missing_file_prints_no_path_and_empty_stderr(tmp_path: Path) -> None:
+    missing = tmp_path / TOKEN / "absent.db"
+    done = _cli(str(missing))
+    _assert_clean(done)
+    assert len(done.stdout.splitlines()) == len(ALL_LABELS)
+    assert not missing.parent.exists()
+
+
+def test_cli_corrupt_file_prints_no_path_and_empty_stderr(tmp_path: Path) -> None:
+    junk = tmp_path / f"{TOKEN}.db"
+    junk.write_bytes(b"not a database" * 50)
+    _assert_clean(_cli(str(junk)))
+
+
+def test_cli_directory_as_db_path_prints_no_path_and_empty_stderr(tmp_path: Path) -> None:
+    folder = tmp_path / TOKEN
+    folder.mkdir()
+    _assert_clean(_cli(str(folder)))
+
+
+def test_cli_empty_file_is_an_error_not_a_zero(tmp_path: Path) -> None:
+    empty = tmp_path / f"{TOKEN}.db"
+    empty.write_bytes(b"")
+    done = _cli(str(empty))
+    _assert_clean(done)
+    assert done.stdout.splitlines() == [f"{label}\tERROR" for label in ALL_LABELS]
+
+
+def test_cli_very_long_path_prints_no_path_and_empty_stderr(tmp_path: Path) -> None:
+    _assert_clean(_cli(str(tmp_path / (TOKEN * 80) / "x.db")))
+
+
+def test_nul_in_path_is_an_error_without_traceback(capsys: pytest.CaptureFixture[str]) -> None:
+    assert runner.main([f"/tmp/{TOKEN}\x00/x.db"]) != 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert TOKEN not in captured.out
+    assert "Traceback" not in captured.out
+    assert all(line.endswith("\tERROR") for line in captured.out.splitlines())
+
+
+def test_catch_all_prints_only_the_fixed_string(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def boom(db_path: str) -> tuple[list[str], bool]:
+        raise RuntimeError(f"/secret/{TOKEN}/path 2330")
+
+    monkeypatch.setattr(runner, "run", boom)
+    assert runner.main(["whatever.db"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == runner.ABORTED_LINE + "\n"
+    assert captured.err == ""
+
+
+def test_catch_all_covers_read_only_uri(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def boom(db_path: str) -> str:
+        raise RuntimeError(TOKEN)
+
+    monkeypatch.setattr(runner, "read_only_uri", boom)
+    assert runner.main(["whatever.db"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert TOKEN not in captured.out

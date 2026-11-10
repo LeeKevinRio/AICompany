@@ -7,12 +7,23 @@ Run by the CEO on the local machine, against the real DB, before N-207 is deploy
 Contract (TA v3 supplement 9):
 
 * standard library only; no app import, no network;
-* the DB is opened read-only through a ``file:<db>?mode=ro`` URI, so a write attempt fails;
-* one line per item, ``<item>\\t<value>``; a multi-value item (P-2, P-3) joins its values
-  with commas; boolean items print 0 or 1;
+* the DB is opened read-only through ``Path(db).resolve().as_uri() + "?mode=ro"``, so a
+  write attempt fails and no path character is read as URI syntax;
+* one line per item, ``<item>\\t<value>``; boolean items print 0 or 1;
+* a multi-value item joins its cells with ``,`` and no spaces, in this fixed order:
+
+  - P-2 = ``max_gt_bpt,min_ne_1,min_lt_1,gaps,non_integer_rows``
+    (symbols whose MAX(batch_no) > bpt, MIN(batch_no) <> 1, MIN(batch_no) < 1, with a gap;
+    then rows whose batch_no is not an INTEGER);
+  - P-3 = ``distinct_symbols,n_targets``;
+
+* every cell must satisfy ``type(v) is int`` (bool does not count); if any cell is NULL or
+  not an integer the whole line prints ``<item>\\tERROR``;
 * a failing item prints ``<item>\\tERROR`` and the exit status is 1 -- an error is never
   printed as 0, and an incomplete inventory is not a clean one;
-* never prints a symbol or an amount; error details are not echoed either;
+* never prints a symbol or an amount; error details are not echoed either, and ``main``
+  has a catch-all that prints only the fixed string :data:`ABORTED_LINE` (no exception text,
+  no traceback, no path) and exits non-zero;
 * ``p4b_LOCAL_ONLY.sql`` lists symbols and is deliberately not in :data:`ITEMS`.
 """
 
@@ -23,7 +34,6 @@ import sys
 from collections.abc import Sequence
 from contextlib import closing
 from pathlib import Path
-from urllib.parse import quote
 
 SQL_DIR = Path(__file__).resolve().parent
 
@@ -46,12 +56,13 @@ ITEMS: tuple[tuple[str, str], ...] = (
 )
 
 ERROR = "ERROR"
+#: The only thing printed when something unexpected escapes; never any exception detail.
+ABORTED_LINE = f"PREFLIGHT\t{ERROR}"
 
 
 def read_only_uri(db_path: str) -> str:
     """``file:`` URI that opens ``db_path`` with ``mode=ro`` (never creates the file)."""
-    absolute = Path(db_path).resolve().as_posix()
-    return f"file:{quote(absolute, safe='/')}?mode=ro"
+    return Path(db_path).resolve().as_uri() + "?mode=ro"
 
 
 def _format_row(row: Sequence[object]) -> str:
@@ -80,7 +91,7 @@ def run(db_path: str) -> tuple[list[str], bool]:
     ok = True
     try:
         conn = sqlite3.connect(read_only_uri(db_path), uri=True)
-    except sqlite3.Error:
+    except (sqlite3.Error, ValueError, OSError):
         return [f"{label}\t{ERROR}" for label, _ in ITEMS], False
     with closing(conn):
         for label, stem in ITEMS:
@@ -97,7 +108,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if len(args) != 1:
         print("usage: run_preflight.py <db path>", file=sys.stderr)
         return 2
-    lines, ok = run(args[0])
+    try:
+        lines, ok = run(args[0])
+    except Exception:  # deliberate catch-all: never echo detail or traceback
+        print(ABORTED_LINE)
+        return 1
     for line in lines:
         print(line)
     return 0 if ok else 1
