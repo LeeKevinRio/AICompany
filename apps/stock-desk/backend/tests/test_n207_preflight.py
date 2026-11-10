@@ -964,3 +964,52 @@ def test_catch_all_covers_read_only_uri(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert TOKEN not in captured.out
+
+
+# --- P-8b (RC-110 item 1) ---------------------------------------------------------------
+
+
+def test_p8b_empty_tables_answer_zero(db: Path) -> None:
+    assert run_sql(db, "p8b") == "0"
+    assert results(db)["P-8b"] == "0"
+
+
+def test_p8b_confirmed_without_total_deploy_key_is_one(db: Path) -> None:
+    set_state(db, "rule_set_confirmed_at")  # A8 state: confirmed, no total_deploy key
+    assert run_sql(db, "p8b") == "1"
+    assert results(db)["P-8b"] == "1"
+
+
+def test_p8b_a_parameter_row_also_counts_as_confirmed(db: Path) -> None:
+    add_params(db, 1, PAST, make_params())
+    assert run_sql(db, "p8b") == "1"
+
+
+def test_p8b_confirmed_with_total_deploy_key_is_zero(db: Path) -> None:
+    set_state(db, "rule_set_confirmed_at")
+    set_state(db, "total_deploy")
+    assert run_sql(db, "p8b") == "0"
+
+
+def test_p8b_total_deploy_key_alone_is_zero(db: Path) -> None:
+    set_state(db, "total_deploy")
+    assert run_sql(db, "p8b") == "0"
+
+
+def test_p8b_sql_error_is_an_error_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = tmp_path / "partial.db"
+    with closing(sqlite3.connect(path)) as conn, conn:
+        conn.execute(_SCHEMA[0])  # playbook_batches only: playbook_state is missing
+    assert runner.main([str(path)]) == 1
+    out = dict(line.split("\t") for line in capsys.readouterr().out.splitlines())
+    assert out["P-8b"] == "ERROR"
+
+
+def test_p8b_is_wired_after_p8_and_literals_match_the_store() -> None:
+    from app.playbook import store
+
+    labels = [label for label, _ in runner.ITEMS]
+    assert labels.index("P-8b") == labels.index("P-8") + 1
+    sql = (PREFLIGHT_DIR / "p8b.sql").read_text(encoding="utf-8")
+    assert f"'{store.STATE_RULE_SET_CONFIRMED_AT}'" in sql
+    assert f"'{store.STATE_TOTAL_DEPLOY}'" in sql
