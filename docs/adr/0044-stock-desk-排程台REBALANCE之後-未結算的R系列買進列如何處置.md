@@ -3,7 +3,7 @@
 - 狀態：accepted（CEO #137 於 2026-11-10 核可，原文：「核可（Recommended）。ADR-0044 改為 accepted，內容依寫法 A、時序選項 1、選擇修正。殘留 R-a～R-g 全部已有裁示。N-210a、N-210b 可以開工」）
   - 狀態變更紀錄：本 ADR 原為 proposed；2026-11-10 CEO #137 核可後改為 accepted。同次修訂：store 方法暫稱由 portfolio_with_stamp 改為 portfolio_and_stamp，語意不變（dev-lead v3.1 交件要求，避免和既有命名衝突；第 89 行、第 362 行，於 accepted 之前的同一次修訂一起做）。來源：`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` #137。
   - 2026-11-10 append 補充一（註記 1、2；風控 RC-96～RC-103，tech-architect 確認不改 Decision）。
-  - 2026-11-10 標題用字同步：「Decision（決策，proposed）」改為「Decision（決策）」，與檔頭 accepted 一致，不涉及語意。來源：`work/reviews/2026-11-10-RC103確認與ADR0044註記-tech-architect.md` 第二段 D。
+  - 2026-11-10 標題用字同步：Decision 標題移除殘留的 proposed 字樣，改為「Decision（決策）」，與檔頭 accepted 一致，不涉及語意。來源：`work/reviews/2026-11-10-RC103確認與ADR0044註記-tech-architect.md` 第二段 D。
 - 日期：2026-11-10（修訂一，同日：併入風控 C-1～C-9，增列 (iii-c)、R-f、R-g；定稿，同日：併入風控 RC-52 三項 required 與 suggested、RC-53 條件 1～3、RC-53 時序選擇）
 - 決策者：
   - tech-architect：草案、修訂一、定稿；
