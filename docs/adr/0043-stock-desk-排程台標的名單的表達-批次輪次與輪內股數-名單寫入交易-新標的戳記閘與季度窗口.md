@@ -18,7 +18,7 @@
   - [PRD]：`stock-desk-排程台標的設定-PRD.md`（draft v2，以 v3 為準）
   - [N203]：`reviews/2026-11-08-N203排程台標的寫入路徑查證-dev-lead.md`
   - [TA-197]：`reviews/2026-11-07-N177規格修訂四與N197分析-tech-architect.md`（3.8～3.9，N-197a 規格與 `TotalDeployStamp`）
-  - [決策包]：`dispatch/2026-10-17-決策包二補遺-新增CEO事項.md`（#119～#125、#128～#132 與「#123 知悉事項」列）
+  - [決策包]：`dispatch/2026-10-17-決策包二補遺-新增CEO事項.md`（#119～#125、#128～#135 與「#123 知悉事項」列）
   - [風控-207]：`reviews/2026-11-09-N207與ADR0043審查-風控.md`（R-1～R-18）
   - [風控-D7]：`reviews/2026-11-10-D7修訂確認與W25f裁示-風控.md`（RC-75～RC-83）
   - [風控-W25f]：`reviews/2026-11-10-W25f定稿與H2判定-風控.md`（RC-84～RC-88）
@@ -714,7 +714,7 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
 
 來源：`work/reviews/2026-11-10-ADR0043D7修訂定稿v2全文-tech-architect.md` 的 D 塊（tech-architect，2026-11-10；qa-reviewer 核對 PASS）。
 
-**N207-C21 替換全文**（取代修一檔「修一-4」的 N207-C21；依第二段 C 的判定，CEO #131 不影響這一條，原文照用）：
+**N207-C21 替換全文**（取代修一檔「修一-4」的 N207-C21；依 CEO #131（D7 第 2 點 `_read_high_volatility` 的整檔退回規則）判定，CEO #131 不影響這一條，原文照用）：
 
 > **N207-C21 `high_volatility` 的執行期解析（BLOCKING）**
 > - **單一解析函式**：依 ADR-0043 D7 第 2 點，使用 `app/playbook/store.py` 的 `parse_high_volatility_flag(raw: object) -> int`，本體與 AST 檢查依該點「單一性檢查」1～7 項。原定的 `high_volatility_marked` 撤回，app/ 內出現次數為 0。
