@@ -364,7 +364,7 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
      - 資料落後的那幾天（until < 台北今日，但 data_date ≤ until），名單入口已放行，engine 仍處於凍結。
      - 這比 FR-40 的字面寬，但不會增加買進：engine 照樣壓住 R 系列，新批次也還在閘後。
      - CEO 要在本 ADR 改為 accepted 之前，明示回答 Q-C11；這不擋 proposed 落檔。
-     - 名單頁的事實說明句（風控 suggested，例如「今日頁的凍結以資料日判定，資料更新後才解除；名單變更不會讓凍結提早解除」）交 PM 與 creative-lead。
+     - 名單頁的事實說明句：常駐，條件式規則陳述（風控 2026-11-10 RC-31；字面由 creative-lead 擬、風控逐字定稿）。
    - 判定不儲存（ADR-0033 C-9）。這不是 ADR-0034 VETO-1 所禁止的「以讀取時比較 `emergency_until` 推導標示」，因為本處是寫入前置條件，不是批次標示。
    - 本次評估剛觸發、尚未寫入的 S3 讀不到，視同「名單先、評估後」的循序結果。
 7. **防守模式**不屬於 FR-40 所稱的組合凍結，本 ADR 不納入；要納入另裁。
