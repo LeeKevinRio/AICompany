@@ -257,7 +257,7 @@
 - **Q-5**（問 CEO，**PM 預設，不阻擋**）：入口是否要保留「最近一次 REBALANCE 結果」的常駐顯示？**PM 預設**：v0 只呈現當次結果；歷史顯示列為後續需求。
 - **Q-8**（**風控 2026-11-10 定稿：重算部署資金（REBALANCE）**，RC-33）：REBALANCE 入口的按鈕名稱（對應 N-207 字面草稿的 `{REBALANCE_ENTRY}`）。
   - **定稿名稱：「重算部署資金（REBALANCE）」**（PM 建議被風控採用；與 `RuleSetConfirmPanel` 的「部署資金（TOTAL_DEPLOY）」同詞）。依據：現有排程台用詞是「動詞加受詞」（既有按鈕「確認規則集並設定資本額」），且已把 TOTAL_DEPLOY 稱為「部署資金（TOTAL_DEPLOY）」（`RuleSetConfirmPanel.tsx`），沿用同一詞彙，使用者不必另學一個名詞；括號保留 REBALANCE，與 N-207 待生效說明句的「重算 TOTAL_DEPLOY（REBALANCE）」對得上。
-  - **備選名稱：「執行 REBALANCE」**。較短，但沒有說明它做什麼，使用者須先知道 REBALANCE 的意思。
+  - **備選名稱：「執行 REBALANCE」**。較短，但沒有說明它做什麼，使用者須先知道 REBALANCE 的意思。風控未採（沒有說出動作內容）。
   - 限制自查：只陳述動作；不含時機暗示與催促；不含「建議」「立即」「現在」；不含「季末」（FR-12 規定「季末」只能出現在操作說明，不放入名稱）。
   - **RC-33 條件（風控 2026-11-10，已寫入 FR-28、AC-32）**：
     1. 代入句子時一律用「」標出入口名稱（N-207 的 W-15a、W-12b 等句式由 creative-lead 避免名稱重複）。
@@ -265,12 +265,19 @@
     3. 名稱一經定稿，N-207 與 N-209 都只用這一個版本；日後要改名，就重送風控。
   - 名稱屬面向使用者字面，已由風控定稿；定稿後 N-207 字面的 `{REBALANCE_ENTRY}` 與本 PRD 的按鈕文字須為同一名稱（N207-M4，只有一個版本）。
 
-**待 CEO 回答**：Q-7（authorship 閘，與風控共同裁決，影響字面定稿）；Q-5 為選答，不答則依預設。N-209b 為 coordinator 定案，CEO 可推翻（FR-19）。
+### 新增（v1.3）
+
+- **Q-9**（問 risk-compliance-officer）：RC-19、RC-25 要求新 status 訊息「不得出現『已執行』『重算』」；而 RC-33 定稿的入口名稱「重算部署資金（REBALANCE）」含「重算」。請確認禁用範圍是「不得宣稱已重算」，還是訊息內文完全不得出現「重算」二字；若為後者，訊息將無法引用入口名稱，creative-lead 擬稿前需要這個答案。PM 不自行解讀。
+- **Q-10**（問 risk-compliance-officer、tech-architect）：RC-35（規則集未確認時，畫面若顯示 `total_deploy_2f`，須同時顯示來源與設定時間，做不到就不顯示）寫在 N-207 脈絡。N-209 確認畫面（FR-4）與 `unauthored` 之外的結果畫面也會顯示 TOTAL_DEPLOY 與設定時間，甲案前舊 DB 的 TD 紀錄同樣可能來源為 `quarterly_rebalance`。RC-35 是否同樣適用 N-209？若適用，FR-4、AC-04 在該情況下的「必列」義務須改寫（可能構成對 AC-04 的限縮，須風控明示）。PM 未自行擴大適用。
+- **Q-11**（問 tech-architect）：現金鍵不存在 status 的名稱（風控例示 `cash_unrecorded`）；FR-9、FR-10、FR-26、AC-17、AC-29 以「現金未記錄 status」暫稱，定名後替換。
+
+**待 CEO 回答**：Q-7 已裁決（甲）。Q-5 為選答，不答則依預設。N-209b 為 coordinator 定案，CEO 可推翻（FR-19）。RC-25 第 6 點的恢復路徑缺口，待 TA 回報後由 coordinator 列給 CEO（FR-26）。N-210 評估完成後，請 CEO 決定修正或接受殘留（FR-27）。
 
 ## 附：交接資訊
 
 - PRD 定稿後交 tech-architect 做技術評估（Q-3、Q-4），再交 frontend-engineer／dev-lead。
 - 字面清單交 creative-lead 擬稿，經 coordinator 送 risk-compliance-officer 逐字定稿（有否決權）。
 - AC 同步給 qa-reviewer、qa-automation、qa-e2e；UI 完成須 qa-e2e 實機驗收。
-- N-207 PRD v3 已引用本單（FR-48、AC-76）；本單 AC-16 與其對應。
+- N-207 PRD v3.3 已引用本單（FR-48、AC-76、FR-50、AC-84）；本單 AC-16、AC-31 與其對應。
+- v1.3 通知對象：tech-architect（FR-25、FR-26、N-210、Q-10、Q-11）、creative-lead（FR-9、FR-23、FR-24、FR-2 (b)、FR-28 字面）、risk-compliance-officer（Q-9、Q-10、全部字面定稿）、qa-reviewer／qa-automation／qa-e2e（AC-28～AC-32 與改寫的 AC-06、AC-16、AC-17、AC-25、AC-26）、coordinator（N-210 登錄、時序、恢復路徑缺口）。
 - 本 PRD 為 draft，未 commit。
