@@ -318,11 +318,13 @@ def test_multi_row_result_is_an_error(
 
 def _default_literal(stem: str, key: str) -> int:
     sql = (PREFLIGHT_DIR / f"{stem}.sql").read_text(encoding="utf-8")
-    found = re.findall(
-        rf"COALESCE\(\(SELECT json_extract\(payload, '\$\.{key}'\) FROM cur\), (\d+)\)", sql
+    no_row = re.findall(r"WHEN NOT EXISTS \(SELECT 1 FROM cur\) THEN (\d+)", sql)
+    absent = re.findall(
+        rf"WHEN json_type\(\(SELECT payload FROM cur\), '\$\.{key}'\) IS NULL THEN (\d+)", sql
     )
-    assert len(found) == 1, (stem, key)
-    return int(found[0])
+    assert len(no_row) == 1 and len(absent) == 1, (stem, key)
+    assert no_row == absent  # "no current row" and "key absent" use the same default
+    return int(absent[0])
 
 
 @pytest.mark.parametrize(
@@ -351,6 +353,100 @@ def test_current_parameter_row_selection_matches_active_params(stem: str) -> Non
         "WHERE effective_date <= date('now', '+8 hours') "
         "ORDER BY effective_date DESC, version DESC LIMIT 1"
     ) in sql
+
+
+# --- A-7: parameter guard (json_type) --------------------------------------------------
+
+GUARD_CASES = [
+    ("p1", "batches_per_target", 3),
+    ("p2", "batches_per_target", 3),
+    ("p3", "n_targets", 5),
+]
+LABEL_OF = {"p1": "P-1", "p2": "P-2", "p3": "P-3"}
+
+
+def _line_of(db_path: Path, stem: str) -> tuple[str, bool]:
+    lines, ok = runner.run(str(db_path))
+    out = dict(line.split("\t") for line in lines)
+    return out[LABEL_OF[stem]], ok
+
+
+@pytest.mark.parametrize(("stem", "key", "default"), GUARD_CASES)
+@pytest.mark.parametrize("raw", ["null", "true", "false", "3.0", "5.5", '"3"', "[3]", '{"a": 1}'])
+def test_guard_non_integer_key_is_an_error(
+    db: Path, stem: str, key: str, default: int, raw: str
+) -> None:
+    del default
+    add_params(db, 1, PAST, f'{{"{key}": {raw}}}')
+    value, ok = _line_of(db, stem)
+    assert value == "ERROR" and not ok  # empty batch table: the guard is still evaluated
+
+
+@pytest.mark.parametrize(("stem", "key", "default"), GUARD_CASES)
+@pytest.mark.parametrize("payload", ["3", '"x"', "[1, 2]", "null", "true", "3.0"])
+def test_guard_payload_that_is_not_an_object_is_an_error(
+    db: Path, stem: str, key: str, default: int, payload: str
+) -> None:
+    del key, default
+    add_params(db, 1, PAST, payload)
+    value, ok = _line_of(db, stem)
+    assert value == "ERROR" and not ok
+
+
+@pytest.mark.parametrize(("stem", "key", "default"), GUARD_CASES)
+@pytest.mark.parametrize("payload", ["{not json", "", "{", "nul"])
+def test_guard_invalid_json_is_an_error(
+    db: Path, stem: str, key: str, default: int, payload: str
+) -> None:
+    del key, default
+    add_params(db, 1, PAST, payload)
+    value, ok = _line_of(db, stem)
+    assert value == "ERROR" and not ok
+
+
+@pytest.mark.parametrize(("stem", "key", "default"), GUARD_CASES)
+def test_guard_absent_key_applies_the_default(db: Path, stem: str, key: str, default: int) -> None:
+    other = "n_targets" if key == "batches_per_target" else "batches_per_target"
+    for payload in ("{}", json.dumps({other: 9})):
+        _exec(db, "DELETE FROM playbook_rule_params")
+        add_params(db, 1, PAST, payload)
+        value, ok = _line_of(db, stem)
+        assert ok
+        assert value == {"p1": "0", "p2": "0,0,0,0,0", "p3": f"0,{default}"}[stem]
+
+
+@pytest.mark.parametrize(("stem", "key", "default"), GUARD_CASES)
+def test_guard_integer_key_is_used(db: Path, stem: str, key: str, default: int) -> None:
+    del default
+    add_params(db, 1, PAST, json.dumps({key: 4}))
+    value, ok = _line_of(db, stem)
+    assert ok
+    assert value == {"p1": "0", "p2": "0,0,0,0,0", "p3": "0,4"}[stem]
+
+
+@pytest.mark.parametrize(("stem", "key", "default"), GUARD_CASES)
+def test_guard_only_looks_at_the_current_row(db: Path, stem: str, key: str, default: int) -> None:
+    del default
+    add_params(db, 1, FUTURE, f'{{"{key}": null}}')  # not in force: must not matter
+    value, ok = _line_of(db, stem)
+    assert ok and value != "ERROR"
+
+
+@pytest.mark.parametrize("stem", ["p1", "p2", "p3"])
+def test_guard_is_evaluated_with_batches_present(db: Path, stem: str) -> None:
+    _fill(db, "A", [1, 2, 3])
+    add_params(db, 1, PAST, '{"batches_per_target": null, "n_targets": null}')
+    value, ok = _line_of(db, stem)
+    assert value == "ERROR" and not ok
+
+
+def test_p3_header_states_its_pre_deployment_scope_and_has_no_entry_stopped_condition() -> None:
+    text = (PREFLIGHT_DIR / "p3.sql").read_text(encoding="utf-8")
+    head = text.split("WITH cur AS", 1)[0]
+    assert "ONLY on the schema that" in head and "before N-207 is deployed" in head
+    assert "must NOT be used again to decide R-14" in head
+    code = "\n".join(line for line in text.splitlines() if not line.startswith("--"))
+    assert "entry_stopped" not in code
 
 
 # --- P-1 --------------------------------------------------------------------------------
@@ -483,14 +579,23 @@ def test_p3_ignores_a_future_parameter_row(db: Path) -> None:
 # --- P-4a / P-4c ------------------------------------------------------------------------
 
 
-def test_p4_t30_seeding_gives_p4a_5_and_p4c_4(db: Path) -> None:
-    values: list[object] = [0, 1, 2, -1, "x", 0.5]
+def test_p4_t30_seeding_gives_p4a_7_and_p4c_4(db: Path) -> None:
+    # Seed set pinned by N-207 spec v3.1 L1020 (P-4a = 7, P-4c = 4); do not edit the expectations.
+    values: list[object] = [0, 1, 2, -1, "x", 0.5, "1", 1.0]
     for i, value in enumerate(values):
         add_symbol(db, f"S{i}", value)
     with closing(sqlite3.connect(db)) as conn:
-        types = [r[0] for r in conn.execute("SELECT typeof(high_volatility) FROM playbook_symbols")]
-    assert types == ["integer", "integer", "integer", "integer", "text", "real"]
-    assert run_sql(db, "p4a") == "5"
+        types = [
+            r[0]
+            for r in conn.execute(
+                "SELECT typeof(high_volatility) FROM playbook_symbols ORDER BY rowid"
+            )
+        ]
+    # INTEGER affinity turns '1' and 1.0 into integer 1.
+    assert types == [
+        "integer", "integer", "integer", "integer", "text", "real", "integer", "integer",
+    ]  # fmt: skip
+    assert run_sql(db, "p4a") == "7"
     assert run_sql(db, "p4c") == "4"
 
 
@@ -505,6 +610,14 @@ def test_p4_negative_when_only_zero_and_one(db: Path) -> None:
 # --- P-5 --------------------------------------------------------------------------------
 
 
+def _run_p5_file(path: Path) -> object:
+    """Execute the original p5.sql text from disk (never a rewritten copy)."""
+    assert runner.SQL_DIR == PREFLIGHT_DIR
+    sql = (PREFLIGHT_DIR / "p5.sql").read_text(encoding="utf-8")
+    with closing(sqlite3.connect(path)) as conn:
+        return conn.execute(sql).fetchone()[0]
+
+
 def test_p5_positive_and_negative(db: Path) -> None:
     for i, status in enumerate(["planned", "open", "closed", "skipped"]):
         add_batch(db, "A", i + 1, status)
@@ -513,6 +626,7 @@ def test_p5_positive_and_negative(db: Path) -> None:
     add_batch(db, "B", 3, 7)  # non-TEXT value
     add_batch(db, "B", 4, "")
     assert run_sql(db, "p5") == "3"
+    assert _run_p5_file(db) == 3
 
 
 def test_p5_counts_a_null_status_on_a_table_without_the_constraint(tmp_path: Path) -> None:
@@ -521,6 +635,7 @@ def test_p5_counts_a_null_status_on_a_table_without_the_constraint(tmp_path: Pat
         conn.execute("CREATE TABLE playbook_batches (symbol TEXT, batch_no INTEGER, status TEXT)")
         conn.execute("INSERT INTO playbook_batches VALUES ('A', 1, NULL)")
         conn.execute("INSERT INTO playbook_batches VALUES ('A', 2, 'open')")
+    assert _run_p5_file(path) == 1  # p5.sql as written in the repo, not a copy
     assert run_sql(path, "p5") == "1"
 
 
