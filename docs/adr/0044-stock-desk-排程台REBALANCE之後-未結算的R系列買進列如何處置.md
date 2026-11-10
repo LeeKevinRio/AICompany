@@ -151,7 +151,7 @@
 
 ## Decision（決策，proposed）
 
-1. **方案選擇**（tech-writer 依 CEO 裁示，保留寫法 A 或寫法 B 其中一段，刪除另一段與本行括號說明）
+1. **方案選擇**
    - **寫法 A（CEO 採用 (iii-c)）**：
      - 採 (iii-a) + (iii-c) + (iv)。Decision 3A 生效，Decision 3 只用於 `td_basis` 為 NULL 的列。
      - (ii) 否決：帳冊截股後，帳冊與券商實況不符。
@@ -159,12 +159,6 @@
      - (iii-b) 不採：風控裁示 ADR-0034 D6 不直接適用，但原則適用，以 Decision 7 滿足。
      - 「舊列一律判為 unknown、不改 `set_capital`」不採（風控 RC-53 條件 3，理由見 Options「舊列如何退回 (iii-a)」）。
      - C-N210-12～15 適用。
-   - **寫法 B（CEO 不採 (iii-c)）**：
-     - 採 (iii-a) + (iv)。Decision 3A 整段刪除；Options 的 (iii-c) 列與評估小節保留作為紀錄。Consequences「(iii-c) 不採理由」填入 CEO 書面理由（風控 C-2）。
-     - (ii) 否決：帳冊截股後，帳冊與券商實況不符。
-     - (i) 不採：危害只是轉移，而且會卡住 T-09。
-     - (iii-b) 不採：風控裁示 ADR-0034 D6 不直接適用，但原則適用，以 Decision 7 滿足。
-     - C-N210-12～15 不適用；Decision 7 全部照舊適用。
 2. **單一定義**：store 新增常數 `KEPT_PENDING_ENTRY_SQL`，內容是 `_PENDING_ENTRY_WHERE` 加上「批次列存在且 status = 'planned'」。(iii) 與 (iv) 都拼接這個常數，不得另寫。
 3. **(iii-a) 判定**
    - 後端對 `/today` 中每一列符合第 2 點的指令列（包括今日指令表與 in-flight 清單），回傳 `td_rewritten_since_logged: Literal["yes", "no", "unknown"]`。
