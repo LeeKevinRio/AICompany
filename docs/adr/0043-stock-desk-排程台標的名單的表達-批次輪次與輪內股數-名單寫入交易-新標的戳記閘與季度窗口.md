@@ -6,17 +6,23 @@
 - 2026-11-10 併入 TA 補遺 5c 與補遺二-1b、1c（RC-11，風控免回送）
 - 2026-11-10 依風控 RC-21、RC-22、RC-24 併入 TA C-T05、C-T13 約束
 - 2026-11-10 依風控 RC-22、RC-44 同步 D7 第 6 點
+- 2026-11-10 依風控 RC-56（O-2）修訂 D7 第 1～3 點，併入風控 RC-75～RC-79 的條件；再依風控 RC-84、RC-87 與 CEO #128、#131、#132 同步（W-25f 第三子句刪除；歷程壞值依 #131 由 H-3 吸收，風控 RC-89 單點重審通過）；連動修訂 D4 第 3、4 點、D9 第 1 點、Consequences『壞處與代價』『被約束』、待決；新增附錄 D7-T（風控 2026-11-10 確認，RC-75～RC-80）
+- 2026-11-10 併入 D7 修訂定稿 v2（風控 2026-11-10 確認 RC-75～RC-80、RC-84、RC-89；qa 核對：`work/reviews/2026-11-10-ADR0043D7修訂定稿v2全文核對-qa-reviewer.md`）
+- 2026-11-10 依 CEO #135 拆分 D4 矩陣高波動列（風控 RC-90、RC-91）
 - 決策者：
   - tech-architect：草案與修訂一；
-  - risk-compliance-officer：2026-11-09 CONDITIONAL APPROVE（R-1～R-18）；修訂後的 D3 第 7 點與 ADR-0034 補充四風控 2026-11-09 確認（見 work/reviews/2026-11-09-ADR0043修訂一單項確認與N209Q2裁示-風控.md），其餘段落不必回送；
-  - CEO：#119～#122（2026-11-08）裁定方向；#123（甲案）、#124（另開 N-209）、#125（E2）於 2026-11-09 裁定；本 ADR 的核可（須明示包含 ADR-0034 補充四，見 D3 第 7 點 J-9）與 Q-C11 待定。
+  - risk-compliance-officer：2026-11-09 CONDITIONAL APPROVE（R-1～R-18）；修訂後的 D3 第 7 點與 ADR-0034 補充四風控 2026-11-09 確認（見 work/reviews/2026-11-09-ADR0043修訂一單項確認與N209Q2裁示-風控.md），其餘段落不必回送；D7 第 1～3 點修訂：風控 2026-11-10 確認（RC-75～RC-80，見 work/reviews/2026-11-10-D7修訂確認與W25f裁示-風控.md），W-25f 與歷程壞值的裁示見 work/reviews/2026-11-10-W25f定稿與H2判定-風控.md（RC-84～RC-88），required 併入後不回送；CEO #131 改寫的歷程壞 value 規則，風控 RC-89 單點重審通過（見 work/reviews/2026-11-10-H2修正重審與135確認-風控.md）；D4 矩陣高波動列依 CEO #135 拆分，見同一份風控檔 RC-90、RC-91；qa-reviewer 核對：work/reviews/2026-11-10-D7與ADR0044併入核對-qa-reviewer.md、work/reviews/2026-11-10-D7替換條文核對-qa-reviewer.md、work/reviews/2026-11-10-ADR0043D7修訂定稿v2全文核對-qa-reviewer.md；
+  - CEO：#119～#122（2026-11-08）裁定方向；#123（甲案）、#124（另開 N-209）、#125（E2）於 2026-11-09 裁定；本 ADR 的核可（須明示包含 ADR-0034 補充四，見 D3 第 7 點 J-9）；Q-C11：CEO #129、#135 已裁示；#128（D7 不拆單，方案 (A)，附轉換條件）、#130（N-211）、#131（歷程壞值整檔退回，由 H-3 吸收）、#132（H-1、H-3、H-4 接受）於 2026-11-10 裁定。
 - 來源簡稱（皆在 `work/` 下）：
   - [TA-207]：`reviews/2026-11-08-N207架構評估-tech-architect.md`
   - [PRD]：`stock-desk-排程台標的設定-PRD.md`（draft v2，以 v3 為準）
   - [N203]：`reviews/2026-11-08-N203排程台標的寫入路徑查證-dev-lead.md`
   - [TA-197]：`reviews/2026-11-07-N177規格修訂四與N197分析-tech-architect.md`（3.8～3.9，N-197a 規格與 `TotalDeployStamp`）
-  - [決策包]：`dispatch/2026-10-17-決策包二補遺-新增CEO事項.md`（#119～#125 與「#123 知悉事項」列）
+  - [決策包]：`dispatch/2026-10-17-決策包二補遺-新增CEO事項.md`（#119～#125、#128～#132 與「#123 知悉事項」列）
   - [風控-207]：`reviews/2026-11-09-N207與ADR0043審查-風控.md`（R-1～R-18）
+  - [風控-D7]：`reviews/2026-11-10-D7修訂確認與W25f裁示-風控.md`（RC-75～RC-83）
+  - [風控-W25f]：`reviews/2026-11-10-W25f定稿與H2判定-風控.md`（RC-84～RC-88）
+  - [TA-D7]：`reviews/2026-11-10-ADR0044定稿與ADR0043D7修訂-tech-architect.md` 交付 2、`reviews/2026-11-10-D7拆單評估與RC63補充-tech-architect.md` 2-F～2-H、`reviews/2026-11-10-ADR0043D7修訂定稿-tech-architect.md`、`reviews/2026-11-10-D7定稿替換條文-tech-architect.md`
 - 適用範圍：僅 product/stock-desk。路徑相對於 `apps/stock-desk/backend/`。
 - 標註：
   - 行號是 2026-11-08 主 checkout 的快照。N-177a、N-195、N-196、N-197a、N-177b、N-198、N-209 都還沒合入，行號會漂移，抽驗請以內容定位。
@@ -223,20 +229,20 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
    - 補充四全文見 ADR-0034 檔頭（由 tech-writer 落檔，狀態 proposed，依 J-9 生效）。
 
 ### D4：名單寫入交易
-1. 操作種類：首次設定、停止新進場、重新加入（含開新輪）、季度提交、高波動標記。每種都是兩步，先「預覽」再「確認」，確認時必須帶回預覽摘要。
+1. 操作種類：首次設定、停止新進場、重新加入（含開新輪）、季度提交、高波動標記（新值 1）、高波動取消（新值 0）。每種都是兩步，先「預覽」再「確認」，確認時必須帶回預覽摘要。
 2. **鎖外**（可以有網路）：
    - 新代號的驗證（[TA-207] Q-T8）；
    - 以 `evaluate_today` 同一個指數載入器建立 `TradingCalendar`（D8）；
    - API 層的窗口判定與凍結判定（快速拒絕用，不作為最終依據）。
 3. **鎖內**：一個連線、一個 `BEGIN IMMEDIATE`，依序：
-   - (a) 讀取：批次（symbol、batch_no、batch_round、status）、`playbook_symbols` 的相關欄位、`playbook_state` 的 TOTAL_DEPLOY 三鍵與 `emergency_until`、`freeze_until`、現行參數（接收 conn 的 helper，與 `active_params` 共用同一份定義）；
+   - (a) 讀取：批次（symbol、batch_no、batch_round、status）、`playbook_symbols` 的相關欄位、`playbook_state` 的 TOTAL_DEPLOY 三鍵與 `emergency_until`、`freeze_until`、現行參數（接收 conn 的 helper，與 `active_params` 共用同一份定義）；高波動標記操作另經 `_read_high_volatility` 讀該檔的基準值與 `playbook_high_volatility_log` 全部列，並經 `_read_roster_max_date` 讀 `playbook_roster_log` 有效 `taipei_date` 的最大值（D7 第 3 點 (a)、(d)）；
    - (b) 讀一次注入的時鐘；
    - (c) 呼叫純函式：窗口、凍結、案例矩陣、檔數與名額、摘要比對；
-   - (d) 寫入只限三處：`playbook_symbols` 的自有欄位 upsert、`playbook_batches` 的新輪 INSERT、`playbook_roster_log` 的 INSERT；
+   - (d) 寫入只限四處：`playbook_symbols` 的自有欄位 upsert、`playbook_batches` 的新輪 INSERT、`playbook_high_volatility_log` 的 INSERT（只限高波動標記操作，D7 第 3 點）、`playbook_roster_log` 的 INSERT；
    - (e) `COMMIT`。
    - 鎖內零網路，不呼叫會另開連線的 `self.*`。
    - 錯誤處理照 C-11：先 ROLLBACK 再原樣 raise。
-4. **零寫入**：任何拒絕或失敗，三張表都逐列不變（FR-39）。資料層的日線快取不在此限。
+4. **零寫入**：任何拒絕或失敗，四張表（含 `playbook_high_volatility_log`）都逐列不變（FR-39）。資料層的日線快取不在此限。
 5. 名單路徑在任何情況下都不寫：`playbook_state` 的任何鍵、`playbook_directives`、`playbook_schedule`、`playbook_blacklist`、`playbook_fill_moves`、`playbook_evaluation_marks`。
 6. **各操作的閘門矩陣**：
 
@@ -247,7 +253,8 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
 | 重新加入 (i)(ii) | 受限 | 拒絕 | 是 | 否 | 無 | — |
 | 開新輪 (iii)(iv) | 受限 | 拒絕 | 是 | 否 | bpt 批 | 有 |
 | 季度提交 | 受限 | 拒絕 | 是 | 新增組 | 新增組第 1 輪；保留組中逐項確認的開新輪 | 有 |
-| 高波動標記 | 不受限（Q-C8 PM 預設，coordinator 定案，CEO 可推翻） | 允許（FR-40 未列） | 是 | 否 | 無 | — |
+| 高波動標記（新值 1） | 不受限（Q-C8 PM 預設，coordinator 定案，CEO 可推翻） | 拒絕（CEO #135） | 是 | 否 | 無 | — |
+| 高波動取消（新值 0） | 不受限（Q-C8 PM 預設，coordinator 定案，CEO 可推翻） | 允許（CEO #135）；仍受 D7 第 3 點 (a′) 約束（歷程無法讀取時拒絕） | 是 | 否 | 無 | — |
 
 ### D5：並發語意
 - 每次名單寫入都在寫鎖內重驗，再加上預覽摘要比對，所以任何並發組合的結果都等於某一個循序執行。確認前內容已改變時拒絕、零寫入（FR-22）。
@@ -311,16 +318,137 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
    - N-209（REBALANCE 畫面入口）必須先於 N-207 合入（N-207 規格 N207-M4）；
    - 待生效相關字面只有在 N-209 已合入時，才可以提到「REBALANCE 入口」。
 
-### D7：高波動標記的接線與生效（併入 N-204）
-1. `playbook_symbols` 新增加法欄位 `high_volatility_prev INTEGER NOT NULL DEFAULT 0`、`high_volatility_changed_on TEXT`（變更當下的 Asia/Taipei 日期）。`high_volatility` 是目標值。
-2. 生效值（單一純函式）：`effective = high_volatility if changed_on is None or data_date > changed_on else high_volatility_prev`。
-   - data_date 都是交易日，所以「data_date 晚於變更日」等價於「下一個交易日起生效」；變更當日的評估仍用舊值（FR-30、AC-65）。
-   - 不需要日曆，也不受週一到週五退回判定影響。
-3. 寫入時：
-   - `prev` = 寫入當下的生效值，以台北今日為 data_date 計算；
-   - `high_volatility` = 新值；
-   - `changed_on` = 台北今日。
-   - 同日來回切換時，生效值不變。
+### D7：高波動標記的接線與生效（併入 N-204；第 1～3 點 2026-11-10 依風控 RC-56（O-2）修訂，風控 2026-11-10 確認（RC-75～RC-80），RC-75、RC-76、RC-79 的條件已併入，由 qa-reviewer 逐條核對；W-25f 第三子句刪除，字面依風控 RC-84 定稿，見第 2 點；歷程壞 value 依 CEO #131 整檔退回，風控 RC-89 單點重審通過，見第 2 點）
+
+1. **資料：只能新增的變更歷程**
+   - 在 `_SCHEMA` 新增表 `playbook_high_volatility_log`（`CREATE TABLE IF NOT EXISTS`），欄位如下：
+     - `id INTEGER PRIMARY KEY AUTOINCREMENT`
+     - `symbol TEXT NOT NULL`
+     - `value INTEGER NOT NULL CHECK (value IN (0, 1))`
+     - `changed_on TEXT NOT NULL CHECK (date(changed_on) IS changed_on)`：Asia/Taipei 日期，ISO 格式，取值見第 3 點
+     - `created_at TEXT NOT NULL`：UTC ISO
+   - 這張表沒有 UNIQUE 約束，所以 `INSERT OR REPLACE` 不可能取代既有列。
+   - 另以 `CREATE TRIGGER IF NOT EXISTS` 擋 UPDATE 與 DELETE（`RAISE(ABORT, …)`），比照 D9 第 3 點。
+   - app/ 內對這張表只有第 3 點那一句 INSERT。`INSERT OR REPLACE`、UPDATE、DELETE 計數為 0（grep）。
+   - `playbook_symbols.high_volatility` 改稱**基準值 B**：
+     - 是部署前就存在的值，app/ 內不寫（現況就沒有寫入者，見 Context 第 1 點）；
+     - `playbook_symbols` 沒有該檔的列時，B = 0。
+   - **撤回**原第 1 點的 `high_volatility_prev`、`high_volatility_changed_on` 兩欄，不新增。
+   - D3 第 7 點 I-4 原文不動：那兩個名稱照樣不得出現在 `engine.py`。新名稱的 engine 檢查見第 2 點。
+   - **第 4～6 點的讀法**（原文不改，依此對照）：
+     - 「`changed_on`」指該檔歷程中 **id 最大一列**的 `changed_on`；
+     - 「`changed_on` 為 NULL」（第 6 點）指該檔在歷程表**沒有任何列**；
+     - 「目標值」指第 2 點的 T；
+     - 第 4 點的 `effective` 指第 2 點的 E。
+
+2. **解析與判定：單一定義**（與 `entry_gate_open` 同放 `store.py`，每個名稱只有一份定義）
+   - `HighVolChange(NamedTuple)`：`id: int`、`value: int`、`changed_on: date`。
+   - **解析**（風控 RC-63；RC-75 required-1；RC-56 驗收標準 2；CEO #131）：
+     - **`parse_high_volatility_flag(raw: object) -> int`**：本體恰為 `return 1 if type(raw) is int and raw == 1 else 0`。
+       - 只有 integer 1 回傳 1；其他值一律回傳 0，包括 2、-1、`'x'`、0.5、None、bool（`type(True)` 是 bool，不是 int）。
+       - 適用於基準值 B，也適用於每一筆歷程列的 value（歷程值須先通過 `high_volatility_value_valid`，否則依 `_read_high_volatility` 整檔退回）。ADR 或規格的任何版本若保留 `high_volatility_prev` 欄位，該欄位也照這條規則解析。
+       - 回傳 int、不回傳 bool 的理由：E、T 的 base 與 value 是 int；而且回傳 bool 時，結果若被再解析一次，`type(True) is int` 為假，會得到 0。回傳 int 時，`parse(parse(x)) == parse(x)`。
+       - **N-207 規格 N207-C21 原定的 `high_volatility_marked(raw) -> bool` 撤回**，N207-C21 改為引用本函式。app/ 內不得出現 `high_volatility_marked` 這個名稱。
+     - **`high_volatility_value_valid(raw: object) -> bool`**（CEO #131）：本體恰為 `return type(raw) is int and raw in (0, 1)`。
+       - 只有 integer 0 與 1 回傳 True；2、-1、`'x'`、0.5、None、bool、`'1'` 都回傳 False。
+       - 只用於歷程列的 value，不用於基準值 B：B 是壞值時解析為 0，不可能讓 E(today_tpe) = 1，所以不會產生不實的 W-25f（E16 不變）。
+     - **`parse_high_volatility_changed_on(raw: object) -> date | None`**：`type(raw) is str`、`date.fromisoformat(raw)` 不拋例外，而且 `.isoformat() == raw` 時，回傳該日期；否則回傳 None。拒絕範圍與第 1 點的 CHECK 意圖一致：不存在的日期、斜線格式、前後空白、非 TEXT 都拒絕。
+   - **單一讀取 helper** `_read_high_volatility(conn, symbols) -> dict[str, HighVolRead]`（接收 conn，與 D4 第 3 點 (a) 的 helper 同一型式）：
+     - `HighVolRead(NamedTuple)`：`base: int`、`history: tuple[HighVolChange, ...]`、`history_readable: bool`。
+     - 讀取該檔 B 與全部歷程列（依 id 升冪）。B 經 `parse_high_volatility_flag`；每列 value 先經 `high_volatility_value_valid`，通過後經 `parse_high_volatility_flag`；changed_on 經 `parse_high_volatility_changed_on`。
+     - 任一列的 changed_on 解析為 None，或任一列 value 經 `high_volatility_value_valid` 判為 False 時：`history_readable = False`、`base = 0`、`history = ()`。所以對所有 `on`，T = 0、E = 0。
+       - 在 app/ 內，這種情況由 CHECK 約束排除，只可能來自 app 外的寫入（殘留 H-3）。
+     - 名單頁標籤（W-25d～f、W-27 旗標）、engine 輸入、第 3 點的寫入路徑，一律只經本 helper 加上 E、T 取值，不得各自解析或另讀原始欄位。
+     - 評估路徑與名單頁讀取遇到解析問題時不 raise：只會讓該檔門檻偏嚴（15%），不讓 `/today` 失敗，S 系列的停損賣出照常評估。寫入路徑依第 3 點 (a′) 拒絕。
+     - 與 P-4 的一致性：
+       - P-4c 等於 0 時，`playbook_symbols.high_volatility` 全部是 integer 0 或 1，P-4a 的 `<> 0` 恰好等於本函式判為 1 的列；
+       - P-4c 大於 0 時依 STOP-4 處理，部署通知第二段暫不送出（RC-62）。
+   - **生效值** `effective_high_volatility(*, base: int, history: Sequence[HighVolChange], on: date) -> int`，記為 E(on)：
+     - 適用列 = `history` 中 `changed_on < on` 的列；
+     - 有適用列時，取其中 **id 最大者**的 value；沒有就取 base。
+   - **目標值** `target_high_volatility(*, base: int, history: Sequence[HighVolChange]) -> int`，記為 T：
+     - `history` 有列時，取 id 最大者的 value；沒有就取 base。
+   - 兩個函式都只依 id 排序，不依 `changed_on` 排序。
+   - **評估**：`on = data_date`。
+     - data_date 都是交易日，所以「`changed_on` 早於 data_date」等價於「變更日之後的第一個交易日起適用」。
+     - 依據資料日不晚於變更日的評估，用的是變更前的值（FR-30、AC-65）。
+     - 每一筆變更各自從它的 `changed_on` 之後適用，不會覆寫任何較早資料日的生效值。
+     - 判定不需要日曆，也不受週一到週五退回判定的影響。
+   - **名單頁標籤**：`on = today_tpe`，取值來源與 D1 第 4 點、D8 第 6 點相同。
+     - W-25d：T = 1 且 E(today_tpe) = 1；
+     - W-25e：T = 1 且 E(today_tpe) = 0；
+     - W-25f：T = 0 且 E(today_tpe) = 1；
+     - 其餘情形不顯示高波動標籤。
+     - W-25e、W-25f 的日期依第 5 點。
+     - **W-25f：第三子句刪除；W-25f 字面依風控 RC-84 定稿**（逐字只放在 `wording.py`）。
+       - 舊第三子句「今日仍用高波動門檻」，以及未採用的案 (i)「不受這次取消影響」，都不得進入程式或畫面（C-D7-5）。
+       - 原本的定稿暫停（RC-58、RC-77），在以下兩件事都完成後解除（RC-87）：
+         - 本修訂與連動修訂落進本 ADR，並經 qa-reviewer 核對；
+         - C-D7-5 成立。
+       - CEO #128 採方案 (A)，所以這是 N-207 的合併閘；若 CEO 依 #128 轉換條件改走 (B)，改為 D7 單的合併閘。
+   - **讀取**：`symbol_states(on)` 用一個連線、一個讀取交易（`BEGIN`…`COMMIT`），經 `_read_high_volatility` 讀出 `playbook_symbols` 與 `playbook_high_volatility_log`，對每檔呼叫上述函式。
+   - **engine 名稱檢查**（補 I-4 的可檢查形式，不改 I-4）：`engine.py` 不出現 `playbook_high_volatility_log`、`HighVolChange`、`HighVolRead`、`effective_high_volatility`、`target_high_volatility`、`parse_high_volatility_flag`、`high_volatility_value_valid`、`parse_high_volatility_changed_on`、`_read_high_volatility`、`_read_roster_max_date`。engine 照舊只透過 `build_market_snapshot(high_volatility=…)` 拿到值（第 4 點）。
+   - **單一性檢查**（AST，全部 BLOCKING；RC-75 required-1；CEO #131）：
+     1. app/ 內名為 `parse_high_volatility_flag`、`high_volatility_value_valid`、`parse_high_volatility_changed_on`、`_read_high_volatility`、`_read_roster_max_date` 的函式定義各恰 1 個，都在 `app/playbook/store.py`。
+     2. 識別名 `high_volatility_marked` 在 app/ 內的出現次數為 0，包括函式定義、Name、Attribute、字串常數。
+     3. **判定式恰出現一次**：
+        - app/ 內同時含有 `type(N) is int` 與 `N == 1`（同一個 Name N）的 `BoolOp(And)` 節點恰 1 個，而且位於 `parse_high_volatility_flag` 本體內；
+        - app/ 內同時含有 `type(N) is int` 與 `N in (0, 1)`（同一個 Name N）的 `BoolOp(And)` 節點恰 1 個，而且位於 `high_volatility_value_valid` 本體內。
+     4. **本體形狀**：
+        - `parse_high_volatility_flag` 本體恰為一條 `Return`，值為 `IfExp`：test 是第 3 項第一個 BoolOp，body 為 `Constant(1)`，orelse 為 `Constant(0)`。
+        - `high_volatility_value_valid` 本體恰為一條 `Return`，值為第 3 項第二個 BoolOp。
+        - 兩個本體都不得出現 `bool(`、`int(`、`!= 0`、`> 0`，也不得以 raw 做真值判斷。
+     5. **呼叫點封閉**：
+        - `parse_high_volatility_flag`、`high_volatility_value_valid` 的呼叫，以及 `HighVolChange(...)` 的建構，只出現在 `_read_high_volatility` 本體內。
+        - `parse_high_volatility_changed_on` 的呼叫，只出現在 `_read_high_volatility` 與 `_read_roster_max_date` 兩個本體內。
+        - `_read_roster_max_date(conn) -> date | None` 本體恰好執行一句 SQL：`SELECT MAX(taipei_date) FROM playbook_roster_log WHERE date(taipei_date) IS taipei_date`，結果只交給 `parse_high_volatility_changed_on`。它的呼叫者只能是第 3 點的寫入函式（預覽與確認）。
+        - 兩個 helper 本體內的 `Compare` 節點，只能是 `… is None` 或 `… is not None`。
+     6. **原始值讀取封閉**：app/ 內含子字串 `high_volatility` 的非 docstring 字串常數（不分大小寫；f-string 每段各自計算），只能出現在 `store.py` 的 `_SCHEMA`（DDL 與 trigger）、`_read_high_volatility`（SELECT），以及第 3 點寫入函式的那一句 INSERT。
+     7. **負例**：下列原始碼字串餵給檢查器，都必須判為違規：
+        - 含第二份判定式（第 3 項任一樣式）或第二個解析函式；
+        - 含第二個 `high_volatility_value_valid` 定義，或其本體形狀不符第 4 項；
+        - 在 `_read_high_volatility` 之外呼叫 `parse_high_volatility_flag` 或 `high_volatility_value_valid`；
+        - 在兩個 helper 之外呼叫 `parse_high_volatility_changed_on`；
+        - 在第 3 點寫入函式之外呼叫 `_read_roster_max_date`。
+   - 測試見附錄 D7-T（E、L、P3、P4）。
+
+3. **寫入：高波動標記操作**（D4 的兩步流程與鎖內流程）
+   - (a) **鎖內讀取**：經 `_read_high_volatility` 讀該檔的 `HighVolRead`；另經 `_read_roster_max_date(conn)` 讀 R（SQL 與解析依第 2 點單一性檢查第 5 項）。回傳 None 時，R 不存在。
+   - (a′) **歷程無法解析時拒絕**（風控 RC-75 required-2；壞 value 依 CEO #131 同此）：
+     - `history_readable` 為 False 時（壞 `changed_on` 或壞 value，第 2 點），本次操作一律拒絕、零寫入。標記與取消都一樣，判斷排在 (c) 冪等判定之前。
+     - 預覽也以同一個 helper 讀取，遇到同一情形同樣拒絕，不回傳預覽摘要。
+     - 預覽通過後才出現的壞列，確認時在鎖內同樣拒絕。
+     - 理由：評估端這時已是 E = 0（15%）。拒絕標記，維持 15%；拒絕取消，E 本來就是 0。兩者都不會變寬。
+     - **回應**：store 回傳內部原因碼（名稱由 N-207 v3 定，不是使用者可見字面），API 層映射到名單操作既有的一般失敗分支。專用的拒絕字面由 creative-lead 擬、風控定稿；定稿之前：
+       - 不得新增使用者可見字面；
+       - 不得使用任何 `ROSTER_RESULT_*`、W-25d～f；
+       - 不得寫成或渲染成「已取消」「已標記」；
+       - 不借用 `ROSTER_REFUSED_PREVIEW_STALE`、`ROSTER_REFUSED_TRANSIENT`。這兩句分別引導重新預覽、重試，對永久存在的壞列不成立。
+     - D4 第 4 點的零寫入與 D9 第 2 點的「拒絕不寫稽核列」照常適用。
+   - (b) **時鐘**：以 D4 第 3 點 (b) 讀到的時鐘，換算成 Asia/Taipei 日期 `today_tpe`。
+   - (c) **冪等**：新值等於 T 時，零寫入，也不寫稽核列（比照 D2 第 5 點）。
+   - (d) **`changed_on` 的取值**（併入風控 RC-75 suggested）：
+     - 參考日：
+       - L = 該檔最新一列（id 最大）的 `changed_on`，沒有歷程時不存在；
+       - R = (a) 讀到的 roster 最大有效台北日，可能不存在。
+     - 標記（新值 1）：`changed_on = max(today_tpe, L, R)`，不存在的參考日略過。
+     - 取消（新值 0）：`changed_on = today_tpe`。
+     - 一般情形（L、R 都不晚於 `today_tpe`）兩者都等於 `today_tpe`。
+     - **方向**：兩種取法都不比「以 `today_tpe` 寫入」寬：標記只會延後適用；取消不延後，而且因為 id 最大，會蓋過較晚日期的那一列。
+     - **限制**：上一句以 `today_tpe` 為比較基準，不能讀成精確保持 FR-30。`today_tpe` 本身落後真實台北日期、而 L、R 都不晚於 `today_tpe` 時，系統偵測不到這種落後，標記會比 FR-30 規定的更早適用，方向較寬（殘留 H-1）。
+     - **R 的前提**：`playbook_roster_log.taipei_date` 是 D4 第 3 點 (b) 同一次時鐘讀取換算的 Asia/Taipei 日期（D9 第 1 點）。N-207 v3 若不是這樣，回 TA。
+     - 無效的 `taipei_date` 由 WHERE 排除，不因此拒絕寫入。排除只會讓 R 變小或不存在，結果不會早於 `today_tpe`。
+   - (e) **INSERT** 一列：symbol、value、changed_on、created_at。
+   - (f) **D9 稽核列**照常寫入。`detail_json` 記入本次歷程列的 id、value、changed_on，以及 `today_tpe`、L、R（不存在時為 null）。
+   - **預覽摘要**（D4 第 1 點）包含：symbol、目前的 T、最新一列的 id（沒有則為 null）、新值、預覽時算出的 `changed_on`。
+     - 確認時在鎖內重算，任一項不同就拒絕、零寫入（FR-22）。
+     - 預覽與確認之間跨過台北日期，或 R 改變，都會因 `changed_on` 不同而拒絕，使用者要重新預覽。
+   - **性質**（RC-56 驗收標準 1 的論證，由結構保證）：
+     - 新增一列，記它的 `changed_on` 為 c。對任何 `on` ≤ c，這一列都不在適用列內，E(on) 不變。
+     - (d) 的三種取法，c 都不早於 `today_tpe`。所以任何一次變更，都不改變依據資料日不晚於 c 的評估所用的生效值。
+   - **同日來回切換**：同一天寫入的各列，對 `on` 不晚於該日的判定都不適用；對 `on` 晚於該日的判定，只看 id 最大的那一列。所以回到原值時，任何資料日的生效值都不變。
+   - **多次變更**：每一筆各自從它的 `changed_on` 之後適用。例：週一標記、週二取消、週三再標記，則依據資料日週一用 0、週二用 1、週三用 0、週四起用 1。
+   - 測試見附錄 D7-T（W、P1、P2），全部 BLOCKING。
 4. **接線**：`evaluate_today` 在算出 `data_date` 之後、建 snapshot 之前，讀一次 `symbol_states(data_date)`，同一份結果同時交給 `build_market_snapshot(high_volatility=effective)` 與 engine。`:417`（出清）與 `:1840`（REBALANCE）不傳，因為它們不評估 P3。
 5. 畫面上的生效日期以 `calendar.next_trading_day(changed_on)` 呈現，有日曆退回判定的已知限制。判定只看第 2 點，不看這個日期。字面用「M 月 D 日起適用」或「尚未適用」，不得用「待生效」（風控 R-18；「待生效」只留給 D6 的戳記閘）。
 6. **既有標記（風控 R-13）**：
@@ -374,12 +502,12 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
 1. 在 `_SCHEMA` 新增 `playbook_roster_log`，欄位如下：
    - `id INTEGER PRIMARY KEY AUTOINCREMENT`
    - `created_at TEXT NOT NULL`（UTC ISO）
-   - `taipei_date TEXT NOT NULL`
+   - `taipei_date TEXT NOT NULL`（D4 第 3 點 (b) 同一次時鐘讀取換算的 Asia/Taipei 日期；D7 第 3 點 (d) 以此為前提）
    - `action TEXT NOT NULL`
    - `symbol TEXT`（整份名單的操作為 NULL）
    - `before_json TEXT NOT NULL`
    - `after_json TEXT NOT NULL`
-   - `detail_json TEXT NOT NULL`（季度提交的三組差異、新輪的 batch_no 範圍與 entry_gate）
+   - `detail_json TEXT NOT NULL`（季度提交的三組差異、新輪的 batch_no 範圍與 entry_gate、高波動標記的歷程列 id、value、changed_on，以及 today_tpe 與 D7 第 3 點 (d) 的參考日 L、R）
    - `digest TEXT NOT NULL`
 2. 每次成功的名單寫入，恰好寫一列，與業務寫入在同一個交易內；拒絕、失敗、冪等的 no-op 都不寫。FR-20 的書面紀錄就是 `action='quarterly_submit'` 的列。
 3. `app/` 內只有 INSERT。另以 `CREATE TRIGGER IF NOT EXISTS` 擋 UPDATE 與 DELETE（`RAISE(ABORT, …)`）。`INSERT OR REPLACE` 本來就由 N207-C1 禁止（ADR-0038 的先例：REPLACE 不會觸發 DELETE trigger）。
@@ -439,12 +567,16 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
     - 這一點屬 J-8「以 `engine_batches` 過濾」的承載範圍。
   - **甲案屬放寬 #121（R-9）**：資金確認也能解開閘，而 confirm 的 TD 只依提交數字、不看持股。CEO 以 #123 明示同意（D6 第 6 點）。
   - **以 API 重送資金確認（R-10）**：會同時解開閘並以提交數字覆寫現金，TD 不看持股；誤把總資產當成現金填入時，鐵律①的現金底線預算會被灌大。首次確認後畫面上沒有確認入口，所以這條路徑只剩 API。以 D6 第 8 點的字面約束揭露；是否拒絕或警示，由 TA 另案評估。
-  - **組合凍結的殘留（R-12）**：資料落後的那幾天，名單入口已放行而 engine 仍凍結，比 FR-40 的字面寬，但不增加買進。Q-C11 須由 CEO 在 accepted 之前明示。
+  - **組合凍結的殘留（R-12）**：資料落後的那幾天，名單入口已放行而 engine 仍凍結，比 FR-40 的字面寬，但不增加買進。CEO #129、#135 已裁示。
   - **啟用檔數大於 n_targets 的既有資料（R-14）**：
     - 每檔仍以 TD ÷ n_targets 計算，全部進場時投入會超過 TOTAL_DEPLOY（只受現金底線限制），屬突破風險上限。
     - N-207 的名額檢查只擋新寫入，擋不到既有資料。
     - 部署前盤點發現即停止部署，回報 CEO 與 TA，不得只靠揭露上線（N-207 §9 STOP-2）。FR-41 的揭露句要寫明這項後果。
   - **既有高波動標記（R-13）**：部署當下即放寬 P3 減碼門檻；列數大於 0 時停止部署，由 CEO 明示（D7 第 6 點）。
+  - **高波動改為只能新增的歷程表**（D7 第 1～3 點）：多一張表與兩個 trigger。名單頁標籤依台北日期判定，今日頁依資料日判定；資料落後期間內有多次變更時，兩者的落差有兩種方向：(i) **L6**：標籤寫『尚未適用』，今日頁用 20%，方向較寬，由 W-27 第二句與 W-22 第二行揭露，不新增顯示條件（風控 RC-78）；(ii) **L4**（另見 L11，標記從未適用）：W-25f 第三子句不實，方向較嚴；風控 RC-77 裁示改擬（F2）；RC-84 定稿為刪除第三子句，此落差改由 W-27 第二句揭露。
+  - **H-1 時鐘落後，偵測不到**（風控 RC-75 required-3；比照 ADR-0044 R-c）：`today_tpe` 落後真實台北日期，而 L 與 R 都不晚於 `today_tpe` 時，標記的 `changed_on` 會早於真實日期。資料日落在 (`today_tpe`, 真實日期] 的評估（包括時鐘校正之後的評估）改用 20%，違反 FR-30『變更當日仍用舊門檻』，**方向較寬，系統偵測不到**。例：真實日期 11-12、時鐘顯示 11-10、最後一次名單寫入也在落後之後 → `changed_on` = 11-10，資料日 11-11、11-12 的評估用 20%；照 FR-30 應從 11-13 起。R（採用 RC-75 suggested）把偵測範圍擴大到任何名單寫入記錄過的較晚日期，但關不掉這項殘留。取消不受影響：提早適用的方向是較嚴。列為殘留，CEO #132 接受。
+  - **H-3 歷程有壞 `changed_on` 或壞 value 時，該檔永久退回 15%**（2-F、RC-75 required-2；比照 RC-49 條件 4；CEO #131 以此吸收歷程壞 value 的原條目，H-2 編號保留不重用）：這種列只可能來自 app 外的寫入，而且歷程表擋 DELETE，壞列會永久存在。結果是該檔對所有資料日 E = 0、不顯示高波動標籤、標記與取消操作一律拒絕，方向較嚴；名單頁沒有任何提示，使用者也沒有 app 內的復原路徑（重新標記同樣被拒絕）。app 外的壞列會回溯改變較早資料日的生效值（例：E18 寫入前 E(11-10) = 1，寫入後為 0）。修復路徑另案設計並送風控，不得手動改 DB。CEO #132 接受；修復路徑等真的發生時再另案處理。
+  - **H-4 較寬方向的標籤落差**：L6（見上）與 L10（O-1，取消側；風控 RC-55 已裁示揭露。整頁沒有任何標籤時，W-27 不顯示，只剩 W-22 第二行）。`/today` 加事實欄位的新單不列為 N-207 的上線條件（風控 RC-73、RC-78）；app 有第二個使用者時，這張新單轉為 required。CEO #132 接受；這張新單已由 CEO #130 開立為 N-211，排在 D7 之後。
   - **上線相依**：N-207 依 R-17 要等 N-209 合入，排程因此多一個前置。
   - 並發評估仍可能為剛停止的標的出一張 R1（FR-10，揭露）。
   - 戳記閘有 ABA 殘留，含已解開的閘重新關上（D6 第 7 點，方向是不開）。
@@ -453,7 +585,8 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
   - store.py 共用的批次讀取 helper（`_BATCH_SELECT`、`_row_to_batch`）加欄位，會碰到 N198-T5 與 ADR-0041 T27 的差分基準，只做加法。
   - 部署回滾到舊版時，如果舊版仍有整列寫回，新欄位會被洗掉。所以 N-207 與 ADR-0041 的欄位化寫入綁在一起。
 - **被約束**：
-  - 名單路徑只能寫 `playbook_symbols` 的自有欄位、`playbook_batches` 的新輪 INSERT、`playbook_roster_log` 的 INSERT；
+  - 名單路徑只能寫 `playbook_symbols` 的自有欄位、`playbook_batches` 的新輪 INSERT、`playbook_high_volatility_log` 的 INSERT、`playbook_roster_log` 的 INSERT；
+  - 高波動的原始值只經 D7 第 2 點的 `_read_high_volatility`、`high_volatility_value_valid` 與兩個解析函式讀取；`playbook_high_volatility_log` 只能 INSERT；
   - engine 只准改 `planned_batch_shares`，而且以 C-B11 範圍判定生效（J-9：CEO 核可）為前提；
   - engine 之外改變 R、S、P 結果或股數的過濾或後處理，依 J-6 視同改 engine；
   - 日後要「改 `batches_per_target`」時處理既有輪次，或把防守模式納入凍結，各自另立 ADR。
@@ -462,13 +595,25 @@ def planned_batch_shares(*, batch_no, close, symbol_batches, total_deploy, param
 
 - **CEO**：
   - 本 ADR 核可，**須明示包含 ADR-0034 補充四**（J-9）；
-  - **Q-C11（FR-40 凍結判定依據與資料落後殘留）：必須在本 ADR 改為 accepted 之前由 CEO 明示（風控 R-12）**。coordinator 已暫定採 TA 建議，但暫定不能作為 accepted 的前提；這一項不擋 proposed 落檔；
-  - 部署前盤點若觸發 STOP-1～4，由 CEO 裁決（N-207 §9）。
+  - Q-C11（FR-40 凍結判定依據與資料落後殘留）：CEO #129、#135 已裁示；
+  - 部署前盤點若觸發 STOP-1～4，由 CEO 裁決（N-207 §9）；
+  - 已裁示 #128、#130、#131、#132：
+    - #128：採方案 (A)，不拆單。轉換條件兩項：(1) P-4a 大於 0，且 CEO 傾向取消標記；(2) 其他前置都已就緒，只剩 D7 未完成確認。任一成立時，CEO 可以改走 (B)，並須符合風控 RC-82 的前提；
+    - #130：開立 RC-73 的新單 N-211，排在 D7 之後，不擋 N-207；
+    - #131：歷程壞值整檔退回，由 H-3 吸收；
+    - #132：H-1、H-3、H-4 接受。
 - **風控**：
   - D3 第 7 點與 ADR-0034 補充四的單項確認：風控 2026-11-09 確認（見 work/reviews/2026-11-09-ADR0043修訂一單項確認與N209Q2裁示-風控.md）；
   - 全部新字面的逐字定稿（第二節 F 表與 R-16）；
+  - W-25f 第三子句：**已結**（RC-84，刪除第三子句，W-25f 字面定稿）；
+  - D7 第 3 點 (a′) 專用拒絕字面的定稿（RC-75 required-2；涵蓋 CEO #131 的壞 value 情形）；
+  - RC-86-3 單點重審（CEO #131 把歷程值由「逐列回 0」改為整檔退回，D7 第 2 點「解析」與 `_read_high_volatility`，以及附錄 E18、L12、W8、W11、P4）：**已結**（RC-89，風控 2026-11-10 確認，見 work/reviews/2026-11-10-H2修正重審與135確認-風控.md）；
   - 確認 D3 第 6 點第 (2) 類的處理、D6 第 7 點的「重新關上」面向，以及 R-8 採 (a)：風控 2026-11-09 確認（見 work/reviews/2026-11-09-ADR0043修訂一單項確認與N209Q2裁示-風控.md）。
 - **data-engineer**：台股代號的形狀規則（N207-C12）。
 - **devops-sre／data-engineer**：部署前唯讀盤點（N-207 規格 §9）。
-- **tech-architect**：另案評估「已有 open 批次時重送資金確認」是否拒絕或警示（R-10 suggested）。
+- **creative-lead**：D7 第 3 點 (a′) 專用拒絕字面的擬稿；W-27 備註依 RC-79、RC-87 更新。
+- **tech-architect**：
+  - 另案評估「已有 open 批次時重送資金確認」是否拒絕或警示（R-10 suggested）；
+  - H-3 的修復路徑依 CEO #132，等真的發生時再另案設計並送風控；
+  - D7 第 6 點「取消」路徑（AC-95）仍由 TA 另行設計並送風控，不再和 H-3 綁在一起。
 - **tech-writer**：風控單項確認後，落檔本 ADR（proposed）與 ADR-0034 補充四（proposed）；CEO 核可後，依 J-10 加檔頭註記。
