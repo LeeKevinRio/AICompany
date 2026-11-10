@@ -436,7 +436,9 @@ def test_api_rejects_out_of_table_codes(harness: Harness) -> None:  # AC-V1, AC-
 
 def test_pages_show_route_labels(harness: Harness) -> None:  # AC-S1
     watch_id = harness.create_watch()
-    assert "台北桃園 TPE → 東京成田 NRT" in harness.client.get("/").text
+    # FD-22 ruling P4: the list card of a round trip shows "⇄" and no "・來回"; the detail
+    # page keeps its old route line.
+    assert "台北桃園 TPE ⇄ 東京成田 NRT" in harness.client.get("/").text
     assert "台北桃園 TPE → 東京成田 NRT" in harness.client.get(f"/watches/{watch_id}").text
 
 
@@ -454,7 +456,7 @@ def test_legacy_code_watch_still_works(harness: Harness) -> None:  # AC-S3, AC-V
     legacy = existing_spec(destination="XYZ", name="legacy")
     watch_id = harness.repo.insert_watch(legacy, NOW)
     page = harness.client.get("/").text
-    assert "台北桃園 TPE → XYZ" in page
+    assert "台北桃園 TPE ⇄ XYZ" in page  # FD-22 ruling P4: round-trip arrow on the list
     assert harness.client.get(f"/watches/{watch_id}").status_code == 200
     assert harness.client.get(f"/watches/{watch_id}/edit").status_code == 200
     assert harness.services.views.form_values(watch_id)["destination_label"] == "XYZ"

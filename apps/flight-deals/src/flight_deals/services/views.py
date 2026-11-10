@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal, TypeVar
 
 from flight_deals.domain.airlines import AIRLINES, lookup_airline
-from flight_deals.domain.airports import place_label, route_label
+from flight_deals.domain.airports import full_place_label, place_label, route_label
 from flight_deals.domain.currency import format_money, minor_to_major_int
 from flight_deals.domain.dates import expand_pairs, first_pair
 from flight_deals.domain.flight_summary import FlightFacts, FlightSummary, flight_summary
@@ -206,6 +206,9 @@ def list_page_notes(rows: list[dict[str, Any]]) -> dict[str, bool]:
     return {
         "priced": bool(priced),
         "round_trip": round_trip,
+        # Summary line only (FD-22 ruling): any priced round-trip watch counts, even an old
+        # record without flight data or marks. Every panel sentence keeps using "round_trip".
+        "summary_round_trip": round_trip or any(r["is_round_trip"] for r in priced),
         "return_listed": any(r["return_flight"] for r in priced),
         "overhead_one_way": not round_trip and any(item["overhead_bin_label"] for _, item in items),
         "booking": any(item["booking_url"] for _, item in items),
@@ -226,6 +229,27 @@ def kind_badge(price_kind: str, as_of_basis: str) -> str | None:
 def fetched_label(moment: datetime) -> str:
     """Visible "查到時間" next to a price (risk-compliance R4)."""
     return f"{WEB_TEXTS.price_prefix}時間 {format_taipei(moment)}"
+
+
+def fetched_short_label(moment: datetime, now: datetime) -> str:
+    """List-card fetch time (FD-22 P2): "查到 11/01 20:33"; the year only when it is not
+    the current Taipei year. The prefix stays; never a relative time."""
+    stamp = format_taipei(moment)
+    if stamp[:4] == format_taipei(now)[:4]:
+        stamp = stamp[5:].replace("-", "/")
+    return f"{WEB_TEXTS.price_prefix} {stamp}"
+
+
+def route_view(spec: WatchSpec) -> dict[str, str]:
+    """List-card route line (FD-22 P4). Round trip: "台北 TPE ⇄ 札幌 CTS"; one way keeps the
+    arrow and "・單程". Full airport names go to the title and the screen-reader text."""
+    round_trip = spec.trip_type == "round_trip"
+    arrow = "⇄" if round_trip else "→"
+    suffix = "" if round_trip else f"・{TRIP_TYPE_LABELS[spec.trip_type]}"
+    shown = f"{place_label(spec.origin)} {arrow} {place_label(spec.destination)}{suffix}"
+    full = f"{full_place_label(spec.origin)} {arrow} {full_place_label(spec.destination)}"
+    spoken = f"{full}・{TRIP_TYPE_LABELS[spec.trip_type]}"
+    return {"route_text": shown, "route_title": full, "route_sr": spoken}
 
 
 def pair_note(entry: Mapping[str, Any]) -> str | None:
@@ -574,6 +598,7 @@ class ViewService:
             "dates_weekday_label": date_range_weekday_text(obs.depart_date, obs.return_date),
             "dates": date_range_text(obs.depart_date, obs.return_date),
             "fetched_label": fetched_label(obs.fetched_at),
+            "fetched_short": fetched_short_label(obs.fetched_at, now),
             "stale": self._is_stale(obs.fetched_at, now, stale_hours),
             "flight": flight_view(obs, spec.trip_type),
             "overhead_bin_label": overhead_bin_label(obs.overhead_bin_excluded, spec.trip_type),
@@ -645,7 +670,12 @@ class ViewService:
                     "id": watch.id,
                     "name": spec.name,
                     "route": route_label(spec.origin, spec.destination),
+                    **route_view(spec),
                     "trip": TRIP_TYPE_LABELS[spec.trip_type],
+                    # FD-22 D#24: only one adult in economy may drop the party summary.
+                    "pax_default": (
+                        spec.adults == 1 and spec.children == 0 and spec.cabin == "economy"
+                    ),
                     "dates": dates_text(spec),
                     "budget": (
                         format_money(spec.budget_amount_minor, spec.currency)
@@ -673,6 +703,9 @@ class ViewService:
                     "cheapest_fetched_label": fetched_label(cheapest.fetched_at)
                     if cheapest
                     else None,
+                    "cheapest_fetched_short": fetched_short_label(cheapest.fetched_at, now)
+                    if cheapest
+                    else None,
                     "stale": cheapest is not None
                     and self._is_stale(cheapest.fetched_at, now, stale_hours),
                     "flight": flight_view(cheapest, spec.trip_type),
@@ -693,7 +726,11 @@ class ViewService:
                     "coverage_label": (
                         coverage_text(*coverage) if coverage and cheapest is not None else None
                     ),
+                    "coverage_checked": coverage[0] if coverage else None,
+                    "coverage_total": coverage[1] if coverage else None,
                     "coverage_incomplete": coverage is not None and coverage[0] < coverage[1],
+                    # Not shown on the list since FD-22 (CEO decision on #9, option (a));
+                    # kept in the row because the view-model tests and callers still read it.
                     "delta": delta_view(snapshot.delta_since_previous_run()),
                     "last_scanned": format_taipei(watch.last_scanned_at) or None,
                     # Replaces the price block of a card without a price (#47).

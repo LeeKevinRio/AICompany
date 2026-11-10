@@ -226,8 +226,12 @@ def test_each_stale_price_has_a_refresh_button(harness: Harness) -> None:
         assert button.attrs["data-action"] == "scan-now"
         assert button.attrs["data-watch-id"] == str(watch_id)
         assert button.attrs["type"] == "button"
-        assert button.text() == WEB_TEXTS.refresh_button
+        # FD-22 ruling section 3: an icon-only button; the name is the same word as before,
+        # in aria-label and in title, and the busy label stays available.
+        assert button.text() == ""
         assert button.attrs["aria-label"].startswith(WEB_TEXTS.refresh_label)
+        assert button.attrs["title"] == button.attrs["aria-label"]
+        assert button.attrs["data-busy-label"] == WEB_TEXTS.scan_busy_label
         assert "primary" not in button.classes
 
 

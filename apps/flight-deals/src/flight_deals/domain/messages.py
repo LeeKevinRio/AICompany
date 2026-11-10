@@ -40,12 +40,16 @@ from flight_deals.domain.trip_labels import static_texts as trip_static_texts
 
 DISCLAIMER = "價格為查到當下的參考值，實際以航空公司或訂票網站為準。"
 # #46 (FD-13 risk ruling): always next to DISCLAIMER, once per page or Telegram message
-# showing prices. Never explain the gap or call either figure more accurate: the
+# showing prices. On the web list page it sits in the collapsed price-notes panel
+# (FD-22 ruling section 1); other pages and Telegram are unchanged.
+# Never explain the gap or call either figure more accurate: the
 # 2026-11-03 sample is small and stops at Google's booking page.
 PRICE_SOURCE_NOTE = (
     "價格取自 Google 預設排序的結果；「最低價格」分頁的數字可能較低，但兩者都可能與訂票頁金額不同。"
 )
-# FD-16 risk ruling: always visible with round-trip prices, whatever the marks say. The
+# FD-16 risk ruling: always visible with round-trip prices, whatever the marks say. On the
+# web list page it sits in the collapsed price-notes panel (FD-22 ruling section 1); other
+# pages and Telegram are unchanged. The
 # same flights can have several prices and ways to buy, and a missing mark proves nothing.
 ROUND_TRIP_NOTE = (
     "標示來自 Google，沒有標示不代表單張機票或含手提行李。"
@@ -1578,7 +1582,8 @@ class UiTexts:
     best_card_title: str = "已查到最低價"
     price_prefix: str = "查到"
     price_column: str = "查到價格"
-    # #43 (R10): visible once on every page with round-trip prices.
+    # #43 (R10): visible once on every page with round-trip prices. On the web list page it
+    # sits in the collapsed price-notes panel (FD-22 ruling section 1); other pages unchanged.
     return_leg_explain: str = (
         "只列去程航班；回程需在 Google Flights 選擇，價格可能因回程不同而改變。"
     )
@@ -1625,6 +1630,21 @@ class UiTexts:
     stale_rounds: str = "近 {rounds} 輪未更新"
     # #41.
     list_empty: str = "還沒有監看。"
+    # FD-22 risk ruling (verbatim): the always-visible summary line under DISCLAIMER and the
+    # label of the one collapsed price-notes panel. Never edit these without the risk officer.
+    page_summary_round_trip: str = (
+        "只涵蓋已取樣的日期；沒有標示不代表單張機票或含手提行李；回程要到 Google Flights 自己選。"
+    )
+    page_summary_priced: str = "只涵蓋已取樣的日期；沒有標示不代表含手提行李。"
+    price_notes_summary: str = "價格說明"
+    # FD-22 D#24: label of the extra row in the collapsed watch conditions.
+    pax_cabin_label: str = "人數與艙等"
+    # FD-22: wording of the icon-only action buttons (aria-label and title are identical).
+    scan_now_label: str = "立即查價"
+    more_label: str = "更多"
+    scan_busy_label: str = "查價中…"
+    last_scanned_prefix: str = "上次查價"
+    conditions_summary: str = "監看條件"
 
 
 WEB_TEXTS = UiTexts()

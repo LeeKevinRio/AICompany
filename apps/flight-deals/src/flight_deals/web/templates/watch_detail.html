@@ -10,7 +10,7 @@
     <a class="button" href="/watches/{{ watch.id }}/edit">修改</a>
     {% if watch.status != "expired" %}
       {% if watch.enabled %}
-      <button type="button" data-action="scan-now" data-watch-id="{{ watch.id }}" data-busy-label="查價中…">立即查價</button>
+      <button type="button" data-action="scan-now" data-watch-id="{{ watch.id }}" data-busy-label="{{ ui.scan_busy_label }}">{{ ui.scan_now_label }}</button>
       <button type="button" data-action="set-enabled" data-watch-id="{{ watch.id }}" data-enabled="false">停用</button>
       {% else %}
       <button type="button" data-action="set-enabled" data-watch-id="{{ watch.id }}" data-enabled="true">啟用</button>

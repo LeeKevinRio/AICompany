@@ -464,14 +464,17 @@ def test_list_round_trip_card_has_only_the_outbound_flight(harness: Harness) -> 
     assert "回程航班" not in page.plain_text()
 
 
-def test_list_notes_are_visible_once_and_not_collapsed(harness: Harness) -> None:
+def test_list_notes_sit_once_in_the_collapsed_panel(harness: Harness) -> None:
     priced_round_trip(harness)
     cheaper_second_round(harness)  # the second round gives a delta badge
     page = get(harness, "/")
     assert_one_disclaimer(page)
-    assert page.count_visible(RETURN_EXPLAIN) == 1 and page.count(RETURN_EXPLAIN) == 1
-    assert page.count_visible(BOOKING_HINT) == 1 and page.count(BOOKING_HINT) == 1
-    assert page.count_visible(DELTA_EXPLAIN) == 1 and page.count(DELTA_EXPLAIN) == 1
+    # FD-22 ruling section 1 (package A) replaces FD-13 M2 / FD-12 R10 / FD-16 for the list:
+    # these sentences now sit once in the collapsed price-notes panel. The list shows no
+    # change sentence (CEO decision on #9, option (a)).
+    assert page.count_in_details(RETURN_EXPLAIN) == 1 and page.count(RETURN_EXPLAIN) == 1
+    assert page.count_in_details(BOOKING_HINT) == 1 and page.count(BOOKING_HINT) == 1
+    assert page.count(DELTA_EXPLAIN) == 0
     # Disclaimer sits before the first card.
     order = [n for n in page.main.descendants() if "disclaimer" in n.classes or n.tag == "article"]
     assert "disclaimer" in order[0].classes
@@ -993,8 +996,11 @@ def test_required_visible_items_are_never_inside_details(harness: Harness) -> No
     detail = get(harness, f"/watches/{watch_id}")
     listing = get(harness, "/")
     for page in (detail, listing):
-        for needle in (DISCLAIMER, RETURN_EXPLAIN, BOOKING_HINT):
-            assert page.count_in_details(needle) == 0, needle
+        assert page.count_in_details(DISCLAIMER) == 0
+    # FD-22 ruling section 1: on the list the other sentences live in the collapsed panel.
+    for needle in (RETURN_EXPLAIN, BOOKING_HINT):
+        assert detail.count_in_details(needle) == 0, needle
+        assert listing.count_in_details(needle) == 1, needle
     assert detail.count_in_details(SAMPLED_ONLY_NOTE) == 0
     # The stale badge of the main card and of a list card is outside every <details>.
     for page, selector in ((detail, "price-card"), (listing, "price-block")):
@@ -1069,6 +1075,12 @@ def test_price_source_note_once_on_every_page_with_prices(harness: Harness) -> N
         "/notifications",
     ):
         page = get(harness, url)
+        if url == "/":
+            # FD-22 ruling section 1: the list keeps it once, first in the collapsed panel.
+            assert page.count(PRICE_SOURCE_NOTE) == 1
+            assert page.count_in_details(PRICE_SOURCE_NOTE) == 1
+            assert_one_disclaimer(page)
+            continue
         assert page.count_visible(PRICE_SOURCE_NOTE) == 1, url
         if url != "/notifications":  # the log also keeps the sent Telegram text
             assert page.count(PRICE_SOURCE_NOTE) == 1, url
@@ -1078,7 +1090,9 @@ def test_price_source_note_once_on_every_page_with_prices(harness: Harness) -> N
 
 def test_price_source_note_sits_right_after_the_disclaimer(harness: Harness) -> None:  # M2
     watch_id = priced_round_trip(harness)
-    for url in ("/", f"/watches/{watch_id}", f"/explorations/{done_exploration(harness)}"):
+    # FD-22 ruling section 1 replaces M2 for the list ("/"): there the summary line and the
+    # collapsed panel follow DISCLAIMER (see test_fd22_list_simplify).
+    for url in (f"/watches/{watch_id}", f"/explorations/{done_exploration(harness)}"):
         html = get(harness, url).html
         between = html.split(DISCLAIMER, 1)[1].split(PRICE_SOURCE_NOTE, 1)[0]
         assert "<details" not in between and "<section" not in between, url
@@ -1276,8 +1290,12 @@ def test_split_ticket_note_once_and_visible_on_round_trip_pages(harness: Harness
     ):
         page = get(harness, url)
         assert page.count(ROUND_TRIP_NOTE) == 1, url
-        assert page.count_visible(ROUND_TRIP_NOTE) == 1, url
-        assert page.count_in_details(ROUND_TRIP_NOTE) == 0, url
+        if url == "/":
+            # FD-22 ruling section 1 (replaces the FD-16 "always visible" rule on the list).
+            assert page.count_in_details(ROUND_TRIP_NOTE) == 1
+        else:
+            assert page.count_visible(ROUND_TRIP_NOTE) == 1, url
+            assert page.count_in_details(ROUND_TRIP_NOTE) == 0, url
         note = next(
             n for n in page.main.descendants() if ROUND_TRIP_NOTE in n.text() and n.tag == "p"
         )

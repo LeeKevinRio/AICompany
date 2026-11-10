@@ -650,8 +650,9 @@ def test_list_mixes_return_flights(harness: Harness, lookup: Lookup) -> None:
     harness.source.flight = BR_DIRECT
     harness.scan(other)
     page = get(harness, "/")
-    assert page.count_visible(LISTED) == 1 and RETURN_EXPLAIN not in page.html
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1
+    # FD-22 ruling section 1: the list keeps these once, inside the collapsed panel.
+    assert page.count_in_details(LISTED) == 1 and RETURN_EXPLAIN not in page.html
+    assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
     cards = page.main.find_all(None, "watch-card")
     main_cards = [main_card(page, int(c.attrs["data-watch-id"])) for c in cards]
     assert sorted(len(c.find_all("div", "flight")) for c in main_cards) == [1, 2]
@@ -663,7 +664,8 @@ def test_list_with_one_way_and_round_trip_has_the_round_trip_note(
     scanned(harness)
     priced_one_way(harness)
     page = get(harness, "/")
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1 and OVERHEAD_BIN_NOTE not in page.html
+    # FD-22 ruling section 1: inside the collapsed panel on the list.
+    assert page.count_in_details(ROUND_TRIP_NOTE) == 1 and OVERHEAD_BIN_NOTE not in page.html
 
 
 def test_one_way_marked_bag_keeps_its_own_note(harness: Harness) -> None:
@@ -783,6 +785,8 @@ def test_wording_stays_within_the_ruling() -> None:
     for text in web_static_texts():
         leftover = text.replace(ROUND_TRIP_NOTE, "").replace(LISTED, "")
         leftover = leftover.replace(SPLIT_TICKET_LABEL, "")
+        # FD-22 ruling section 2: the verbatim round-trip summary line says "單張機票".
+        leftover = leftover.replace(WEB_TEXTS.page_summary_round_trip, "")
         for phrase in (*forbidden, "單張", "要分開買", "換回程"):
             assert phrase not in leftover, (phrase, text)
     assert re.fullmatch(r"Google 標示此價要分開買", SPLIT_TICKET_LABEL)

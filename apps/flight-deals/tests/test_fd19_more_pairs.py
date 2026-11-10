@@ -170,9 +170,11 @@ def test_sampled_note_once_when_a_card_is_incomplete(harness: Harness) -> None:
     harness.scan(harness.create_watch(name="第二張", **WINDOW))
     page = get(harness, "/")
     assert page.count(SAMPLED_ONLY_NOTE) == 1
-    assert page.count_visible(SAMPLED_ONLY_NOTE) == 1
+    # FD-22 ruling section 1: with a price on the page the sentence sits in the collapsed
+    # panel (the visible summary line says "只涵蓋已取樣的日期" and each card keeps its
+    # own coverage line); without any price it stays visible (next test).
     note = page.main.find_all(None, "page-notes")[0].find_all("p", "sampled-note")
-    assert len(note) == 1 and not note[0].in_details()
+    assert len(note) == 1 and note[0].in_details()
 
 
 def test_sampled_note_for_a_window_without_any_price(harness: Harness) -> None:
@@ -291,7 +293,8 @@ def test_rows_are_display_only(harness: Harness) -> None:
     harness.source.prices[("2026-12-12", "2026-12-17")] = 8_200
     harness.scan(watch_id)
     the_card = card(harness)
-    assert the_card.find_all(None, "price-block")[0].find_all(None, "delta")  # main has one
+    # FD-22 (CEO decision on #9, option (a)): neither the main card nor the rows show a change.
+    assert not the_card.find_all(None, "price-block")[0].find_all(None, "delta")
     assert not the_card.find_all("section", "more-pairs")[0].find_all(None, "delta")
 
 

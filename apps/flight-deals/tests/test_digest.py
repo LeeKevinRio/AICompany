@@ -525,7 +525,10 @@ def test_list_page_explains_delta(harness: Harness) -> None:
     harness.clock.advance(hours=7)
     harness.source.default_price = 9_000
     harness.scan(watch_id)
-    page = harness.client.get("/").text
+    # FD-22 (CEO decision on #9, risk option (a)): the list card shows no change at all, so
+    # the list page has no sentence about it either; the detail page keeps both.
+    assert WEB_TEXTS.delta_explain not in harness.client.get("/").text
+    page = harness.client.get(f"/watches/{watch_id}").text
     assert WEB_TEXTS.delta_explain in page
     assert "較前一輪：已查到最低價與上一輪掃描結束時最低價的差額" in page
     assert "兩個最低價可能是不同日期" in page

@@ -582,6 +582,12 @@ def route_label(origin: str, destination: str) -> str:
     return f"{place_label(origin)} → {place_label(destination)}"
 
 
+def full_place_label(code: str) -> str:
+    """Full airport name and code ("台北桃園 TPE"); codes outside the table fall back to code."""
+    place = lookup(code)
+    return f"{place.zh_name} {place.code}" if place else code
+
+
 def suggestion_label(place: Place) -> str:
     """Dropdown text: full name, code and country; cities are marked as all airports."""
     if place.kind == "city":

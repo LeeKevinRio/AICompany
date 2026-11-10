@@ -1,9 +1,10 @@
 {% extends "base.html" %}
-{% from "_macros.html" import ext_link, flight, price_labels, price_line, delta_badge, price_meta, help_note with context %}
+{% from "_macros.html" import ext_link, flight, price_labels, price_line, price_meta, help_note, icon with context %}
 {% block title %}監看列表{% endblock %}
 {# Pages that print the disclaimer next to the first price drop the footer copy (C-101). #}
 {% block footer_disclaimer %}{% if not watches %}{{ disclaimer }}{% endif %}{% endblock %}
 {% block content %}
+{% set status_icons = {"paused": "i-pause", "expired": "i-flag", "stale": "i-warn"} %}
 <div class="page-head">
   <h1>監看列表</h1>
   <a class="button primary" href="/watches/new">新增監看</a>
@@ -14,52 +15,71 @@
   <a class="button primary" href="/watches/new">建立第一個監看</a>
 </div>
 {% else %}
-{# FD-19 R4: each condition counts the main cards and the extra pairs together. #}
+{# FD-22 risk ruling (package A): DISCLAIMER and one summary line stay visible above the
+   first card, outside any <details>; everything else sits in the one collapsed price-notes
+   panel, in the old order and under the old conditions. FD-19 R4: each condition counts the
+   main cards and the extra pairs together. #}
 <div class="page-notes">
   <p class="disclaimer">{{ disclaimer }}</p>
-  {% if notes.priced %}<p class="price-source-note">{{ ui.price_source_note }}</p>{% endif %}
-  {% if notes.sampled %}<p class="sampled-note">{{ sampled_only_note }}</p>{% endif %}
-  {% if notes.overhead_one_way %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
-  {% if notes.round_trip %}<p class="return-explain">{{ ui.return_leg_explain_listed if notes.return_listed else ui.return_leg_explain }}</p>
-  <p class="return-explain">{{ ui.round_trip_note }}</p>{% endif %}
-  {% if notes.booking %}<p class="booking-hint">{{ ui.booking_hint }}</p>{% endif %}
-  {% if notes.priced %}{{ help_note(ui.local_time_explain) }}{% endif %}
+  {% if notes.summary_round_trip %}<p class="page-summary">{{ ui.page_summary_round_trip }}</p>
+  {% elif notes.priced %}<p class="page-summary">{{ ui.page_summary_priced }}</p>
+  {% elif notes.sampled %}<p class="sampled-note">{{ sampled_only_note }}</p>{% endif %}
+  {% if notes.priced %}
+  <details class="notes-more">
+    <summary>{{ icon("i-chevron", "chevron") }}{{ ui.price_notes_summary }}</summary>
+    <div class="notes-more-body">
+      <p class="price-source-note">{{ ui.price_source_note }}</p>
+      {% if notes.sampled %}<p class="sampled-note">{{ sampled_only_note }}</p>{% endif %}
+      {% if notes.round_trip %}<p class="return-explain">{{ ui.return_leg_explain_listed if notes.return_listed else ui.return_leg_explain }}</p>
+      <p class="return-explain">{{ ui.round_trip_note }}</p>
+      {% elif notes.overhead_one_way %}<p class="overhead-bin-note">{{ ui.overhead_bin_note }}</p>{% endif %}
+      {% if notes.booking %}<p class="booking-hint">{{ ui.booking_hint }}</p>{% endif %}
+      <p class="time-explain">{{ ui.local_time_explain }}</p>
+    </div>
+  </details>
+  {% endif %}
 </div>
 <div class="watch-grid">
   {% for w in watches %}
   {%- set refresh = w if (not w.expired and w.enabled) else none %}
-  <article class="watch-card" data-watch-id="{{ w.id }}" aria-labelledby="watch-name-{{ w.id }}">
+  <article class="watch-card{% if w.status in ('paused', 'expired') %} is-off{% endif %}" data-watch-id="{{ w.id }}" aria-labelledby="watch-name-{{ w.id }}">
     <header class="card-head">
+      {% if w.status == "active" -%}
+      <span class="state-dot">{{ icon("i-dot") }}<span class="sr-only">{{ w.status_label }}</span></span>
+      {%- else -%}
+      <span class="badge state-chip status-{{ w.status }}">{{ icon(status_icons.get(w.status, "i-warn")) }}{{ w.status_label }}</span>
+      {%- endif %}
       <h2 class="card-title" id="watch-name-{{ w.id }}"><a href="/watches/{{ w.id }}">{{ w.name }}</a></h2>
-      <div class="badges">
-        <span class="badge status-{{ w.status }}">{{ w.status_label }}</span>
-        {% if w.manual_check %}<span class="badge warn">{{ ui.manual_check }}</span>{% endif %}
-      </div>
+      {% if w.manual_check %}<span class="badge warn state-chip">{{ icon("i-warn") }}{{ ui.manual_check }}</span>{% endif %}
     </header>
-    <p class="card-meta">{{ w.route }}・{{ w.trip }}</p>
+    <p class="card-meta" title="{{ w.route_title }}"><span aria-hidden="true">{{ w.route_text }}</span><span class="sr-only">{{ w.route_sr }}</span></p>
 
     {% if w.min_price %}
     <div class="price-block">
       <div class="price-label">{{ ui.best_card_title }}</div>
       <div class="price-row">
         <span class="price-amount">{{ w.min_price }}</span>
-        {{ delta_badge(w.delta) }}
       </div>
-      {{- price_labels(w.split_ticket_label, w.overhead_bin_label) }}
-      <div class="price-sub">{{ price_line(w.price_caption, w.pax_note, w.pax_summary, w.cabin_label) }}</div>
-      <div class="price-meta">{{ price_meta(w.cheapest_fetched_label, w.stale, w.stale_rounds_label, refresh=refresh) }}</div>
-      <div class="price-dates">{{ w.dates_weekday_label }}</div>
+      {{- price_labels(w.split_ticket_label, w.overhead_bin_label, icons=true) }}
+      {%- set sub = price_line(w.price_caption, w.pax_note, w.pax_summary, w.cabin_label, default_pax=w.pax_default) %}
+      {% if sub|trim %}<div class="price-sub">{{ sub }}</div>{% endif %}
+      <div class="price-meta">{{ price_meta(w.cheapest_fetched_short, w.stale, w.stale_rounds_label, refresh=refresh, icons=true) }}</div>
+      <div class="price-dates">{{ icon("i-calendar") }}{{ w.dates_weekday_label }}</div>
     </div>
-    {{ flight(w.flight) }}
-    {{ flight(w.return_flight) }}
-    {% if w.coverage_label %}<p class="coverage">{{ w.coverage_label }}</p>{% endif %}
+    {{ flight(w.flight, icons=true) }}
+    {{ flight(w.return_flight, icons=true) }}
+    {% if w.coverage_label %}
+    <div class="coverage-block">
+      <progress class="coverage-bar" value="{{ w.coverage_checked }}" max="{{ w.coverage_total }}" aria-hidden="true"></progress>
+      <p class="coverage">{{ w.coverage_label }}</p>
+    </div>
+    {% endif %}
     {% else %}
     <p class="muted">{{ w.no_price_label }}</p>
     {% if w.manual_check %}{{ help_note(ui.manual_check_explain) }}{% endif %}
     {% endif %}
 
     <div class="card-foot">
-      {% if w.last_scanned %}<p class="muted card-scanned">上次查價 {{ w.last_scanned }}</p>{% endif %}
       <div class="card-actions">
         {% if w.booking_url %}
           {% if w.min_price %}
@@ -68,13 +88,14 @@
           {{ ext_link(w.booking_url, ui.manual_link, w.name, "button small booking") }}
           {% endif %}
         {% endif %}
-        <a class="button small" href="/watches/{{ w.id }}">詳情</a>
+        {# FD-22: icon-only buttons; aria-label and title carry the old button words. #}
         {% if not w.expired and w.enabled %}
-        <button type="button" class="small" data-action="scan-now" data-watch-id="{{ w.id }}" data-busy-label="查價中…">立即查價</button>
+        <button type="button" class="small icon-btn" data-action="scan-now" data-watch-id="{{ w.id }}" data-busy-label="{{ ui.scan_busy_label }}" data-icon-button aria-label="{{ ui.scan_now_label }}" title="{{ ui.scan_now_label }}">{{ icon("i-refresh") }}</button>
         {% endif %}
         <details class="more">
-          <summary class="button small">更多</summary>
+          <summary class="button small icon-btn" aria-label="{{ ui.more_label }}" title="{{ ui.more_label }}">{{ icon("i-more") }}</summary>
           <div class="actions more-actions">
+            {% if w.last_scanned %}<p class="muted card-scanned">{{ ui.last_scanned_prefix }} {{ w.last_scanned }}</p>{% endif %}
             <a class="button small" href="/watches/{{ w.id }}/edit">修改</a>
             {% if not w.expired %}
               {% if w.enabled %}
@@ -99,12 +120,12 @@
         <li class="more-pair">
           <div class="more-pair-head">
             <span class="more-pair-amount">{{ p.amount }}</span>
-            <span class="more-pair-dates">{{ p.dates_weekday_label }}</span>
+            <span class="more-pair-dates">{{ icon("i-calendar") }}{{ p.dates_weekday_label }}</span>
           </div>
           {% if w.pax_note %}<div class="price-sub">{{ w.pax_note }}</div>{% endif %}
-          {{- price_labels(p.split_ticket_label, p.overhead_bin_label) }}
-          <div class="price-meta">{{ price_meta(p.fetched_label, p.stale, refresh=refresh) }}</div>
-          {{ flight(p.flight, compact=true, leg=true) }}
+          {{- price_labels(p.split_ticket_label, p.overhead_bin_label, icons=true) }}
+          <div class="price-meta">{{ price_meta(p.fetched_short, p.stale, refresh=refresh, icons=true) }}</div>
+          {{ flight(p.flight, compact=true, leg=true, icons=true) }}
           {% if p.booking_url %}
           <div class="more-pair-actions">{{ ext_link(p.booking_url, ui.booking_button_short, p.dates, "button small booking") }}</div>
           {% if p.booking_note %}<p class="hint booking-note">{{ p.booking_note }}</p>{% endif %}
@@ -116,10 +137,11 @@
     {% endif %}
 
     <details class="fold fold-inline">
-      <summary><span class="fold-title">監看條件</span></summary>
+      <summary><span class="fold-title">{{ ui.conditions_summary }}</span></summary>
       <div class="fold-body">
         <dl class="facts">
           <dt>日期設定</dt><dd>{{ w.dates }}</dd>
+          <dt>{{ ui.pax_cabin_label }}</dt><dd>{{ w.pax_summary }}</dd>
           <dt>預算</dt><dd>{{ w.budget }}{% if w.pax_note %} <span class="muted">{{ w.pax_note }}</span>{% endif %}</dd>
           {% if w.filters_label %}<dt>條件</dt><dd>{{ w.filters_label }}</dd>{% endif %}
         </dl>
@@ -128,8 +150,5 @@
   </article>
   {% endfor %}
 </div>
-{% if watches|selectattr("delta")|list %}
-<div class="delta-explain"><p>{{ ui.delta_explain }}</p>{{ help_note(ui.delta_explain_detail) }}</div>
-{% endif %}
 {% endif %}
 {% endblock %}

@@ -54,6 +54,29 @@
   --color-heat-pricey: #f8d6d3;
   --color-chart-bg: #f2f5fa;
   --color-chart-line: #1f5fbf;
+
+  /* FD-22 semantic tokens. Most are aliases, so they follow the dark block below without
+     a second definition; only "mark" has its own pair. There is deliberately no token for a
+     positive recency mark: the risk ruling (P1) forbids one. */
+  --color-stale-fg: var(--color-warn-text);
+  --color-stale-bg: var(--color-warn-bg);
+  --color-down-fg: var(--color-ok-text);
+  --color-down-bg: var(--color-ok-bg);
+  --color-up-fg: var(--color-bad-text);
+  --color-up-bg: var(--color-bad-bg);
+  --color-flat-fg: var(--color-neutral-text);
+  --color-flat-bg: var(--color-neutral-bg);
+  --color-state-on: var(--color-ok-text);
+  --color-state-off-fg: var(--color-neutral-text);
+  --color-state-off-bg: var(--color-neutral-bg);
+  --color-state-bad-fg: var(--color-bad-text);
+  --color-state-bad-bg: var(--color-bad-bg);
+  --color-state-warn-fg: var(--color-warn-text);
+  --color-state-warn-bg: var(--color-warn-bg);
+  --color-mark-fg: #1d3f8a;
+  --color-mark-bg: #e8eefc;
+  --color-bar-fill: var(--color-accent);
+  --color-bar-track: var(--color-border);
   --shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.18);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
@@ -83,6 +106,8 @@
     --color-heat-pricey: #4a2522;
     --color-chart-bg: #1a1f27;
     --color-chart-line: #6ea0f0;
+    --color-mark-fg: #b9cdf7;
+    --color-mark-bg: #1f2a44;
     --shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.6);
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5);
   }
@@ -723,4 +748,121 @@ details.explain > summary {
   details.fold > summary { min-height: 48px; }
   details.explain > summary { min-height: var(--touch-target); display: inline-flex; align-items: center; }
   .card-actions > details.more > summary { width: 100%; }
+}
+
+/* FD-22 list page: icons, one-line summary plus collapsed price notes, status marks,
+   coverage bar and icon-only actions. Last, so it wins over the FD-12 and phone rules. */
+.icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: -3px;
+  margin-right: var(--space-1);
+}
+.icon-btn .icon { width: 20px; height: 20px; margin-right: 0; vertical-align: middle; }
+
+/* Risk ruling: the summary line and the panel text stay at body size in the text colour. */
+.page-notes .page-summary,
+.page-notes .notes-more,
+.page-notes .notes-more-body p {
+  font-size: var(--text-base);
+  color: var(--color-text);
+}
+.notes-more { margin: 0; }
+.notes-more > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--touch-target);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+.notes-more > summary::-webkit-details-marker { display: none; }
+/* Decorative chevron (an aria-hidden icon, not a text glyph): right when closed, down when open. */
+.notes-more > summary .chevron { margin-right: 0; transform: rotate(-90deg); }
+.notes-more[open] > summary .chevron { transform: none; }
+.notes-more-body { margin-top: var(--space-2); }
+
+.watch-grid { gap: var(--space-3); }
+.watch-card { gap: var(--space-2); padding: var(--space-3) var(--space-4); }
+.card-head { flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: var(--space-2); }
+.card-head .card-title { flex: 1 1 8em; }
+.state-dot { display: inline-flex; color: var(--color-state-on); }
+.state-dot .icon { width: 12px; height: 12px; margin: 0; vertical-align: baseline; }
+.state-chip { display: inline-flex; align-items: center; white-space: normal; }
+.state-chip .icon { margin-right: var(--space-1); }
+.state-chip.status-stale { background: var(--color-state-bad-bg); color: var(--color-state-bad-fg); }
+.state-chip.status-paused, .state-chip.status-expired {
+  background: var(--color-state-off-bg);
+  color: var(--color-state-off-fg);
+}
+.watch-card.is-off { border-style: dashed; }
+/* Leftover height goes below the card's last block, not above the main button (FD-22 desktop). */
+.watch-card .card-foot { margin-top: 0; }
+.watch-card.is-off .card-title a { color: var(--color-muted); }
+
+.watch-card .price-block { gap: 2px; }
+/* Scoped to the list card: the detail page shares these classes and is not re-laid-out. */
+.watch-card .price-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-1); }
+.watch-card .price-meta .badge, .watch-card .price-meta .refresh { margin-left: 0; }
+.watch-card .price-labels .badge, .watch-card .price-meta .badge { display: inline-flex; align-items: center; }
+.badge .icon { margin-right: var(--space-1); }
+.badge.mark { background: var(--color-mark-bg); color: var(--color-mark-fg); }
+.watch-card .price-dates { display: flex; align-items: center; color: var(--color-text); }
+.watch-card .flight { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px var(--space-3); }
+.flight-leg .icon { margin-right: 2px; }
+.more-pair-dates { display: inline-flex; align-items: center; }
+
+.coverage-block { display: flex; flex-direction: column; gap: var(--space-1); }
+progress.coverage-bar {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  max-width: none;
+  height: 8px;
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-bar-track);
+  overflow: hidden;
+  accent-color: var(--color-bar-fill);
+}
+progress.coverage-bar::-webkit-progress-bar { background: var(--color-bar-track); }
+progress.coverage-bar::-webkit-progress-value { background: var(--color-bar-fill); }
+progress.coverage-bar::-moz-progress-bar { background: var(--color-bar-fill); }
+
+.card-actions { align-items: center; }
+.icon-btn { flex: 0 0 var(--touch-target); width: var(--touch-target); height: var(--touch-target); min-height: var(--touch-target); padding: 0; }
+.icon-btn[aria-busy="true"] { width: auto; flex: 0 0 auto; padding: 0 var(--space-3); }
+details.more > summary.icon-btn::after, details.more[open] > summary.icon-btn::after { content: none; }
+.card-actions > .button.booking { flex: 1 1 0; min-width: max-content; }
+.more-actions > .card-scanned { flex: 1 0 100%; min-height: 0; margin: 0; font-size: var(--text-sm); }
+.more-pairs { padding-top: var(--space-2); }
+.more-pairs-list { gap: var(--space-2); }
+.more-pair + .more-pair { padding-top: var(--space-2); }
+
+@media (max-width: 600px) {
+  .card-actions > .icon-btn { flex: 0 0 var(--touch-target); }
+  .card-actions > .icon-btn[aria-busy="true"] { flex: 0 0 auto; }
+  .card-actions > details.more { flex: 0 0 auto; }
+  .card-actions > details.more[open] { flex: 1 0 100%; }
+  .card-actions > details.more > summary.icon-btn { width: var(--touch-target); }
+  .card-actions > .button.booking { flex: 1 1 0; }
+  .more-actions > .card-scanned { min-height: 0; }
+  .watch-card .price-meta .refresh.icon-btn { min-height: var(--touch-target); }
+}
+
+/* 360px phones: keep the five site links on one line so the main button stays on the first screen. */
+@media (max-width: 380px) {
+  .site-nav { gap: var(--space-1) var(--space-2); }
 }

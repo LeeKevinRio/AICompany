@@ -40,20 +40,46 @@
   }
 
   // Loading state: native disabled + aria-busy + optional busy label.
+  // Icon-only buttons (data-icon-button, FD-22) carry their name in aria-label and title; while
+  // busy the visible text and the name both become the busy label, then everything is restored.
+  // The icon nodes are kept aside and put back, never re-parsed from a string.
+  const idleIcons = new WeakMap();
   function setBusy(button, busy) {
+    const iconOnly = button.hasAttribute("data-icon-button");
     if (busy) {
       if (button.getAttribute("data-idle-label") === null) {
         button.setAttribute("data-idle-label", button.textContent);
+        if (iconOnly) {
+          idleIcons.set(button, Array.prototype.slice.call(button.childNodes));
+          button.setAttribute("data-idle-name", button.getAttribute("aria-label") || "");
+          button.setAttribute("data-idle-title", button.getAttribute("title") || "");
+        }
       }
       button.disabled = true;
       button.setAttribute("aria-busy", "true");
       const label = button.getAttribute("data-busy-label");
-      if (label) button.textContent = label;
+      if (label) {
+        button.textContent = label;
+        if (iconOnly) {
+          button.removeAttribute("aria-label");
+          button.setAttribute("title", label);
+        }
+      }
     } else {
       button.disabled = false;
       button.removeAttribute("aria-busy");
       const idle = button.getAttribute("data-idle-label");
-      if (idle !== null) button.textContent = idle;
+      const saved = idleIcons.get(button);
+      if (iconOnly && saved) {
+        button.replaceChildren.apply(button, saved);
+        button.setAttribute("aria-label", button.getAttribute("data-idle-name") || "");
+        button.setAttribute("title", button.getAttribute("data-idle-title") || "");
+        button.removeAttribute("data-idle-name");
+        button.removeAttribute("data-idle-title");
+        idleIcons.delete(button);
+      } else if (idle !== null) {
+        button.textContent = idle;
+      }
       button.removeAttribute("data-idle-label");
     }
   }

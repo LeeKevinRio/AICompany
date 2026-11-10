@@ -236,7 +236,8 @@ def test_list_label_is_outside_the_flight_block(harness: Harness) -> None:
     page = get(harness, "/")
     assert page.count_visible(ROUND_TRIP) == 1
     assert ONE_WAY not in page.html
-    assert page.count_visible(ROUND_TRIP_NOTE) == 1
+    # FD-22 ruling section 1: the list's note sits once in the collapsed price-notes panel.
+    assert page.count(ROUND_TRIP_NOTE) == 1 and page.count_in_details(ROUND_TRIP_NOTE) == 1
     flights = page.main.find_all(None, "flight")
     assert flights
     for flight in flights:
@@ -250,7 +251,11 @@ def test_one_way_uses_its_own_wording(harness: Harness) -> None:
     for url in ("/", f"/watches/{watch_id}"):
         page = get(harness, url)
         assert ONE_WAY in page.html and ROUND_TRIP not in page.html, url
-        assert page.count_visible(OVERHEAD_BIN_NOTE) == 1, url
+        if url == "/":  # FD-22 ruling section 1: inside the collapsed panel on the list
+            assert page.count(OVERHEAD_BIN_NOTE) == 1
+            assert page.count_in_details(OVERHEAD_BIN_NOTE) == 1
+        else:
+            assert page.count_visible(OVERHEAD_BIN_NOTE) == 1, url
 
 
 def test_detail_main_card_and_unmarked_row(harness: Harness) -> None:
@@ -305,7 +310,11 @@ def test_unmarked_old_and_no_price_pages_stay_silent(harness: Harness) -> None:
         html = get(harness, url).html
         assert OVERHEAD_BIN_NOTE not in html, url
         assert ROUND_TRIP not in html and ONE_WAY not in html, url
-        assert "含手提行李" not in html.replace(ROUND_TRIP_NOTE, ""), url
+        # FD-22 ruling section 1: the two verbatim summary lines also say "含手提行李".
+        stripped = html.replace(ROUND_TRIP_NOTE, "")
+        stripped = stripped.replace(WEB_TEXTS.page_summary_round_trip, "")
+        stripped = stripped.replace(WEB_TEXTS.page_summary_priced, "")
+        assert "含手提行李" not in stripped, url
 
 
 def test_exploration_calendar_top5_and_note(harness: Harness) -> None:
@@ -445,7 +454,15 @@ def test_digest_has_no_label_or_note() -> None:
 
 
 def test_wording_stays_within_the_ruling() -> None:
-    approved = [ROUND_TRIP_NOTE, OVERHEAD_BIN_NOTE, ROUND_TRIP, ONE_WAY]
+    # FD-22 ruling section 2: the two summary lines are verbatim approved wording as well.
+    approved = [
+        ROUND_TRIP_NOTE,
+        OVERHEAD_BIN_NOTE,
+        ROUND_TRIP,
+        ONE_WAY,
+        WEB_TEXTS.page_summary_round_trip,
+        WEB_TEXTS.page_summary_priced,
+    ]
     for phrase in BANNED_PHRASES:
         assert all(phrase not in text for text in approved), phrase
     for text in web_static_texts():
