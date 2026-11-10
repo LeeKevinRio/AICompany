@@ -388,7 +388,7 @@ R-8 採 (a)（`evaluate_today` 把 `rules_fully_evaluated` 判為 false），不
 |---|---|
 | 事實依據 | FR-1、FR-49、AC-15、AC-65；[ADR] D7 第 2、5 點（生效值判定、日期呈現） |
 | 風控條款 | R-18、FR-49（高波動不得用「待生效」）。其餘通則：不保證、不推薦、不安撫 |
-| 備註 | 這組是欄位標籤，字義單純。W-25e、W-25f 的日期同 W-07，沿用 `next_trading_day` 推算，v2 依 RC-32 T-07 加「（依系統日曆推算）」。W-25f 的語意（取消後仍用舊的高波動門檻，直到 M 月 D 日的資料進來之前）：**定稿（TA 2026-11-10 確認，依 RC-32）**，與 D7 第 2 點一致。**顯示條件（後端約束，不改字面；來源 `work/reviews/2026-11-10-ADR0044修訂一與RC42C1W25f確認-tech-architect.md` 交付 3）**：W25f-1：`high_volatility == 0`，且 D7 第 2 點的單一純函式以參考日算出的生效值為 1（等價於 `high_volatility_prev == 1` 且參考日不晚於 `changed_on`）；不得用「目標值為 0 且 `changed_on` 不為 NULL」判定，因為同一天先標記再取消時 prev 為 0，「今日仍用高波動門檻」不為真。W25f-2：參考日用 `today_tpe`，來源與 D1 第 4 點、D8 第 6 點、D7 第 3 點計算 prev 的日期一致，所以只會在 `today_tpe == changed_on` 當天顯示。W25f-3：{M}/{D} = `calendar.next_trading_day(changed_on)`；「起適用」指依據資料日為 M/D（含）以後的評估改用一般門檻。TA 備註：先前備註的「到 M 月 D 日」要讀成「到 M 月 D 日的資料進來之前」，句子本身沒有「到」，字面不受影響。TA 另提 O-1（標籤消失缺口）、O-2（prev 以台北今日計算）兩個讀碼觀察，已交風控與 PM，不擋 W-25f 定稿，也不改本句。W-25d、W-25e、W-25f 任一出現時，名單頁要顯示 W-27 的規則說明（RC-22）。 |
+| 備註 | 這組是欄位標籤，字義單純。W-25e、W-25f 的日期同 W-07，沿用 `next_trading_day` 推算，v2 依 RC-32 T-07 加「（依系統日曆推算）」。W-25f 的語意（取消後仍用舊的高波動門檻，直到 M 月 D 日的資料進來之前）：**定稿（TA 2026-11-10 確認、風控 RC-58 確認）**，與 D7 第 2 點一致。ADR-0043 D7 依 RC-56 修訂後，TA 要重新核對 W25f-1～3。**顯示條件（後端約束，不改字面；來源 `work/reviews/2026-11-10-ADR0044修訂一與RC42C1W25f確認-tech-architect.md` 交付 3）**：W25f-1：`high_volatility == 0`，且 D7 第 2 點的單一純函式以參考日算出的生效值為 1（等價於 `high_volatility_prev == 1` 且參考日不晚於 `changed_on`）；不得用「目標值為 0 且 `changed_on` 不為 NULL」判定，因為同一天先標記再取消時 prev 為 0，「今日仍用高波動門檻」不為真。W25f-2：參考日用 `today_tpe`，來源與 D1 第 4 點、D8 第 6 點、D7 第 3 點計算 prev 的日期一致，所以只會在 `today_tpe == changed_on` 當天顯示。W25f-3：{M}/{D} = `calendar.next_trading_day(changed_on)`；「起適用」指依據資料日為 M/D（含）以後的評估改用一般門檻。TA 備註：先前備註的「到 M 月 D 日」要讀成「到 M 月 D 日的資料進來之前」，句子本身沒有「到」，字面不受影響。TA 另提 O-1（標籤消失缺口）、O-2（prev 以台北今日計算）兩個讀碼觀察，已交風控與 PM，不擋 W-25f 定稿，也不改本句。W-25d、W-25e、W-25f 任一出現時，名單頁要顯示 W-27 的規則說明（RC-22）。 |
 
 ### W-11 名單頁 `ROUND_LABEL`
 
@@ -425,7 +425,7 @@ R-8 採 (a)（`evaluate_today` 把 `rules_fully_evaluated` 判為 false），不
 | T-10 | W-10 | 台股代號形狀規則（N207-C12）。TA 已確認現有程式沒有可沿用的正向規則；data-engineer 規則目前 `verified=False`，W-10 已刪形狀規則句，不寫任何規則內容（RC-51，見第十三節） | data-engineer |
 | T-19 | W-19 | **字面已改寫，但前提是 dev-lead 依 C-T19-1～3 落地 `round_spans`**；落地後以實際欄位名核對 | dev-lead |
 | T-24 | W-24 | **已結案**：風控 RC-36 讀碼確認；兩版已由風控定稿（RC-48） | risk-compliance-officer |
-| T-25f | W-25f | **已結案**：TA 2026-11-10 確認語意成立（依 RC-32），附 W25f-1～3 顯示條件；風控做最後確認中 | tech-architect |
+| T-25f | W-25f | **已結案**：TA 2026-11-10 確認語意成立（依 RC-32），附 W25f-1～3 顯示條件；風控 RC-58 已確認 | tech-architect |
 | T-27 | W-27 | 後端旗標名稱（任一列帶 W-25d／e／f 時為真，不依日期） | tech-architect、dev-lead |
 | T-W22 | W-22、W-13 | 名單頁 S2 與 `/today` 判定基準不同的句子，須與 tech-writer 補進 D1 第 4 點的約束（只顯示、不作寫入或閘的判斷；`today_tpe` 同源）一致 | tech-writer |
 
@@ -441,7 +441,7 @@ R-8 採 (a)（`evaluate_today` 把 `rules_fully_evaluated` 判為 false），不
 
 ## 十二、交接
 
-- v3：除 W-18 撤除、W-20 不擬稿外，W-01～W-27 已由風控 2026-11-10 定稿，唯 W-19（附條件，等 `round_spans`）、W-25f（v5 起定稿，TA 2026-11-10 確認，依 RC-32）、W-24、W-05m、W-10（B 版）已由風控定稿（RC-48、RC-50、RC-51），可進程式。
+- v3：除 W-18 撤除、W-20 不擬稿外，W-01～W-27 已由風控 2026-11-10 定稿，唯 W-19（附條件，等 `round_spans`）、W-25f（定稿，TA 2026-11-10 確認、風控 RC-58 確認）、W-24、W-05m、W-10（B 版）已由風控定稿（RC-48、RC-50、RC-51），可進程式。
 - RC-35（未確認時畫面若顯示 `total_deploy_2f`，須同時顯示來源與設定時間）不在本次清單內，未擬稿；若需要字面請另開單。
 - 涉及視覺（揭露行與輪次說明的常駐、不收合版面）：交 art-lead。
 - 未涉及投資建議，但全部字面屬風控閘門範圍。定稿後交 CEO 驗收。
