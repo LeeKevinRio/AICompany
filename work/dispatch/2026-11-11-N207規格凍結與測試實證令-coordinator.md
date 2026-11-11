@@ -27,5 +27,5 @@
 
 | 疑點 | 出處 | 實證者 | 狀態 |
 |---|---|---|---|
-| A8 狀態加上結算建立的現金鍵，會產生 1 股的 R1 買進列 | TA RC-103 確認檔 (b)、風控 RC-109 suggested | qa-automation | 派工中 |
-| N-212 在 head `8df88d6` 上的全套測試（P-8b 加入後沒有重跑） | data-engineer N-212 修正回報 | devops-sre | 派工中 |
+| A8 狀態加上結算建立的現金鍵，會產生 1 股的 R1 買進列 | TA RC-103 確認檔 (b)、風控 RC-109 suggested | qa-automation | 已實證：機制成立；前提（A8 下有 open 批次）是直接種入，產品內是否可達未實證 |
+| N-212 在 head `8df88d6` 上的全套測試（P-8b 加入後沒有重跑） | data-engineer N-212 修正回報 | devops-sre | 已實證：10107 passed，覆蓋率 97.62%；已合併（M = `e648c0e9`） |
