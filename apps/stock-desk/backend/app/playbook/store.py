@@ -926,6 +926,43 @@ def _total_deploy_state(total_deploy: Decimal, source: str, at: datetime | None)
     }
 
 
+class RebalanceRead(NamedTuple):
+    """What :meth:`PlaybookStore.read_rebalance_inputs` read, in one read transaction (N-196)."""
+
+    #: Every batch row, exactly as :meth:`PlaybookStore.list_batches` returns them.
+    batches: list[BatchState]
+    #: The portfolio flags, exactly as :meth:`PlaybookStore.portfolio_state` returns them.
+    portfolio: PortfolioState
+
+
+def _read_all_batches(conn: sqlite3.Connection) -> list[BatchState]:
+    rows = conn.execute(
+        f"SELECT {_BATCH_SELECT} FROM playbook_batches ORDER BY symbol, batch_no"
+    ).fetchall()
+    return [PlaybookStore._row_to_batch(row) for row in rows]
+
+
+def _read_state_map(conn: sqlite3.Connection) -> dict[str, str]:
+    rows = conn.execute("SELECT key, value FROM playbook_state").fetchall()
+    return {str(key): str(value) for key, value in rows}
+
+
+def _portfolio_from_state(state: Mapping[str, str]) -> PortfolioState:
+    """The portfolio flags held in ``state``; zero cash / zero deploy until set."""
+    set_at = state.get(STATE_TOTAL_DEPLOY_SET_AT)
+    return PortfolioState(
+        cash=Decimal(state.get(STATE_CASH, "0")),
+        total_deploy=Decimal(state.get(STATE_TOTAL_DEPLOY, "0")),
+        total_deploy_set_at=None if set_at is None else datetime.fromisoformat(set_at),
+        total_deploy_source=state.get(STATE_TOTAL_DEPLOY_SOURCE),
+        freeze_until=_day(state.get(STATE_FREEZE_UNTIL)),
+        freeze_reason=state.get(STATE_FREEZE_REASON),
+        emergency_until=_day(state.get(STATE_EMERGENCY_UNTIL)),
+        defense_active=state.get(STATE_DEFENSE_ACTIVE) == "1",
+        defense_since=_day(state.get(STATE_DEFENSE_SINCE)),
+    )
+
+
 def system_default_params(on_date: date) -> RuleParams:
     """The parameter set used before the user has submitted one of their own.
 
@@ -986,10 +1023,7 @@ class PlaybookStore:
 
     def list_batches(self) -> list[BatchState]:
         with closing(self._connect()) as conn:
-            rows = conn.execute(
-                f"SELECT {_BATCH_SELECT} FROM playbook_batches ORDER BY symbol, batch_no"
-            ).fetchall()
-        return [self._row_to_batch(row) for row in rows]
+            return _read_all_batches(conn)
 
     @staticmethod
     def _row_to_batch(row: tuple[Any, ...]) -> BatchState:
@@ -1135,8 +1169,7 @@ class PlaybookStore:
 
     def _state_map(self) -> dict[str, str]:
         with closing(self._connect()) as conn:
-            rows = conn.execute("SELECT key, value FROM playbook_state").fetchall()
-        return {str(key): str(value) for key, value in rows}
+            return _read_state_map(conn)
 
     def _set_state(self, values: Mapping[str, str | None]) -> None:
         with closing(self._connect()) as conn, conn:
@@ -1144,19 +1177,31 @@ class PlaybookStore:
 
     def portfolio_state(self) -> PortfolioState:
         """The stored portfolio flags; zero cash / zero deploy until set."""
-        state = self._state_map()
-        set_at = state.get(STATE_TOTAL_DEPLOY_SET_AT)
-        return PortfolioState(
-            cash=Decimal(state.get(STATE_CASH, "0")),
-            total_deploy=Decimal(state.get(STATE_TOTAL_DEPLOY, "0")),
-            total_deploy_set_at=None if set_at is None else datetime.fromisoformat(set_at),
-            total_deploy_source=state.get(STATE_TOTAL_DEPLOY_SOURCE),
-            freeze_until=_day(state.get(STATE_FREEZE_UNTIL)),
-            freeze_reason=state.get(STATE_FREEZE_REASON),
-            emergency_until=_day(state.get(STATE_EMERGENCY_UNTIL)),
-            defense_active=state.get(STATE_DEFENSE_ACTIVE) == "1",
-            defense_since=_day(state.get(STATE_DEFENSE_SINCE)),
-        )
+        return _portfolio_from_state(self._state_map())
+
+    def read_rebalance_inputs(self) -> RebalanceRead:
+        """The batches and the portfolio REBALANCE values, from one snapshot (N-196).
+
+        One connection, one ``BEGIN`` (DEFERRED: no write lock is taken), the
+        batch read, then the state read, ``COMMIT`` -- the pattern of
+        :meth:`read_in_flight`. Both reads come from the same read transaction,
+        so 總資產 never counts shares a settlement already turned into cash.
+        SELECT only; nothing else runs while the transaction is open.
+
+        Errors follow :meth:`commit_emergency_exit` (C-11): roll back if SQLite
+        has not already, then raise unchanged.
+        """
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN")
+            try:
+                batches = _read_all_batches(conn)
+                portfolio = _portfolio_from_state(_read_state_map(conn))
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        return RebalanceRead(batches=batches, portfolio=portfolio)
 
     def set_capital(
         self,
