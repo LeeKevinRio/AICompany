@@ -3,6 +3,8 @@
 - 狀態：accepted（CEO #137 於 2026-11-10 核可，原文：「核可（Recommended）。ADR-0044 改為 accepted，內容依寫法 A、時序選項 1、選擇修正。殘留 R-a～R-g 全部已有裁示。N-210a、N-210b 可以開工」）
   - 狀態變更紀錄：本 ADR 原為 proposed；2026-11-10 CEO #137 核可後改為 accepted。同次修訂：store 方法暫稱由 portfolio_with_stamp 改為 portfolio_and_stamp，語意不變（dev-lead v3.1 交件要求，避免和既有命名衝突；第 89 行、第 362 行，於 accepted 之前的同一次修訂一起做）。來源：`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` #137。
   - 2026-11-10 append 補充一（註記 1、2；風控 RC-96～RC-103，tech-architect 確認不改 Decision）。
+  - 2026-11-10 append 補充一註記 3（風控 RC-108～RC-111 定稿；不改 Decision）。
+  - 2026-11-10 用字勘誤：補充一註記 2 中 R-6′ 的歸屬字樣（原寫 ADR-0042）改為「屬 ADR-0041 的 R-6′（見 ADR-0042 Context 第 2 點）」；不涉及語意與 Decision，依風控 RC-111。
   - 2026-11-10 標題用字同步：Decision 標題移除殘留的 proposed 字樣，改為「Decision（決策）」，與檔頭 accepted 一致，不涉及語意。來源：`work/reviews/2026-11-10-RC103確認與ADR0044註記-tech-architect.md` 第二段 D。
 - 日期：2026-11-10（修訂一，同日：併入風控 C-1～C-9，增列 (iii-c)、R-f、R-g；定稿，同日：併入風控 RC-52 三項 required 與 suggested、RC-53 條件 1～3、RC-53 時序選擇）
 - 決策者：
@@ -390,9 +392,14 @@
 - 「yes 句與 unknown 句不依 `td_flag_basis`、`td_change` 分版」不變。字面全文以 `work/reviews/2026-11-10-N210字面定稿-風控.md` 為準，本 ADR 不複寫。
 
 ### 註記 2（Context 第 3 點；風控 RC-99，更正 RC-47）
-- Context 第 3 點末句「同一批次可能有多張列，但最多只有一張成交入帳」，以 N-198（ADR-0042：claim 與動帳併入同一寫鎖交易）已合入為前提。N-198 合入前，claim 與動帳分屬不同交易，兩個結算並發時，同一批次的兩張 buy 都可能在批次改為 open 之前通過 G1 而動帳（ADR-0042 Context；屬 ADR-0042 的 R-6′，不在本 ADR 的 R-g 內）。
+- Context 第 3 點末句「同一批次可能有多張列，但最多只有一張成交入帳」，以 N-198（ADR-0042：claim 與動帳併入同一寫鎖交易）已合入為前提。N-198 合入前，claim 與動帳分屬不同交易，兩個結算並發時，同一批次的兩張 buy 都可能在批次改為 open 之前通過 G1 而動帳（ADR-0042 Context；屬 ADR-0041 的 R-6′（見 ADR-0042 Context 第 2 點），不在本 ADR 的 R-g 內）。
 - 「成交」發生在券商端，系統無從保證（ADR-0035 R10）；系統保證的是「至多一張計入帳冊」，被跳過或 missed 時為零張。Decision 5 第 4 子點「寫明同一批次只會有一筆成交」依此讀為風控 RC-99 定稿的 N10-03b，字面全文以上列風控檔為準。
 - 連帶約束（加嚴；不改 CEO #127 的時序選項 1）：
   - N-210b 的 base 必須含 N-198 的 merge commit。合併前由 devops-sre 執行 `git merge-base --is-ancestor <M_198> <N-210b 的 base>`，必須是 `exit=0`；qa-reviewer 只判讀，不是 `exit=0` 就判 BLOCKING。
   - N-210b 合入後若 N-198 被回退，N10-03b 不成立，先回風控。
   - N-198 本來就在 N-207 合入閘 M1 的前置清單內，本約束不延後 N-207。
+
+### 註記 3（R-c 的另一方向與 A8 殘留的延伸；風控 RC-108、RC-109）
+- R-c 另有一個方向：TD 寫入時時鐘偏快、之後被校回，`td_basis` 為 NULL 的列可能判為 yes，而評估實際上是在該次寫入 commit 之後才讀取 TD；這時 N10-01 第一句不成立，帳冊子句仍成立。方向是多標，不會漏標；只限 `td_basis` 為 NULL 的列，即 N-210a 部署前已落檔的列與回退期間寫入的列。風控 RC-108 以 R-c 殘留接受，字面不改、不分版。
+- 註記 1 第一點「只在 `td_flag_basis = "time_order"` 的列上成立」，以及風控 RC-96 對 time_order yes 的推論，都以時鐘不倒退為前提（同註記 1 成立前提 (iv)；風控 RC-108 自我更正 RC-96）。
+- A8 狀態（規則集已確認、TD 鍵從未寫入）下，評估以 TD = 0 計算，R1 股數為 1 股；若結算建立了現金鍵，而且現金扣除現金底線後仍足以買進 1 股，這種列可能落檔，其 `td_basis` 的 TD 為 null（不是 SQL NULL）。之後 TD 寫入時，這種列依 recorded 判為 yes，N10-01 的「重新設定」「取得的值」對它不精確。風控 RC-109 依 CEO #134「不改程式」列為 A8 殘留的延伸；部署前以 N-207 §9.3 P-8b（已確認 × TD 鍵不存在）偵測，為真時比照 P-8 等 CEO 書面裁示（風控 RC-110）。部署後若再次進入 A8，沒有偵測，仍可能出現這種列。
