@@ -34,17 +34,19 @@ PORT = 8000
 ENV_VAR = "STOCK_DESK_DB_PATH"
 ENV_KEY_PATTERN = re.compile(r"^\s*STOCK_DESK_DB_PATH\s*=")
 PROBE_SCRIPT = Path("scripts") / "n177_n190_backtrack_probe.py"
-PROBE_PREFIXES = (
-    "n177_n190_backtrack_probe version=",
-    "gate_affected_symbols=",
-    "n199_a_rows=",
-    "n199_b_rows=",
-    "n199_c_rows=",
-    "script_sha256_lf=",
-    "db_sha256_before=",
-    "db_sha256_after=",
-    "run_at_utc=",
+# Whole-line allowlist for the probe stdout; anything else is dropped and only counted.
+PROBE_LINE_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"n177_n190_backtrack_probe version=\d+",
+        r"gate_affected_symbols=\d+",
+        r"n199_[abc]_rows=\d+",
+        r"script_sha256_lf=[0-9a-f]{64}",
+        r"db_sha256_(before|after)=[0-9a-f]{64}",
+        r"run_at_utc=[0-9T:.+Z-]+",
+    )
 )
+PROBE_IGNORED_PREFIXES = ("report_md=", "report_json=")
 PASTE_BACK_NAME = "paste-back.txt"
 
 INTRO = (
@@ -55,6 +57,8 @@ INTRO = (
     "  - stock-desk backend",
     "  - stock-desk scheduler",
     "  - stock-desk frontend",
+    "If the backend or scheduler runs under NSSM or Windows Task Scheduler, do not continue:",
+    "tell the coordinator instead.",
 )
 OUTRO = (
     "",
@@ -79,6 +83,25 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+_NO_MATCH = object()  # compares unequal to every count; stands for a non-integer parameter
+
+
+def _param_line(
+    value: object, label: str, default: int, line_no: int, out: Callable[..., None]
+) -> object:
+    """Print one rule-parameter line. A non-integer value is never echoed (it may hold anything)."""
+    if value is None:
+        out(
+            f"    {label}:", f"KEY_ABSENT (default {default} from app/playbook/models.py:{line_no})"
+        )
+        return default
+    if type(value) is not int:
+        out(f"    {label}:", "NON_INTEGER")
+        return _NO_MATCH
+    out(f"    {label}:", value)
+    return value
 
 
 def n208_count(db_path: Path) -> tuple[list[str], int]:
@@ -151,17 +174,11 @@ def n208_count(db_path: Path) -> tuple[list[str], int]:
             except ValueError:
                 d = {}
                 out("    payload: UNREADABLE")
-            nt, bpt = d.get("n_targets"), d.get("batches_per_target")
-            out(
-                "    n_targets:",
-                nt if nt is not None else "KEY_ABSENT (default 5 from app/playbook/models.py:88)",
-            )
-            out(
-                "    batches_per_target:",
-                bpt if bpt is not None else "KEY_ABSENT (default 3 from app/playbook/models.py:89)",
-            )
-            nt = 5 if nt is None else nt
-            bpt = 3 if bpt is None else bpt
+            if not isinstance(d, dict):
+                d = {}
+                out("    payload: UNREADABLE")
+            nt = _param_line(d.get("n_targets"), "n_targets", 5, 88, out)
+            bpt = _param_line(d.get("batches_per_target"), "batches_per_target", 3, 89, out)
         out("    pending_versions_after_today:", pend)
         out("(e) distinct_symbols == n_targets:", len(per) == nt)
         out("(e2) symbols_with_planned_or_open == n_targets:", len(active) == nt)
@@ -195,7 +212,7 @@ def env_file_sets_db_path(env_file: Path) -> bool:
     """True when some line of the file starts with the key. Only the key is looked for."""
     if not env_file.is_file():
         return False
-    with open(env_file, encoding="utf-8", errors="replace") as handle:
+    with open(env_file, encoding="utf-8-sig", errors="replace") as handle:
         return any(ENV_KEY_PATTERN.match(line) for line in handle)
 
 
@@ -214,6 +231,20 @@ def compare_copy(source_dir: Path, copy_dir: Path) -> list[str]:
             verdict = "DIFFERENT"
         lines.append(f"{name}: {verdict}")
     return lines
+
+
+def filter_probe_stdout(text: str) -> tuple[list[str], int]:
+    """Keep only whole lines that match the allowlist; count the rest (report paths excluded)."""
+    kept: list[str] = []
+    dropped = 0
+    for line in text.splitlines():
+        if not line.strip() or line.startswith(PROBE_IGNORED_PREFIXES):
+            continue
+        if any(pattern.fullmatch(line) for pattern in PROBE_LINE_PATTERNS):
+            kept.append(line)
+        else:
+            dropped += 1
+    return kept, dropped
 
 
 def write_paste_back(work: Path, lines: Sequence[str]) -> None:
@@ -238,10 +269,13 @@ def run(
     def stop(message: str) -> int:
         _say()
         _say(message)
-        write_paste_back(work, [HEADER, message])
         _say()
-        _say("A text file with this message was written to the work folder.")
-        _say("Tell the coordinator which STOP message you saw.")
+        if inside_git_work_tree(work):
+            _say("No file was written. Tell the coordinator which STOP message you saw.")
+        else:
+            write_paste_back(work, [HEADER, message])
+            _say("A text file with this message was written to the work folder.")
+            _say("Tell the coordinator which STOP message you saw.")
         return 3
 
     for text in INTRO:
@@ -249,7 +283,7 @@ def run(
     wait("Press Enter when the three windows are closed. ")
 
     source_dir = backend_dir / "data"
-    if env.get(ENV_VAR):
+    if ENV_VAR in env:
         return stop("STOP: STOCK_DESK_DB_PATH is set in the environment")
     if env_file_sets_db_path(backend_dir.parent / ".env"):
         return stop("STOP: STOCK_DESK_DB_PATH is set in apps/stock-desk/.env")
@@ -306,7 +340,9 @@ def run(
         errors="replace",
         check=False,
     )
-    result += [line for line in completed.stdout.splitlines() if line.startswith(PROBE_PREFIXES)]
+    kept, dropped = filter_probe_stdout(completed.stdout)
+    result += kept
+    result.append(f"probe_lines_dropped={dropped}")
     result.append(f"probe_exit={completed.returncode}")
     if completed.returncode != 0:
         result.append(f"probe_stderr_lines={len(completed.stderr.splitlines())}")

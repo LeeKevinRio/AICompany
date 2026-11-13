@@ -66,3 +66,9 @@ Phase 7（stock-desk ADR-0005/ADR-0003）新增美股主/備援來源與指數�
 本目錄內任何檔案都不含真實 API token 或憑證。`finmind_taiwan_stock_price_2330.json`
 的取得完全不需要 token 存在於 fixture 中——`FinMindAdapter` 的 token 只在執行時
 從 `FINMIND_API_TOKEN` 環境變數讀取，測試以 monkeypatch 設定假值。
+
+## n208_count_original.py.txt
+
+`$N208_COUNT = @'` 到 `'@` 之間的程式，逐字取自 `work/dispatch/2026-11-13-R2探測操作說明-CEO.md`
+（2026-11-13 抽出，未增減任何字元，檔尾無換行）。僅供 `test_r2_first_run.py` 比對
+`scripts/r2_first_run.py` 的 N-208 輸出；副檔名 `.txt` 避免被 pytest／ruff／mypy 當成原始碼。

@@ -30,7 +30,9 @@ BACKEND = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = BACKEND / "scripts" / "r2_first_run.py"
 PROBE_PATH = BACKEND / "scripts" / "n177_n190_backtrack_probe.py"
 BAT_PATH = BACKEND.parent / "r2-probe.bat"
-INSTRUCTIONS = BACKEND.parents[2] / "work" / "dispatch" / "2026-11-13-R2探測操作說明-CEO.md"
+# Verbatim copy of the text between "$N208_COUNT = @'" and "'@" in
+# work/dispatch/2026-11-13-R2探測操作說明-CEO.md, extracted 2026-11-13 (no byte added or changed).
+N208_ORIGINAL = BACKEND / "tests" / "fixtures" / "n208_count_original.py.txt"
 SYMBOLS = ("2330", "2317", "9958")
 
 
@@ -159,7 +161,8 @@ ALLOWED = [
     r"n199_[abc]_rows=\d+",
     rf"script_sha256_lf={SHA}",
     rf"db_sha256_(before|after)={SHA}",
-    r"run_at_utc=\d{4}-\d{2}-\d{2}T[0-9:.+]+",
+    r"run_at_utc=[0-9T:.+Z-]+",
+    r"probe_lines_dropped=\d+",
     r"probe_exit=\d+",
     r"probe_stderr_lines=\d+",
     r"db_location=default",
@@ -186,8 +189,8 @@ def test_normal_flow_paste_back_is_whitelisted_and_clean(seeded: Rig) -> None:
     assert "probe_exit=0" in lines
     assert "(a) distinct_symbols: 3" in lines
     assert "    open: 2" in lines
-    for prefix in r2.PROBE_PREFIXES:
-        assert any(line.startswith(prefix) for line in lines), prefix
+    for pattern in r2.PROBE_LINE_PATTERNS:
+        assert any(pattern.fullmatch(line) for line in lines), pattern.pattern
     for symbol in SYMBOLS:
         assert symbol not in text
     for fragment in (str(seeded.root), "/", "\\", "report_md", "report_json", "Traceback"):
@@ -248,10 +251,7 @@ def test_empty_database_uses_fixed_not_set_text(rig: Rig) -> None:
 
 
 def _original_snippet() -> str:
-    text = INSTRUCTIONS.read_text(encoding="utf-8")
-    match = re.search(r"\$N208_COUNT = @'\n(.*?)\n'@", text, re.DOTALL)
-    assert match is not None
-    return match.group(1) + "\n"
+    return N208_ORIGINAL.read_bytes().decode("utf-8") + "\n"
 
 
 def _run_original(db: Path) -> tuple[list[str], int]:
@@ -415,13 +415,48 @@ def test_stop_when_presence_differs(seeded: Rig) -> None:
     assert seeded.lines()[-1].startswith("STOP: the database changed while copying")
 
 
-def test_stop_when_work_folder_is_inside_a_git_work_tree(
+def test_stop_inside_git_work_tree_creates_nothing(
     seeded: Rig, capsys: pytest.CaptureFixture[str]
 ) -> None:
     (seeded.home / ".git").mkdir()
+    before = sorted(p.relative_to(seeded.home) for p in seeded.home.rglob("*"))
+    assert seeded.run() == 3
+    assert sorted(p.relative_to(seeded.home) for p in seeded.home.rglob("*")) == before
+    assert not (seeded.home / "stock-desk-n208").exists()
+    out = capsys.readouterr().out
+    assert "STOP: the work folder would be inside a git work tree" in out
+    assert str(seeded.root) not in out
+    assert not seeded.opened
+
+
+def test_stop_in_git_work_tree_for_any_stop_writes_nothing(rig: Rig) -> None:
+    (rig.home / ".git").mkdir()
+    assert rig.run() == 3  # no DB: a STOP that would normally write the file
+    assert not (rig.home / "stock-desk-n208").exists()
+
+
+def test_env_var_set_to_empty_string_still_stops(
+    seeded: Rig, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert seeded.run(env={"STOCK_DESK_DB_PATH": ""}) != 0
+    _assert_stop(seeded, "STOP: STOCK_DESK_DB_PATH is set in the environment", capsys)
+
+
+def test_env_file_with_bom_and_key_on_first_line_stops(
+    seeded: Rig, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (seeded.app / ".env").write_bytes(b"\xef\xbb\xbfSTOCK_DESK_DB_PATH=D:\\SENTINEL\\x.db\r\n")
     assert seeded.run() != 0
-    _assert_stop(seeded, "STOP: the work folder would be inside a git work tree", capsys)
-    assert not (seeded.paste_back().parent / "probe").exists()
+    _assert_stop(seeded, "STOP: STOCK_DESK_DB_PATH is set in apps/stock-desk/.env", capsys)
+    assert "SENTINEL" not in seeded.paste_back().read_text(encoding="utf-8")
+
+
+def test_intro_mentions_supervisors_and_three_windows(
+    seeded: Rig, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert seeded.run() == 0
+    out = capsys.readouterr().out
+    assert "NSSM" in out and "Task Scheduler" in out and "tell the coordinator" in out
 
 
 # ------------------------------------------------------------------ probe failure
@@ -438,7 +473,7 @@ def test_probe_failure_writes_only_exit_code_and_line_count(rig: Rig) -> None:
     assert any(re.fullmatch(r"probe_stderr_lines=[1-9]\d*", line) for line in lines)
     assert "SENTINEL" not in text
     assert "cannot read" not in text
-    assert not any(line.startswith(r2.PROBE_PREFIXES) for line in lines)
+    assert not any(p.fullmatch(line) for p in r2.PROBE_LINE_PATTERNS for line in lines)
 
 
 def test_probe_stdout_noise_and_stderr_never_reach_the_file(
@@ -455,13 +490,92 @@ def test_probe_stdout_noise_and_stderr_never_reach_the_file(
     monkeypatch.setattr(r2.subprocess, "run", fake_run)
     assert seeded.run() == 0
     lines = seeded.lines()
-    assert lines[-4:] == [
+    assert lines[-5:] == [
+        "probe_lines_dropped=1",
         "probe_exit=4",
         "probe_stderr_lines=2",
         "db_location=default",
         "port_8000_listening=no",
     ]
     assert not any("report_" in line or "secret" in line or "noise" in line for line in lines)
+
+
+BAD_PROBE_STDOUT = (
+    "n177_n190_backtrack_probe version=2\n"
+    "gate_affected_symbols=2330,2317\n"
+    "gate_affected_symbols=ABC\n"
+    "gate_affected_symbols=2\n"
+    "n199_a_rows=1 2330\n"
+    "script_sha256_lf=/secret/path\n"
+    "db_sha256_before=" + "a" * 63 + "\n"
+    "db_sha256_after=" + "A" * 64 + "\n"
+    "run_at_utc=2026-11-13 C:\\Users\\x\n"
+    "n199_b_rows=0\n"
+    "report_md=/x/y\n"
+    "report_json=/x/z\n"
+)
+
+
+def test_probe_lines_are_matched_whole_and_bad_ones_dropped_and_counted(
+    seeded: Rig, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, stdout=BAD_PROBE_STDOUT, stderr="")
+
+    monkeypatch.setattr(r2.subprocess, "run", fake_run)
+    assert seeded.run() == 0
+    lines = seeded.lines()
+    shown = capsys.readouterr().out
+    for text in (seeded.paste_back().read_text(encoding="utf-8"), shown):
+        for leak in ("2330", "2317", "ABC", "secret", "Users", "C:", "report_", "AAAA"):
+            assert leak not in text, leak
+    assert "probe_lines_dropped=7" in lines
+    kept = [ln for ln in lines if ln.startswith(("n177", "gate_", "n199_"))]
+    assert kept == [
+        "n177_n190_backtrack_probe version=2",
+        "gate_affected_symbols=2",
+        "n199_b_rows=0",
+    ]
+
+
+def test_normal_run_reports_zero_dropped_lines(seeded: Rig) -> None:
+    assert seeded.run() == 0
+    assert "probe_lines_dropped=0" in seeded.lines()
+
+
+def _non_integer_db(path: Path, payload: object) -> Path:
+    return _params_db(path, json.dumps(payload))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"n_targets": "2330", "batches_per_target": "2317,2330"},
+        {"n_targets": ["2330", 3], "batches_per_target": [3]},
+        {"n_targets": 3.0, "batches_per_target": 2.5},
+        {"n_targets": True, "batches_per_target": False},
+        {"n_targets": {"2330": 1}, "batches_per_target": "C:\\secret"},
+        ["2330"],
+    ],
+)
+def test_non_integer_rule_params_print_marker_and_never_the_value(
+    payload: object, tmp_path: Path
+) -> None:
+    db = _non_integer_db(tmp_path / "x.db", payload)
+    lines, code = r2.n208_count(db)
+    text = "\n".join(lines)
+    assert code == 0
+    for leak in ("2330", "2317", "secret", "2.5", "[", "{"):
+        assert leak not in text, leak
+    if isinstance(payload, dict):
+        assert "    n_targets: NON_INTEGER" in lines
+        assert "    batches_per_target: NON_INTEGER" in lines
+        assert "(e) distinct_symbols == n_targets: False" in lines
+        assert "(e2) symbols_with_planned_or_open == n_targets: False" in lines
+        assert "(e3) every symbol has batches_per_target batches: False" in lines
+    else:
+        assert "    payload: UNREADABLE" in lines
+    assert lines[-1] == "N208_COUNT_RESULT=0"
 
 
 # ------------------------------------------------------------------ robustness
