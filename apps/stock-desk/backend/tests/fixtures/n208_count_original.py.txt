@@ -1,0 +1,62 @@
+import json, sqlite3, sys
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+def done(code):
+    print('N208_COUNT_RESULT=%d' % code); sys.exit(code)
+p = Path(sys.argv[1])
+if not p.is_file():
+    print('ERROR: db copy not found'); done(20)
+c = sqlite3.connect(p.resolve().as_uri() + '?mode=ro', uri=True)
+c.execute('PRAGMA query_only=ON')
+names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+if 'playbook_batches' not in names:
+    print('ERROR: table playbook_batches not found'); done(20)
+rows = c.execute('SELECT symbol, batch_no, status FROM playbook_batches').fetchall()
+per = Counter(r[0] for r in rows)
+nos = {}
+for s, n, _ in rows:
+    nos.setdefault(s, set()).add(n)
+active = {s for s, _, st in rows if st in ('planned', 'open')}
+print('(a) distinct_symbols:', len(per))
+print('(a2) symbols_with_planned_or_open:', len(active))
+print('(b) batches_per_symbol_distribution:')
+for k, v in sorted(Counter(per.values()).items()):
+    print('    %d batches: %d symbols' % (k, v))
+if not per:
+    print('    (no rows)')
+print('(b2) symbols_whose_batch_no_is_not_1..k:', sum(1 for s in nos if nos[s] != set(range(1, per[s] + 1))))
+st = Counter(r[2] for r in rows)
+print('(c) batches_by_status:')
+for k in ('planned', 'open', 'closed', 'skipped'):
+    print('    %s: %d' % (k, st.pop(k, 0)))
+print('    other_status:', sum(st.values()))
+today = datetime.now(timezone.utc).date().isoformat()
+nt = bpt = None
+if 'playbook_rule_params' in names:
+    r = c.execute('SELECT payload FROM playbook_rule_params WHERE effective_date <= ? ORDER BY effective_date DESC, version DESC LIMIT 1', (today,)).fetchone()
+    pend = c.execute('SELECT COUNT(*) FROM playbook_rule_params WHERE effective_date > ?', (today,)).fetchone()[0]
+else:
+    r, pend = None, 0
+print('(d) rule_params_in_force_on (UTC date, same basis as backend):', today)
+if r is None:
+    print('    n_targets: \u672a\u8a2d\u5b9a (NOT_SET; default 5 from app/playbook/models.py:88)')
+    print('    batches_per_target: \u672a\u8a2d\u5b9a (NOT_SET; default 3 from app/playbook/models.py:89)')
+    nt, bpt = 5, 3
+else:
+    try:
+        d = json.loads(r[0])
+    except ValueError:
+        d = {}
+        print('    payload: UNREADABLE')
+    nt, bpt = d.get('n_targets'), d.get('batches_per_target')
+    print('    n_targets:', nt if nt is not None else 'KEY_ABSENT (default 5 from app/playbook/models.py:88)')
+    print('    batches_per_target:', bpt if bpt is not None else 'KEY_ABSENT (default 3 from app/playbook/models.py:89)')
+    nt = 5 if nt is None else nt
+    bpt = 3 if bpt is None else bpt
+print('    pending_versions_after_today:', pend)
+print('(e) distinct_symbols == n_targets:', len(per) == nt)
+print('(e2) symbols_with_planned_or_open == n_targets:', len(active) == nt)
+print('(e3) every symbol has batches_per_target batches:', bool(per) and all(v == bpt for v in per.values()))
+c.close()
+done(0)
