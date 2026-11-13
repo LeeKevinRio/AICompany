@@ -17,17 +17,17 @@
 <section class="card">
   <h2>資料源狀態</h2>
   <div class="table-wrap" tabindex="0" role="region" aria-label="資料源狀態">
-  <table class="data stack-table">
-    <thead><tr><th>資料源</th><th>狀態</th><th>斷路器</th><th>連續失敗</th><th>最近成功</th><th>最近失敗</th></tr></thead>
-    <tbody>
+  <table class="data stack-table health-table" role="table">
+    <thead role="rowgroup"><tr role="row"><th role="columnheader">資料源</th><th role="columnheader">狀態</th><th role="columnheader">斷路器</th><th role="columnheader">連續失敗</th><th role="columnheader">最近成功</th><th role="columnheader">最近失敗</th></tr></thead>
+    <tbody role="rowgroup">
     {% for h in health %}
-      <tr>
-        <td data-label="資料源">{{ h.name }}</td>
-        <td data-label="狀態"><span class="badge health-{{ h.state_key }}">{{ h.state }}</span></td>
-        <td data-label="斷路器">{{ h.breaker }}{% if h.open_until %}<div class="muted">暫停至 {{ h.open_until }}</div>{% endif %}</td>
-        <td class="num" data-label="連續失敗">{{ h.failures }}（門檻 {{ h.threshold }}）</td>
-        <td data-label="最近成功">{{ h.last_success or "—" }}</td>
-        <td data-label="最近失敗">{{ h.last_failure or "—" }}</td>
+      <tr role="row">
+        <td role="cell" class="h-name" data-label="資料源">{{ h.name }}</td>
+        <td role="cell" class="h-state" data-label="狀態"><span class="badge health-{{ h.state_key }}">{{ h.state }}</span></td>
+        <td role="cell" class="h-breaker" data-label="斷路器">{{ h.breaker }}{% if h.open_until %}<div class="muted">暫停至 {{ h.open_until }}</div>{% endif %}</td>
+        <td role="cell" class="num h-failures" data-label="連續失敗">{{ h.failures }}（門檻 {{ h.threshold }}）</td>
+        <td role="cell" class="h-success" data-label="最近成功">{{ h.last_success or "—" }}</td>
+        <td role="cell" class="h-failure" data-label="最近失敗">{{ h.last_failure or "—" }}</td>
       </tr>
     {% endfor %}
     </tbody>
@@ -72,9 +72,9 @@
   <details>
     <summary>{{ ui.tech_details_summary }}：排程事件（略過、錯誤）</summary>
     <div class="table-wrap" tabindex="0" role="region" aria-label="排程事件">
-    <table class="data compact stack-table">
-      <thead><tr><th>時間</th><th>事件</th><th>說明</th></tr></thead>
-      <tbody>{% for e in events %}<tr><td data-label="時間">{{ e.at }}</td><td data-label="事件">{{ e.kind }}</td><td data-label="說明">{{ e.detail or "" }}</td></tr>{% endfor %}</tbody>
+    <table class="data compact stack-table" role="table">
+      <thead role="rowgroup"><tr role="row"><th role="columnheader">時間</th><th role="columnheader">事件</th><th role="columnheader">說明</th></tr></thead>
+      <tbody role="rowgroup">{% for e in events %}<tr role="row"><td role="cell" data-label="時間">{{ e.at }}</td><td role="cell" data-label="事件">{{ e.kind }}</td><td role="cell" data-label="說明">{{ e.detail or "" }}</td></tr>{% endfor %}</tbody>
     </table>
     </div>
   </details>
@@ -101,7 +101,7 @@
 </section>
 
 <section class="card">
-  <h2>資料維護</h2>
+  <h2>{{ ui.settings_status_heading }}</h2>
   {% if maintenance %}
   <dl class="facts">
     <dt>資料庫大小</dt><dd>{{ maintenance.db_size_label }}（WAL 檔另計：{{ maintenance.wal_size_label }}）</dd>
@@ -123,7 +123,7 @@
   </div>
   <p class="muted">筆數統計時間：{{ maintenance.stats_at_label or "—" }}（約每 5 分鐘更新一次，可能與目前實際筆數略有差異）</p>
   {% else %}
-  <p class="muted">資料維護資訊暫時無法取得。</p>
+  <p class="muted">{{ ui.settings_status_unavailable }}</p>
   {% endif %}
 </section>
 
@@ -131,16 +131,16 @@
   <h2>最近一輪各監看查詢次數</h2>
   {% if usage %}
   <div class="table-wrap" tabindex="0" role="region" aria-label="各監看查詢次數">
-  <table class="data compact stack-table">
-    <thead><tr><th>監看</th><th>掃描時間</th><th>對外查詢次數</th><th>取樣／總組合</th><th>結果</th></tr></thead>
-    <tbody>
+  <table class="data compact stack-table" role="table">
+    <thead role="rowgroup"><tr role="row"><th role="columnheader">監看</th><th role="columnheader">掃描時間</th><th role="columnheader">對外查詢次數</th><th role="columnheader">取樣／總組合</th><th role="columnheader">結果</th></tr></thead>
+    <tbody role="rowgroup">
     {% for u in usage %}
-      <tr>
-        <td data-label="監看"><a href="/watches/{{ u.watch_id }}">{{ u.watch }}</a></td>
-        <td data-label="掃描時間">{{ u.started }}</td>
-        <td class="num" data-label="對外查詢次數">{{ u.queries_used }}</td>
-        <td class="num" data-label="取樣／總組合">{{ u.sampled }}/{{ u.total_pairs }}{% if u.limit_reached %}（達上限）{% endif %}{% if u.global_limit_reached %}（達全域上限）{% endif %}</td>
-        <td data-label="結果">{{ u.status }}</td>
+      <tr role="row">
+        <td role="cell" data-label="監看"><a href="/watches/{{ u.watch_id }}">{{ u.watch }}</a></td>
+        <td role="cell" data-label="掃描時間">{{ u.started }}</td>
+        <td role="cell" class="num" data-label="對外查詢次數">{{ u.queries_used }}</td>
+        <td role="cell" class="num" data-label="取樣／總組合">{{ u.sampled }}/{{ u.total_pairs }}{% if u.limit_reached %}（達上限）{% endif %}{% if u.global_limit_reached %}（達全域上限）{% endif %}</td>
+        <td role="cell" data-label="結果">{{ u.status }}</td>
       </tr>
     {% endfor %}
     </tbody>
@@ -204,7 +204,7 @@
 
 <section class="card">
   <h2>資料維護</h2>
-  <div class="grid">
+  <div class="grid retention-grid">
     {% for s in settings if s.key in maintenance_keys %}
 {{ int_field(s) }}
     {% endfor %}

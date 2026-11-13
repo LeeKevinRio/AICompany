@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, cast
 
+from flight_deals.domain.messages import NOTIFICATIONS_LIST_LIMIT
 from flight_deals.domain.models import (
     ComparisonSpec,
     DatePair,
@@ -1695,7 +1696,7 @@ class Repository:
             ).fetchall()
         return [_notification(r) for r in rows]
 
-    def list_notifications(self, limit: int = 200) -> list[NotificationRecord]:
+    def list_notifications(self, limit: int = NOTIFICATIONS_LIST_LIMIT) -> list[NotificationRecord]:
         with self.db.connect() as conn:
             rows = conn.execute(
                 "SELECT n.*, w.name AS watch_name FROM notification n"

@@ -120,9 +120,9 @@
         <li class="more-pair">
           <div class="more-pair-head">
             <span class="more-pair-amount">{{ p.amount }}</span>
+            {% if w.price_caption %}<span class="more-pair-caption">{{ w.price_caption }}</span>{% endif %}
             <span class="more-pair-dates">{{ icon("i-calendar") }}{{ p.dates_weekday_label }}</span>
           </div>
-          {% if w.pax_note %}<div class="price-sub">{{ w.pax_note }}</div>{% endif %}
           {{- price_labels(p.split_ticket_label, p.overhead_bin_label, icons=true) }}
           <div class="price-meta">{{ price_meta(p.fetched_short, p.stale, refresh=refresh, icons=true) }}</div>
           {{ flight(p.flight, compact=true, leg=true, icons=true) }}

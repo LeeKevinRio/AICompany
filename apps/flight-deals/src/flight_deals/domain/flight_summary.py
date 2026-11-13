@@ -82,6 +82,8 @@ class FlightSummary:
     duration_text: str | None  # "3 小時 5 分" / "飛行 4 小時 30 分（不含轉機等候）" / None
     detailed: bool  # any FD-12 field is known
     sr_text: str  # one sentence for screen readers, unknown parts left out
+    # FD-23: which decorative icon goes next to the stops words; None when the count is unknown.
+    stops_kind: str | None = None  # "direct" / "stop" / None
 
 
 def format_flight_numbers(canonical: str | None) -> str | None:
@@ -160,6 +162,12 @@ def _stops(facts: FlightFacts) -> tuple[str, str | None]:
     return short, short
 
 
+def _stops_kind(stops: int | None) -> str | None:
+    if stops is None or stops < 0:
+        return None
+    return "direct" if stops == 0 else "stop"
+
+
 def flight_summary(
     facts: FlightFacts, *, trip_type: TripType, returning: bool = False
 ) -> FlightSummary:
@@ -220,6 +228,7 @@ def flight_summary(
         ),
         detailed=detailed,
         sr_text="，".join(spoken),
+        stops_kind=_stops_kind(facts.stops),
     )
 
 

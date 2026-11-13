@@ -20,6 +20,7 @@ from flight_deals.domain.messages import (
     DISCLAIMER,
     MAINTENANCE_NEVER,
     MAINTENANCE_TABLE_LABELS,
+    NOTIFICATIONS_LIST_LIMIT,
     PRICE_KIND_LABELS,
     SAMPLED_ONLY_NOTE,
     STATUS_LABELS,
@@ -191,7 +192,7 @@ def coverage_counts(checked: int, spec: WatchSpec, today: date) -> tuple[int, in
 
 
 # Notification log: how many entries show before the "older" fold (FD-22 ruling M1).
-NOTIFICATIONS_SHOWN = 20
+NOTIFICATIONS_SHOWN = 20  # rows listed before the fold
 
 
 def coverage_label(checked: int, spec: WatchSpec, today: date) -> str | None:
@@ -1172,7 +1173,10 @@ class ViewService:
     def notifications_page(self) -> dict[str, Any]:
         rows = []
         watches = {w.id: w for w in self._repo.list_watches()}
-        for record in self._repo.list_notifications():
+        # One row past the limit tells whether older notifications exist; it is never shown.
+        fetched = self._repo.list_notifications(NOTIFICATIONS_LIST_LIMIT + 1)
+        has_more = len(fetched) > NOTIFICATIONS_LIST_LIMIT
+        for record in fetched[:NOTIFICATIONS_LIST_LIMIT]:
             items = self._repo.notification_items(record.id) if record.kind == "price_alert" else []
             reasons: list[str] = []
             for item in items:
@@ -1215,6 +1219,8 @@ class ViewService:
             # FD-22 M1: newest first, cut by count only; the rest sits in one folded block.
             "recent_notifications": rows[:NOTIFICATIONS_SHOWN],
             "older_notifications": rows[NOTIFICATIONS_SHOWN:],
+            "notifications_has_more": has_more,
+            "notifications_limit": NOTIFICATIONS_LIST_LIMIT,
         }
 
     def settings_page(self) -> dict[str, Any]:

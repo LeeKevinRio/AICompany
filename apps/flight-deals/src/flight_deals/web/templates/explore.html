@@ -6,6 +6,9 @@
 {% set v = values or {} %}
 <div class="page-head">
   <h1>探索出發日價格</h1>
+  {#- FD-23 #5: the comparison entry is a plain secondary link in the page head, not a card
+      and not a primary button; its text is the old button text. -#}
+  <a class="head-link" href="/explore/compare">前往多目的地比價</a>
 </div>
 <p>{{ ui.explore_intro }}</p>
 {% if active %}
@@ -15,11 +18,6 @@
 {% if active_comparison %}
 <p class="notice"><a href="/comparisons/{{ active_comparison.id }}">比價進行中（{{ active_comparison.done }}/{{ active_comparison.total }}）</a>，同一時間只能進行一個探索或比價；排程掃描會在比價完成後依序執行。</p>
 {% endif %}
-<section class="card entry-card">
-  <h2>多目的地比價</h2>
-  <p>固定一組日期，對 2 至 8 個目的地各查一次，依 1 位成人的總價由低到高排列。</p>
-  <p><a class="button" href="/explore/compare">前往多目的地比價</a></p>
-</section>
 
 <form id="explore-form" class="form" novalidate data-url="/api/explorations">
   <p class="form-error" data-error-for="_" role="alert"></p>
@@ -89,7 +87,7 @@
     <fieldset class="group" id="ex-weekday-group">
       <legend>出發星期</legend>
       {% set _wd = v.depart_weekdays if v.depart_weekdays is defined and v.depart_weekdays is not none else [0, 1, 2, 3, 4, 5, 6] %}
-      <div class="choice-row weekday-row">
+      <div class="choice-row weekday-row weekday-grid">
         {% for w in (weekday_options or []) %}
         <label class="inline weekday-option"><input type="checkbox" name="depart_weekdays" value="{{ w.value }}" {% if w.value in _wd %}checked{% endif %} aria-describedby="ex-h-depart_weekdays ex-err-depart_weekdays"> {{ w.label }}</label>
         {% endfor %}

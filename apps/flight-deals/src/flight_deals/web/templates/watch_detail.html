@@ -97,23 +97,23 @@
 
 {#- FD-22 #41: the caption ("來回總價") is printed once under the block title, not in the head. -#}
 {% macro price_head() -%}
-<tr><th>日期</th><th>{{ ui.price_column }}</th><th>航班</th><th>連結</th></tr>
+<tr role="row"><th role="columnheader">日期</th><th role="columnheader">{{ ui.price_column }}</th><th role="columnheader">航班</th><th role="columnheader">連結</th></tr>
 {%- endmacro %}
 
 {#- On a phone the table becomes one card per row (.pair-table, app.css); every cell stays. -#}
 {% macro price_rows(rows) %}
 {% for p in rows %}
-    <tr>
-      <td class="cell-dates">{{ icon("i-calendar") }}{{ p.dates_weekday }}</td>
-      <td class="cell-price">
+    <tr role="row">
+      <td role="cell" class="cell-dates">{{ icon("i-calendar") }}{{ p.dates_weekday }}</td>
+      <td role="cell" class="cell-price">
         <div class="cell-amount">{{ p.amount_text }}</div>
         {{- price_labels(p.split_ticket_label, p.overhead_bin_label, icons=true) }}
         {% if watch.pax_note %}<div class="price-sub">{{ watch.pax_note }}</div>{% endif %}
         <div class="price-meta">{{ price_meta(p.fetched_short, p.stale, none, p.kind_badge, p.source_text, icons=true) }}</div>
         {% if p.currency_mismatch %}<div><span class="badge warn">幣別不符，不參與通知</span></div>{% endif %}
       </td>
-      <td class="cell-flight">{{ flight(p.flight, icons=true) }}</td>
-      <td class="cell-link">{{ ext_link(p.booking_url or p.link, ui.booking_button_short, p.dates) }}{% if p.booking_note %}<div class="hint">{{ p.booking_note }}</div>{% endif %}</td>
+      <td role="cell" class="cell-flight">{{ flight(p.flight, icons=true) }}</td>
+      <td role="cell" class="cell-link">{{ ext_link(p.booking_url or p.link, ui.booking_button_short, p.dates) }}{% if p.booking_note %}<div class="hint">{{ p.booking_note }}</div>{% endif %}</td>
     </tr>
 {% endfor %}
 {% endmacro %}
@@ -126,17 +126,17 @@
   {% if watch.price_caption %}<p class="price-caption">{{ watch.price_caption }}</p>{% endif %}
   {% if top_explain %}{{ help_note(top_explain) }}{% endif %}
   <div class="table-wrap" tabindex="0" role="region" aria-label="其他日期組合">
-  <table class="data flights pair-table">
-    <thead>{{ price_head() }}</thead>
-    <tbody>{{ price_rows(others[:5]) }}</tbody>
+  <table class="data flights pair-table" role="table">
+    <thead role="rowgroup">{{ price_head() }}</thead>
+    <tbody role="rowgroup">{{ price_rows(others[:5]) }}</tbody>
   </table>
   </div>
   {% if others|length > 5 %}
   {% call fold("其餘日期組合", others[5:]|length) %}
   <div class="table-wrap" tabindex="0" role="region" aria-label="其餘日期組合">
-  <table class="data flights pair-table">
-    <thead>{{ price_head() }}</thead>
-    <tbody>{{ price_rows(others[5:]) }}</tbody>
+  <table class="data flights pair-table" role="table">
+    <thead role="rowgroup">{{ price_head() }}</thead>
+    <tbody role="rowgroup">{{ price_rows(others[5:]) }}</tbody>
   </table>
   </div>
   {% endcall %}
@@ -186,11 +186,13 @@
     {% for d in distribution %}
     <div class="heat heat-{{ d.level }}" title="{{ d.depart }} {{ d.weekday }} {{ d.amount_text }}">
       {% if d.level == "cheap" %}<span class="heat-rank" aria-hidden="true">{{ ui.heat_low }}</span>{% elif d.level == "pricey" %}<span class="heat-rank" aria-hidden="true">{{ ui.heat_high }}</span>{% endif %}
-      <div class="heat-date">{{ d.depart[5:]|replace("-", "/") }} {{ d.weekday }}{% if d.stale %}<span class="heat-clock">{{ icon("i-clock") }}<span class="sr-only">{{ ui.stale_badge }}</span></span>{% endif %}</div>
+      <div class="heat-date">{{ d.depart[5:]|replace("-", "/") }} {{ d.weekday }}</div>
       <div class="heat-price">{{ d.amount_text }}</div>
       {% if watch.pax_note %}<div>{{ watch.pax_note }}</div>{% endif %}
       <span class="sr-only">{% if d.level == "cheap" %}（較便宜三分之一）{% elif d.level == "pricey" %}（較貴三分之一）{% else %}（中段）{% endif %}</span>
-      {% if d.return %}<div class="muted">回 {{ d.return[5:]|replace("-", "/") }}</div>{% endif %}
+      {#- FD-23 (art re-check): the clock sits at the right end of the return line, so a cell
+          stays at three lines. It is decorative; the sr-only words stay in the cell. -#}
+      {% if d.return or d.stale %}<div class="heat-foot">{% if d.return %}<span class="muted">回 {{ d.return[5:]|replace("-", "/") }}</span>{% endif %}{% if d.stale %}<span class="heat-clock">{{ icon("i-clock") }}<span class="sr-only">{{ ui.stale_badge }}</span></span>{% endif %}</div>{% endif %}
     </div>
     {% endfor %}
   </div>
@@ -222,9 +224,9 @@
   {% if retention_note %}<p class="muted">{{ retention_note }}</p>{% endif %}
   {% if watch.price_caption %}<p class="price-caption">{{ watch.price_caption }}</p>{% endif %}
   <div class="table-wrap" tabindex="0" role="region" aria-label="最近價格紀錄">
-  <table class="data compact flights pair-table">
-    <thead>{{ price_head() }}</thead>
-    <tbody>{{ price_rows(recent_prices) }}</tbody>
+  <table class="data compact flights pair-table" role="table">
+    <thead role="rowgroup">{{ price_head() }}</thead>
+    <tbody role="rowgroup">{{ price_rows(recent_prices) }}</tbody>
   </table>
   </div>
 {% endcall %}

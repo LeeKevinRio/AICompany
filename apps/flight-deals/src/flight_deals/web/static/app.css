@@ -550,7 +550,6 @@ table.calendar td.cal-empty { background: var(--color-bg); border: 1px solid var
   border-radius: var(--radius-pill);
   font-size: 13px;
 }
-.entry-card { margin-bottom: var(--space-4); }
 .table-wrap > table.comparison { min-width: 880px; }
 table.comparison th[scope="row"] { text-align: left; font-weight: 600; white-space: nowrap; }
 
@@ -871,6 +870,77 @@ details.more > summary.icon-btn::after, details.more[open] > summary.icon-btn::a
    hiding its numbers behind the wrapper's horizontal scroll. */
 .table-wrap > table.data.fit { min-width: 0; }
 
+/* FD-23 follow-ups. Each selector is scoped to a class only the target page or element uses
+   (.heat-grid, .flight-meta, .head-link, .weekday-grid, .retention-grid, .health-table), and
+   the block sits before the FD-22 round 2 block so that block stays the last word on the card
+   tables. Where it must still win over a round 2 rule it uses a doubled class. */
+
+/* Direct / connecting icon next to the stops words (the clock is never used here). */
+.flight-meta .icon { margin-right: 2px; }
+
+/* List card main price block only (not the other date pairs): a little more room above the
+   "fetched at" line, so it reads as one group with the date line under it. Spacing only. */
+.watch-card .price-block > .price-meta { margin-top: 2px; }
+
+/* Other date pairs on the list card: the same price caption as the main card's .price-sub
+   (body-adjacent size, text colour, never muted), right after the amount. */
+.more-pair-caption { font-size: var(--text-sm); color: var(--color-text); }
+
+/* Distribution cell foot: the return day on the left, the stale clock on the right of the same
+   line (never over the corner word, which sits on the date line). */
+.heat-grid .heat-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-1); }
+.heat-grid .heat-foot .heat-clock { margin-left: auto; }
+
+/* Exploration: the comparison entry is a quiet link in the page head, never a primary button. */
+.page-head .head-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target);
+  font-size: var(--text-sm);
+}
+
+/* Settings: the two retention fields side by side (a phone keeps one column). */
+@media (min-width: 601px) {
+  .grid.retention-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  /* Detail distribution grid: three columns. */
+  .heat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  /* Exploration weekday picker: four columns (4 + 3). */
+  .form .weekday-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-1); }
+  .form .weekday-grid label.weekday-option {
+    min-width: 0;
+    justify-content: center;
+    gap: var(--space-1);
+    padding: 0 var(--space-2);
+  }
+
+  /* Data source card, four lines: name and state; breaker and failure count (both short);
+     last success; last failure. Same cells, same words; only the arrangement changes. */
+  table.stack-table.health-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px var(--space-3);
+  }
+  table.stack-table.health-table tr::after { content: ""; order: 3; flex: 0 0 100%; height: 0; }
+  table.stack-table.health-table td { flex: 0 1 auto; min-width: 0; }
+  table.stack-table.health-table td.h-name { order: 1; font-weight: 600; }
+  table.stack-table.health-table td.h-state { order: 2; }
+  table.stack-table.health-table td.h-breaker { order: 4; }
+  table.stack-table.health-table td.h-failures { order: 5; }
+  table.stack-table.health-table td.h-success { order: 6; flex: 1 0 100%; }
+  table.stack-table.health-table td.h-failure { order: 7; flex: 1 0 100%; }
+}
+
+/* 360px phones: three columns do not fit a date, an amount and the corner word, so the
+   distribution grid stays at two. */
+@media (max-width: 380px) {
+  .heat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* FD-22 round 2: detail page, notification log, settings and health. Every selector is scoped
    to a detail-only or page-only class (.price-card, .pair-table, .heat-grid, .stack-table,
    .steps, .diagnostics, .route-line), so the list page is not re-laid-out. */
@@ -895,8 +965,8 @@ td.cell-dates .icon { margin-right: var(--space-1); }
   line-height: 1.4;
   color: var(--color-text);
 }
-/* The clock follows the date inside its line, so it wraps with the text and never sits on the
-   return day or the party note; the date line leaves room for the corner word. */
+/* The clock sits at the end of the cell's return line (FD-23, .heat-foot) and never on the
+   date line, which leaves room for the corner word. */
 .heat-grid .heat-clock {
   display: inline-flex;
   margin-left: var(--space-1);

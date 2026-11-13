@@ -10,21 +10,21 @@
     visible for reason, result and tries. -#}
 {% macro log_table(items) %}
 <div class="table-wrap" tabindex="0" role="region" aria-label="通知紀錄">
-<table class="data stack-table notif-table">
-  <thead>
-    <tr><th>建立時間</th><th>監看</th><th>類型</th><th>觸發原因</th><th>價格</th><th>結果</th><th>嘗試</th><th>內容</th></tr>
+<table class="data stack-table notif-table" role="table">
+  <thead role="rowgroup">
+    <tr role="row"><th role="columnheader">建立時間</th><th role="columnheader">監看</th><th role="columnheader">類型</th><th role="columnheader">觸發原因</th><th role="columnheader">價格</th><th role="columnheader">結果</th><th role="columnheader">嘗試</th><th role="columnheader">內容</th></tr>
   </thead>
-  <tbody>
+  <tbody role="rowgroup">
   {% for n in items %}
-    <tr>
-      <td class="n-time" data-label="建立時間"><span class="n-label">建立時間：</span><span class="n-created">{{ n.created }}</span>{% if n.sent %}<div class="muted n-sent">送出 {{ n.sent }}</div>{% endif %}</td>
-      <td class="n-watch" data-label="監看"><span class="n-label">監看：</span>{% if n.watch_id and n.watch != "（已刪除）" %}<a href="/watches/{{ n.watch_id }}">{{ n.watch }}</a>{% else %}{{ n.watch }}{% endif %}</td>
-      <td class="n-kind" data-label="類型"><span class="n-label">類型：</span><span class="n-kind-chip">{{ n.kind }}</span></td>
-      <td class="n-reason" data-label="觸發原因"><span class="n-label">觸發原因：</span>{{ n.reasons }}</td>
-      <td class="num n-price{% if n.price == "—" %} n-noprice{% endif %}" data-label="價格"><span class="n-label">價格：</span><span class="n-amount">{{ n.price }}</span>{% if n.pax_note %}<div class="muted">{{ n.pax_note }}</div>{% endif %}{% if n.item_count > 1 %}<div class="muted">共 {{ n.item_count }} 筆</div>{% endif %}</td>
-      <td class="n-result" data-label="結果"><span class="n-label">結果：</span><span class="badge notif-{{ n.status_key }}">{{ n.status }}</span>{% if n.error %}<div class="muted error-text">{{ n.error }}</div>{% endif %}</td>
-      <td class="num n-tries" data-label="嘗試"><span class="n-label">嘗試：</span>{{ n.attempts }}/{{ n.max_attempts }}</td>
-      <td class="n-body" data-label="內容"><span class="n-label">內容：</span><details><summary>查看</summary><pre class="message">{{ n.text }}</pre></details></td>
+    <tr role="row">
+      <td role="cell" class="n-time" data-label="建立時間"><span class="n-label">建立時間：</span><span class="n-created">{{ n.created }}</span>{% if n.sent %}<div class="muted n-sent">送出 {{ n.sent }}</div>{% endif %}</td>
+      <td role="cell" class="n-watch" data-label="監看"><span class="n-label">監看：</span>{% if n.watch_id and n.watch != "（已刪除）" %}<a href="/watches/{{ n.watch_id }}">{{ n.watch }}</a>{% else %}{{ n.watch }}{% endif %}</td>
+      <td role="cell" class="n-kind" data-label="類型"><span class="n-label">類型：</span><span class="n-kind-chip">{{ n.kind }}</span></td>
+      <td role="cell" class="n-reason" data-label="觸發原因"><span class="n-label">觸發原因：</span>{{ n.reasons }}</td>
+      <td role="cell" class="num n-price{% if n.price == "—" %} n-noprice{% endif %}" data-label="價格"><span class="n-label">價格：</span><span class="n-amount">{{ n.price }}</span>{% if n.pax_note %}<div class="muted">{{ n.pax_note }}</div>{% endif %}{% if n.item_count > 1 %}<div class="muted">共 {{ n.item_count }} 筆</div>{% endif %}</td>
+      <td role="cell" class="n-result" data-label="結果"><span class="n-label">結果：</span><span class="badge notif-{{ n.status_key }}">{{ n.status }}</span>{% if n.error %}<div class="muted error-text">{{ n.error }}</div>{% endif %}</td>
+      <td role="cell" class="num n-tries" data-label="嘗試"><span class="n-label">嘗試：</span>{{ n.attempts }}/{{ n.max_attempts }}</td>
+      <td role="cell" class="n-body" data-label="內容"><span class="n-label">內容：</span><details><summary>查看</summary><pre class="message">{{ n.text }}</pre></details></td>
     </tr>
   {% endfor %}
   </tbody>
@@ -46,5 +46,6 @@
   </div>
 </details>
 {% endif %}
+{% if notifications_has_more %}<p class="notifications-limit-note muted">{{ ui.notifications_limit_note.format(limit=notifications_limit) }}</p>{% endif %}
 {% endif %}
 {% endblock %}

@@ -1541,6 +1541,15 @@ def retention_static_texts() -> list[str]:
 # Templates only print ``ui.<field>`` and view-model values; no wording is written there.
 
 
+# FD-23 #3: heading of the read-only database status card on the settings page, and its
+# fallback sentence (risk ruling work/tasks/FD-23-風控裁決.md section 1, verbatim).
+SETTINGS_STATUS_HEADING = "資料庫狀態"
+SETTINGS_STATUS_UNAVAILABLE = "資料庫狀態暫時無法取得。"
+# FD-23 #9: the notification page lists at most this many; the repository query default and the
+# sentence below both read it (one named constant, asserted equal by the tests).
+NOTIFICATIONS_LIST_LIMIT = 200
+
+
 @dataclass(frozen=True)
 class UiTexts:
     """Shared web wording, passed to every page as ``ui`` (one instance: WEB_TEXTS)."""
@@ -1659,6 +1668,14 @@ class UiTexts:
     scan_busy_label: str = "查價中…"
     last_scanned_prefix: str = "上次查價"
     conditions_summary: str = "監看條件"
+    # FD-23 #3: heading of the read-only status card on the settings page (the maintenance
+    # form below keeps "資料維護"), and its fallback sentence.
+    settings_status_heading: str = SETTINGS_STATUS_HEADING
+    settings_status_unavailable: str = SETTINGS_STATUS_UNAVAILABLE
+    # FD-23 #9 (risk ruling section 3, verbatim): shown only when more than {limit} exist.
+    notifications_limit_note: str = (
+        "此頁只列出最新 {limit} 筆通知（含收合的部分），再更早的通知不會顯示。"
+    )
 
 
 WEB_TEXTS = UiTexts()

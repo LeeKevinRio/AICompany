@@ -504,12 +504,15 @@ def test_a_stale_cell_has_a_clock_and_the_spoken_words(harness: Harness) -> None
         assert not cell.find_all("div", "badge")
 
 
-def test_the_clock_follows_the_date_and_cannot_cover_other_lines(harness: Harness) -> None:
+def test_the_clock_sits_on_the_return_line_and_cannot_cover_other_lines(harness: Harness) -> None:
     watch_id = four_pairs(harness)
     harness.clock.advance(hours=200)
     page = detail(harness, watch_id)
     for cell in distribution(page).find_all("div", "heat"):
-        assert cell.find_all("div", "heat-date")[0].find_all("span", "heat-clock")
+        # FD-23 (art re-check suggestion 1): the clock moved from the date line to the end of
+        # the return line, so a stale cell stays at three lines; never on the date line.
+        assert not cell.find_all("div", "heat-date")[0].find_all("span", "heat-clock")
+        assert cell.find_all("div", "heat-foot")[0].find_all("span", "heat-clock")
     rule = ROUND_TWO_CSS[ROUND_TWO_CSS.index(".heat-grid .heat-clock {") :].split("}")[0]
     assert "position: absolute" not in rule
 

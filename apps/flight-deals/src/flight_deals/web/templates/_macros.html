@@ -38,7 +38,9 @@
 
 {#- One flight (outbound only). `f` is a FlightSummary; every field is already display text. -#}
 {#- `leg` keeps "去程" in the compact form (FD-19 R5). -#}
-{#- `icons` (FD-22, list only) puts an arrow next to the leg word; the word itself stays. -#}
+{#- `icons` puts an arrow next to the leg word and a direct / connecting icon next to the stops
+    words (FD-23); the words themselves stay. The clock is never used here: it means "may be
+    out of date" and nothing else. -#}
 {% macro flight(f, duration=true, compact=false, leg=false, icons=false) -%}
 {% if f %}
 <div class="flight{% if compact %} flight-compact{% endif %}">
@@ -50,7 +52,7 @@
   </div>
   <div class="flight-line" aria-hidden="true">
     <span class="flight-times"><span class="flight-time">{{ f.depart_time }}</span>{% if f.depart_airport and not compact %}<span class="flight-airport"> {{ f.depart_airport }}</span>{% endif %}<span class="flight-arrow">→</span><span class="flight-time">{{ f.arrive_time }}</span>{% if f.day_offset %}<span class="day-offset">{{ f.day_offset }}</span>{% endif %}{% if f.arrive_airport and not compact %}<span class="flight-airport"> {{ f.arrive_airport }}</span>{% endif %}</span>
-    <span class="flight-meta">{% if compact %}{{ f.stops_short or f.stops }}{% else %}{{ f.stops }}{% if duration %}・{{ f.duration_text or "—" }}{% endif %}{% endif %}</span>
+    <span class="flight-meta">{% if icons and f.stops_kind %}{{ icon("i-direct" if f.stops_kind == "direct" else "i-stop") }}{% endif %}{% if compact %}{{ f.stops_short or f.stops }}{% else %}{{ f.stops }}{% if duration %}・{{ f.duration_text or "—" }}{% endif %}{% endif %}</span>
   </div>
 </div>
 {% endif %}
