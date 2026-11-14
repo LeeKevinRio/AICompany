@@ -911,6 +911,21 @@ def _day_or_none(value: Any) -> date | None:
         return None
 
 
+def _total_deploy_state(total_deploy: Decimal, source: str, at: datetime | None) -> dict[str, str]:
+    """The three TOTAL_DEPLOY keys, in the one format every writer of them uses.
+
+    Shared by :meth:`PlaybookStore.set_capital` and
+    :meth:`PlaybookStore.set_total_deploy` so the value, its timestamp and its
+    source (CEO 裁決 D-2) cannot drift apart between the two. ``at`` defaults
+    to now in UTC.
+    """
+    return {
+        STATE_TOTAL_DEPLOY: str(total_deploy),
+        STATE_TOTAL_DEPLOY_SET_AT: (at or datetime.now(UTC)).isoformat(),
+        STATE_TOTAL_DEPLOY_SOURCE: source,
+    }
+
+
 def system_default_params(on_date: date) -> RuleParams:
     """The parameter set used before the user has submitted one of their own.
 
@@ -1158,14 +1173,24 @@ class PlaybookStore:
         auditable. ``at`` defaults to now in UTC, the convention of every other
         timestamp in this file.
         """
-        self._set_state(
-            {
-                STATE_CASH: str(cash),
-                STATE_TOTAL_DEPLOY: str(total_deploy),
-                STATE_TOTAL_DEPLOY_SET_AT: (at or datetime.now(UTC)).isoformat(),
-                STATE_TOTAL_DEPLOY_SOURCE: source,
-            }
-        )
+        self._set_state({STATE_CASH: str(cash), **_total_deploy_state(total_deploy, source, at)})
+
+    def set_total_deploy(
+        self,
+        *,
+        total_deploy: Decimal,
+        source: str,
+        at: datetime | None = None,
+    ) -> None:
+        """Record a recomputed TOTAL_DEPLOY without touching the cash pool.
+
+        Writes the same three keys :meth:`set_capital` writes for TOTAL_DEPLOY,
+        stamped and sourced the same way (CEO 裁決 D-2), in one transaction --
+        and never ``STATE_CASH``. N-195: the 季末 REBALANCE recomputes the lock
+        but moves no money, so writing back the cash it read earlier could only
+        erase a settlement committed in between.
+        """
+        self._set_state(_total_deploy_state(total_deploy, source, at))
 
     def fast_market_state(self) -> FastMarketState | None:
         """The last persisted 快市 verdict, or ``None`` before the first one.
