@@ -507,7 +507,7 @@ def test_one_record_per_claim_and_day(ledger: Ledger) -> None:
     ledger.clock.now = _at(T, 22, 10)
     ledger.record(ledger.run(), ledger.h3, T, series)
     ledger.clock.now = _at(T, 23, 10)
-    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         ledger.record(ledger.run(), ledger.h3, T, series, label="bearish")
     assert [r["label"] for r in ledger.rows("forecast_record")] == ["range"]
     ledger.record(ledger.run(), ledger.h5, T, series)  # the other claim on the same day

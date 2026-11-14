@@ -29,6 +29,7 @@ from app.forecast.schema import (
 )
 from tests.forecast_ledger_helpers import (
     CLAIM_H3,
+    HEX_A,
     HEX_B,
     TS,
     VALID_ROWS,
@@ -37,6 +38,8 @@ from tests.forecast_ledger_helpers import (
     memory_ledger,
     row,
 )
+
+ULID_OTHER = "01JCZ0000000000000000000AC"
 
 
 @pytest.fixture
@@ -89,11 +92,10 @@ def _replace(conn: sqlite3.Connection) -> None:
     )
 
 
-def test_insert_or_replace_is_refused_when_recursive_triggers_are_on(
-    conn: sqlite3.Connection,
-) -> None:
-    # The store's connections turn recursive_triggers on (store.py), so the
-    # delete REPLACE performs fires the append-only DELETE trigger.
+def test_recursive_triggers_are_the_second_layer(conn: sqlite3.Connection) -> None:
+    # Without the no_replace trigger, the store's recursive_triggers = ON (store.py)
+    # still makes the delete REPLACE performs fire the append-only DELETE trigger.
+    conn.execute("DROP TRIGGER forecast_record_no_replace")
     conn.execute("PRAGMA recursive_triggers = ON")
     insert(conn, "forecast_record", VALID_ROWS["forecast_record"])
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -101,27 +103,170 @@ def test_insert_or_replace_is_refused_when_recursive_triggers_are_on(
     assert conn.execute("SELECT label FROM forecast_record").fetchall() == [("range",)]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "stop point SP-1: with SQLite's default recursive_triggers = OFF, INSERT OR REPLACE "
-        "deletes the old row without firing the BEFORE DELETE trigger; the D-2 triggers "
-        "alone do not stop a rewrite from a connection outside the store"
+#: The nine key paths of ADR-0030 supplement 1: ``path -> (table, replacing row)``.
+#: Each row collides with the table's valid row on the named key only, so an
+#: ``INSERT OR REPLACE`` of it would delete that row and write this one instead.
+REPLACE_PATHS: dict[str, tuple[str, dict[str, object]]] = {
+    "forecast_run.run_id": (
+        "forecast_run",
+        row("forecast_run", run_id=1, code_commit="rewrite"),
     ),
-)
-def test_insert_or_replace_is_refused_on_a_default_connection(conn: sqlite3.Connection) -> None:
-    insert(conn, "forecast_record", VALID_ROWS["forecast_record"])
-    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-        _replace(conn)
+    "forecast_run_end.run_id": (
+        "forecast_run_end",
+        row("forecast_run_end", outcome="error", records_written=0, error_class="Rewrite"),
+    ),
+    "forecast_input_series.series_id": (
+        "forecast_input_series",
+        row("forecast_input_series", series_id=1, content_sha256=HEX_A, source="rewrite"),
+    ),
+    "forecast_input_series.content_sha256": (
+        "forecast_input_series",
+        row("forecast_input_series", source="rewrite"),
+    ),
+    "forecast_claim_registry.rowid": (
+        "forecast_claim_registry",
+        row(
+            "forecast_claim_registry",
+            rowid=1,
+            claim_id="market|h3|r2|dirdef-v1.0|forward",
+            rules_version="r2",
+        ),
+    ),
+    "forecast_claim_registry.claim_id": (
+        "forecast_claim_registry",
+        row("forecast_claim_registry", review_refs="work/reviews/rewrite.md"),
+    ),
+    "forecast_record.rowid": (
+        "forecast_record",
+        row(
+            "forecast_record",
+            rowid=1,
+            forecast_id=ULID_OTHER,
+            data_as_of="2026-11-16",
+            label="bearish",
+        ),
+    ),
+    "forecast_record.forecast_id": (
+        "forecast_record",
+        row("forecast_record", data_as_of="2026-11-16", label="bearish"),
+    ),
+    "forecast_record.claim_id+data_as_of": (
+        "forecast_record",
+        row("forecast_record", forecast_id=ULID_OTHER, label="bearish"),
+    ),
+}
 
 
-def test_insert_or_replace_rewrites_a_record_on_a_default_connection(
-    conn: sqlite3.Connection,
+def _insert_or_replace(conn: sqlite3.Connection, table: str, columns: dict[str, object]) -> None:
+    names = ", ".join(f'"{name}"' for name in columns)
+    marks = ", ".join("?" for _ in columns)
+    conn.execute(
+        f"INSERT OR REPLACE INTO {table} ({names}) VALUES ({marks})", tuple(columns.values())
+    )
+
+
+def _contents(conn: sqlite3.Connection, table: str) -> list[tuple[object, ...]]:
+    return conn.execute(f"SELECT rowid, * FROM {table} ORDER BY rowid").fetchall()
+
+
+def test_the_replace_paths_are_the_nine_keys() -> None:
+    expected = {
+        f"{table}.{key if isinstance(key, str) else '+'.join(key)}"
+        for table, keys in schema.REPLACE_KEYS.items()
+        for key in keys
+    }
+    assert set(REPLACE_PATHS) == expected
+    assert len(expected) == 9
+
+
+@pytest.mark.parametrize("path", REPLACE_PATHS)
+def test_insert_or_replace_is_refused_on_a_default_connection(
+    path: str, conn: sqlite3.Connection
 ) -> None:
-    # The fact behind SP-1, shown directly: the label of the stored row changed.
+    # recursive_triggers is OFF (the SQLite default): the no_replace trigger alone refuses.
+    table, replacing = REPLACE_PATHS[path]
+    assert conn.execute("PRAGMA recursive_triggers").fetchone()[0] == 0
+    insert(conn, table, VALID_ROWS[table])
+    before = _contents(conn, table)
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        _insert_or_replace(conn, table, replacing)
+    assert _contents(conn, table) == before
+    assert len(before) == 1
+
+
+@pytest.mark.parametrize("path", REPLACE_PATHS)
+def test_each_replace_path_rewrites_without_the_no_replace_trigger(
+    path: str, conn: sqlite3.Connection
+) -> None:
+    # The fact behind SP-1, per path: without the trigger the stored row is replaced.
+    table, replacing = REPLACE_PATHS[path]
+    insert(conn, table, VALID_ROWS[table])
+    before = _contents(conn, table)
+    conn.execute(f"DROP TRIGGER {table}_no_replace")
+    _insert_or_replace(conn, table, replacing)
+    after = _contents(conn, table)
+    assert len(after) == 1
+    assert after != before
+
+
+def test_before_insert_runs_before_replace_deletes_the_old_row(conn: sqlite3.Connection) -> None:
+    # Supplement 1 point (a): a BEFORE INSERT trigger of an INSERT OR REPLACE still
+    # sees the row REPLACE is about to delete (a TEMP probe; no_replace is dropped so
+    # the statement completes).
+    conn.execute("DROP TRIGGER forecast_record_no_replace")
+    conn.execute("CREATE TEMP TABLE probe (old_rows)")
+    conn.execute(
+        "CREATE TEMP TRIGGER probe_insert BEFORE INSERT ON main.forecast_record BEGIN"
+        " INSERT INTO probe VALUES"
+        " ((SELECT count(*) FROM main.forecast_record WHERE forecast_id = NEW.forecast_id));"
+        " END"
+    )
     insert(conn, "forecast_record", VALID_ROWS["forecast_record"])
     _replace(conn)
+    assert conn.execute("SELECT old_rows FROM probe ORDER BY rowid").fetchall() == [(0,), (1,)]
     assert conn.execute("SELECT label FROM forecast_record").fetchall() == [("bearish",)]
+
+
+@pytest.mark.parametrize(
+    "table", ["forecast_run", "forecast_input_series", "forecast_claim_registry", "forecast_record"]
+)
+def test_new_rowid_is_minus_one_when_no_rowid_is_given(
+    table: str, conn: sqlite3.Connection
+) -> None:
+    # Supplement 1 point (b): SQLite documents NEW.rowid in a BEFORE INSERT trigger as
+    # undefined when the INSERT names none; here it is -1, for the INTEGER PRIMARY KEY
+    # tables and the TEXT primary key tables alike, and the row then gets rowid 1.
+    conn.execute("CREATE TEMP TABLE probe (new_rowid)")
+    conn.execute(
+        f"CREATE TEMP TRIGGER probe_insert BEFORE INSERT ON main.{table} BEGIN"
+        " INSERT INTO probe VALUES (NEW.rowid); END"
+    )
+    insert(conn, table, VALID_ROWS[table])
+    assert conn.execute("SELECT new_rowid FROM probe").fetchall() == [(-1,)]
+    assert conn.execute(f"SELECT rowid FROM {table}").fetchall() == [(1,)]
+
+
+def test_a_row_with_rowid_minus_one_refuses_later_inserts(conn: sqlite3.Connection) -> None:
+    # The fail-closed edge of (b): a row with rowid -1 exists only if an INSERT named
+    # it, and then every INSERT that names no rowid matches it and is refused.
+    insert(conn, "forecast_record", row("forecast_record", rowid=-1))
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        insert(
+            conn,
+            "forecast_record",
+            row("forecast_record", forecast_id=ULID_OTHER, data_as_of="2026-11-16"),
+        )
+    assert conn.execute("SELECT rowid FROM forecast_record").fetchall() == [(-1,)]
+
+
+def test_a_row_with_new_keys_is_accepted(conn: sqlite3.Connection) -> None:
+    insert(conn, "forecast_record", VALID_ROWS["forecast_record"])
+    insert(
+        conn,
+        "forecast_record",
+        row("forecast_record", forecast_id=ULID_OTHER, data_as_of="2026-11-16"),
+    )
+    assert conn.execute("SELECT count(*) FROM forecast_record").fetchone()[0] == 2
 
 
 # --- column CHECKs --------------------------------------------------------------------
@@ -305,18 +450,23 @@ def test_column_checks(
 
 def test_claim_and_day_are_unique(conn: sqlite3.Connection) -> None:
     insert(conn, "forecast_record", VALID_ROWS["forecast_record"])
+    duplicate = row("forecast_record", forecast_id=ULID_OTHER)
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        insert(conn, "forecast_record", duplicate)
+    # Under the no_replace trigger the UNIQUE constraint still holds on its own.
+    conn.execute("DROP TRIGGER forecast_record_no_replace")
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
-        insert(
-            conn,
-            "forecast_record",
-            row("forecast_record", forecast_id="01JCZ0000000000000000000AC"),
-        )
+        insert(conn, "forecast_record", duplicate)
 
 
 def test_snapshot_content_is_unique(conn: sqlite3.Connection) -> None:
     insert(conn, "forecast_input_series", VALID_ROWS["forecast_input_series"])
+    duplicate = row("forecast_input_series", content_sha256=HEX_B)
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        insert(conn, "forecast_input_series", duplicate)
+    conn.execute("DROP TRIGGER forecast_input_series_no_replace")
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
-        insert(conn, "forecast_input_series", row("forecast_input_series", content_sha256=HEX_B))
+        insert(conn, "forecast_input_series", duplicate)
 
 
 def test_foreign_keys_hold_when_enabled(conn: sqlite3.Connection) -> None:
@@ -327,18 +477,57 @@ def test_foreign_keys_hold_when_enabled(conn: sqlite3.Connection) -> None:
         insert(conn, "forecast_run_end", VALID_ROWS["forecast_run_end"])
 
 
-def test_every_table_has_exactly_the_two_triggers() -> None:
+#: The ``WHERE`` of each no_replace trigger, written out: the keys of supplement 1 and
+#: nothing else.
+NO_REPLACE_WHERE = {
+    "forecast_run": "run_id = NEW.run_id",
+    "forecast_run_end": "run_id = NEW.run_id",
+    "forecast_input_series": (
+        "series_id = NEW.series_id\n        OR content_sha256 = NEW.content_sha256"
+    ),
+    "forecast_claim_registry": "rowid = NEW.rowid\n        OR claim_id = NEW.claim_id",
+    "forecast_record": (
+        "rowid = NEW.rowid\n        OR forecast_id = NEW.forecast_id\n"
+        "        OR (claim_id = NEW.claim_id AND data_as_of = NEW.data_as_of)"
+    ),
+}
+
+
+def test_every_table_has_exactly_the_three_triggers() -> None:
     for table in TABLES:
         triggers = sorted(
             name
             for kind, name in EXPECTED_OBJECTS
             if kind == "trigger" and name.rsplit("_no_", 1)[0] == table
         )
-        assert triggers == [f"{table}_no_delete", f"{table}_no_update"]
+        assert triggers == [f"{table}_no_delete", f"{table}_no_replace", f"{table}_no_update"]
         for name in triggers:
-            sql = EXPECTED_OBJECTS[("trigger", name)]
-            assert "RAISE(ABORT, 'append-only')" in sql
-            assert " WHEN " not in sql
+            assert "RAISE(ABORT, 'append-only')" in EXPECTED_OBJECTS[("trigger", name)]
+        for event in ("update", "delete"):
+            assert " WHEN " not in EXPECTED_OBJECTS[("trigger", f"{table}_no_{event}")]
+        assert EXPECTED_OBJECTS[("trigger", f"{table}_no_replace")] == (
+            f"CREATE TRIGGER {table}_no_replace BEFORE INSERT ON {table}\n"
+            f"WHEN EXISTS (\n"
+            f"    SELECT 1 FROM {table}\n"
+            f"    WHERE {NO_REPLACE_WHERE[table]}\n"
+            f")\n"
+            f"BEGIN\n"
+            f"    SELECT RAISE(ABORT, 'append-only');\n"
+            f"END"
+        )
+
+
+def test_the_database_holds_exactly_fifteen_ledger_triggers(conn: sqlite3.Connection) -> None:
+    names = {
+        name
+        for (name,) in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name LIKE 'forecast_%'"
+        )
+    }
+    assert len(names) == 15
+    assert names == {
+        f"{table}_no_{event}" for table in TABLES for event in ("update", "delete", "replace")
+    }
 
 
 # --- schema_status ----------------------------------------------------------------------
@@ -361,7 +550,36 @@ def test_an_empty_database_is_incomplete() -> None:
     status = schema_status(connection)
     connection.close()
     assert not status.complete
-    assert len(status.missing) == len(EXPECTED_OBJECTS) == 15
+    assert len(status.missing) == len(EXPECTED_OBJECTS) == 20
+    assert sum(1 for kind, _ in EXPECTED_OBJECTS if kind == "trigger") == 15
+
+
+@pytest.mark.parametrize("table", TABLES)
+def test_a_missing_no_replace_trigger_is_incomplete(table: str, conn: sqlite3.Connection) -> None:
+    conn.execute(f"DROP TRIGGER {table}_no_replace")
+    status = schema_status(conn)
+    assert status.missing == (f"trigger:{table}_no_replace",)
+    assert not status.complete
+
+
+def test_an_altered_no_replace_trigger_is_incomplete(conn: sqlite3.Connection) -> None:
+    # An extra condition in WHEN (here one that lets a REPLACE through) is an alteration.
+    original = EXPECTED_OBJECTS[("trigger", "forecast_record_no_replace")]
+    conn.execute("DROP TRIGGER forecast_record_no_replace")
+    conn.execute(original.replace("WHEN EXISTS (", "WHEN NEW.label <> 'bearish' AND EXISTS ("))
+    status = schema_status(conn)
+    assert status.altered == ("trigger:forecast_record_no_replace",)
+    assert not status.complete
+
+
+def test_a_sixteenth_trigger_is_incomplete(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TRIGGER forecast_record_no_replace_2 BEFORE INSERT ON forecast_record\n"
+        "BEGIN\n    SELECT RAISE(ABORT, 'append-only');\nEND"
+    )
+    status = schema_status(conn)
+    assert status.unexpected == ("trigger:forecast_record_no_replace_2",)
+    assert not status.complete
 
 
 def test_a_missing_table_is_incomplete(conn: sqlite3.Connection) -> None:

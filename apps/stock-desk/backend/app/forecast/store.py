@@ -30,9 +30,11 @@ Record write validation (D-2 point 7; D-3 points 1, 2, 4, 6):
 * all four baselines B1, B2, B6, B8 are present (S-8).
 
 Connections are opened per operation with ``foreign_keys`` and
-``recursive_triggers`` on: the latter makes an ``INSERT OR REPLACE`` that would
-delete a ledger row fire the append-only DELETE trigger (SQLite skips delete
-triggers on REPLACE otherwise). The store does not create the schema.
+``recursive_triggers`` on. The ``{table}_no_replace`` BEFORE INSERT triggers
+refuse an ``INSERT OR REPLACE`` on any connection (ADR-0030 supplement 1);
+``recursive_triggers`` is the second layer: it makes the delete a REPLACE would
+perform fire the append-only DELETE trigger (SQLite skips delete triggers on
+REPLACE otherwise). The store does not create the schema.
 
 Read-only queries: ``first_record_at`` and "counts toward m" are the D-2 point
 6 definitions; ``m_db`` counts the forward claims with at least one record

@@ -2,7 +2,20 @@
 
 The five tables of D-2, every one with a ``BEFORE UPDATE`` and a
 ``BEFORE DELETE`` trigger that raises ``RAISE(ABORT, 'append-only')`` -- no
-exception, no ``WHEN`` clause (D-2 point 6, S-1). Column CHECKs pin each
+exception, no ``WHEN`` clause (D-2 point 6, S-1) -- and a ``BEFORE INSERT``
+``{table}_no_replace`` trigger (ADR-0030 supplement 1, SP-1) that raises the
+same message when a row with any of the table's keys already exists
+(:data:`REPLACE_KEYS`; its ``WHEN`` compares those keys and nothing else).
+SQLite skips DELETE triggers on the rows ``INSERT OR REPLACE`` removes unless
+``recursive_triggers`` is on, and a BEFORE INSERT trigger runs before REPLACE
+resolves the conflict, so this one refuses a rewrite on any connection; the
+store's ``recursive_triggers = ON`` stays as the second layer. The two tables
+with a TEXT primary key also keep a hidden ``rowid``, which is a key of its
+own: ``INSERT OR REPLACE ... (rowid, ...)`` naming an existing rowid deletes
+that row too. When an INSERT names no rowid, ``NEW.rowid`` is -1 in a BEFORE
+INSERT trigger (SQLite documents it as undefined; the tests pin the value),
+so an insert is refused -- fail-closed -- only if a row with rowid -1 exists.
+Column CHECKs pin each
 closed value list of D-2 (``trigger``, ``outcome``, ``series_kind``, ``label``,
 ``late``, ``validation_status``, ``kind``, ``provisional_results_seen``), the
 core scope of D-1 point 1 (``market`` / ``TAIEX`` / horizon 3 or 5), the text
@@ -235,6 +248,39 @@ _RECORD = f"""CREATE TABLE forecast_record (
 )"""
 
 
+#: The keys each ``{table}_no_replace`` trigger compares (ADR-0030 supplement 1): every
+#: column set an ``INSERT OR REPLACE`` can collide on. A tuple is one composite key.
+REPLACE_KEYS: Final[dict[str, tuple[str | tuple[str, ...], ...]]] = {
+    "forecast_run": ("run_id",),
+    "forecast_run_end": ("run_id",),
+    "forecast_input_series": ("series_id", "content_sha256"),
+    "forecast_claim_registry": ("rowid", "claim_id"),
+    "forecast_record": ("rowid", "forecast_id", ("claim_id", "data_as_of")),
+}
+
+
+def _key_match(key: str | tuple[str, ...]) -> str:
+    if isinstance(key, str):
+        return f"{key} = NEW.{key}"
+    return "(" + " AND ".join(f"{column} = NEW.{column}" for column in key) + ")"
+
+
+def _no_replace_trigger(table: str) -> tuple[str, str]:
+    name = f"{table}_no_replace"
+    matches = "\n        OR ".join(_key_match(key) for key in REPLACE_KEYS[table])
+    sql = (
+        f"CREATE TRIGGER {name} BEFORE INSERT ON {table}\n"
+        f"WHEN EXISTS (\n"
+        f"    SELECT 1 FROM {table}\n"
+        f"    WHERE {matches}\n"
+        f")\n"
+        f"BEGIN\n"
+        f"    SELECT RAISE(ABORT, '{APPEND_ONLY_MESSAGE}');\n"
+        f"END"
+    )
+    return name, sql
+
+
 def _trigger(table: str, event: str) -> tuple[str, str]:
     name = f"{table}_no_{event.lower()}"
     sql = (
@@ -258,6 +304,8 @@ for _table in TABLES:
     for _event in ("UPDATE", "DELETE"):
         _name, _sql = _trigger(_table, _event)
         EXPECTED_OBJECTS[("trigger", _name)] = _sql
+    _name, _sql = _no_replace_trigger(_table)
+    EXPECTED_OBJECTS[("trigger", _name)] = _sql
 
 
 class SchemaIncompleteError(RuntimeError):
