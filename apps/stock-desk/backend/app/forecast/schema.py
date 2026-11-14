@@ -25,8 +25,10 @@ hex, ULID ids, JSON) and the row invariants that need no other table:
 * ``forecast_record``: ``label = 'insufficient'`` exactly when ``missing_json``
   is a non-empty array, and then ``up_pct`` / ``down_pct`` are null (D-3
   point 6); ``late = 1`` exactly when ``created_at >= late_cutoff_at`` (D-3
-  point 3); the six ``band_def`` keys and the four baselines B1, B2, B6, B8
-  are present (D-2 point 4, D-4 point 1, S-8);
+  point 3); ``inputs_max_fetched_at <= created_at`` (both in the one UTC text
+  form, so the text comparison is the time comparison); the six ``band_def``
+  keys and the four baselines B1, B2, B6, B8 are present (D-2 point 4, D-4
+  point 1, S-8);
 * ``forecast_run_end``: ``no_new_session`` carries ``candidate_t``; the three
   outcomes that write nothing record 0 rows; ``error`` carries an
   ``error_class`` in the ``exception_class_name`` format, and ``ok``,
@@ -233,6 +235,7 @@ _RECORD = f"""CREATE TABLE forecast_record (
     content_hash TEXT NOT NULL CHECK ({_hex64("content_hash")}),
     UNIQUE (claim_id, data_as_of),
     CHECK (late = (created_at >= late_cutoff_at)),
+    CHECK (inputs_max_fetched_at <= created_at),
     CHECK (
         CASE WHEN json_valid(missing_json) AND json_type(missing_json) = 'array'
         THEN (label = 'insufficient') = (json_array_length(missing_json) > 0)

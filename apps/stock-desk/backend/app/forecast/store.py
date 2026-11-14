@@ -17,9 +17,10 @@ Record write validation (D-2 point 7; D-3 points 1, 2, 4, 6):
 * the claim is a registered forward claim; scope, horizon and the version /
   hash columns are copied from its registry row, never passed in;
 * the referenced snapshot exists, was captured no later than ``created_at``,
-  holds only final bars (``app.data.session_calendar.is_final``) and ends on
-  ``data_as_of`` (T is the latest final bar); ``inputs_max_fetched_at`` is
-  derived from it;
+  has no bar whose ``fetched_at`` or ``as_of`` is later than its
+  ``captured_at`` (point in time), holds only final bars
+  (``app.data.session_calendar.is_final``) and ends on ``data_as_of`` (T is
+  the latest final bar); ``inputs_max_fetched_at`` is derived from it;
 * ``missing`` items are ``app.outlook.missing.MissingItem`` and re-validated;
   ``label = insufficient`` exactly when ``missing`` is non-empty, and then
   ``up_pct`` / ``down_pct`` are null;
@@ -628,9 +629,13 @@ class ForecastStore:
         ).fetchone()
         if row is None:
             raise ForecastStoreError("input_series_sha256 is not a stored snapshot")
-        if datetime.fromisoformat(str(row[1])) > created:
+        captured = datetime.fromisoformat(str(row[1]))
+        if captured > created:
             raise ForecastStoreError("the snapshot was captured after created_at")
         bars = _stored_bars(str(row[0]))
+        # Point in time: no bar can have been fetched, or be as of, after its capture.
+        if any(bar.fetched_at > captured or bar.as_of > captured for bar in bars):
+            raise ForecastStoreError("the snapshot holds a bar stamped after its captured_at")
         if bars[-1].session_date != data_as_of:
             raise ForecastStoreError("data_as_of is not the snapshot's latest session")
         if not all(bar.final for bar in bars):
@@ -765,6 +770,7 @@ class ForecastStore:
 @dataclass(frozen=True)
 class _StoredBar:
     session_date: date
+    as_of: datetime
     fetched_at: datetime
     final: bool
 
@@ -779,6 +785,7 @@ def _stored_bars(text: str) -> list[_StoredBar]:
         out.append(
             _StoredBar(
                 session_date=session,
+                as_of=as_of,
                 fetched_at=fetched_at,
                 final=is_final(SNAPSHOT_MARKET, session, as_of, fetched_at),
             )

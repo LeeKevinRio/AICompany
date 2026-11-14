@@ -100,7 +100,9 @@ class Ledger:
         kwargs.update(overrides)
         return self.store.register_claim(**kwargs)
 
-    def snapshot(self, last: date, *, count: int = 3, **overrides: Any) -> str:
+    def snapshot(
+        self, last: date, *, count: int = 3, catch_up: bool = True, **overrides: Any
+    ) -> str:
         days = [d for d in weekdays(last - timedelta(days=count * 2 + 4), count * 3) if d <= last]
         kwargs: dict[str, Any] = {
             "bars": [bar(d) for d in days[-count:]],
@@ -112,6 +114,11 @@ class Ledger:
             "raw_timestamp_available": False,
         }
         kwargs.update(overrides)
+        if catch_up:
+            # A snapshot is captured no earlier than its bars were fetched (point in
+            # time), so the clock moves up to the latest bar stamp if it is behind it.
+            latest = max(max(b["fetched_at"], b["as_of"]) for b in kwargs["bars"])
+            self.clock.now = max(self.clock.now, latest)
         return self.store.put_input_series(**kwargs)
 
     def run(self) -> int:
@@ -474,7 +481,8 @@ def test_the_content_hash_ignores_the_run_columns(ledger: Ledger) -> None:
     ids=["23:59:59.999999", "00:00:00", "00:00:00.000001", "15:30"],
 )
 def test_late_is_decided_by_the_store_clock(ledger: Ledger, clock: datetime, late: int) -> None:
-    series = ledger.snapshot(T)
+    # T's bar is fetched at 15:10, so even the 15:30 record is later than its capture.
+    series = ledger.snapshot(T, bars=[bar(date(2026, 11, 12)), bar(T, fetched=_at(T, 15, 10))])
     ledger.clock.now = clock.replace(tzinfo=ledger.clock.now.tzinfo)
     ledger.record(ledger.run(), ledger.h3, T, series)
     (stored,) = ledger.rows("forecast_record")
@@ -636,6 +644,39 @@ def test_the_snapshot_must_not_postdate_the_record(ledger: Ledger) -> None:
     ledger.clock.now = _at(T, 22, 9)  # the clock stepped back
     with pytest.raises(ForecastStoreError, match="captured after"):
         ledger.record(run_id, ledger.h3, T, series)
+
+
+@pytest.mark.parametrize("stamp", ["fetched_at", "as_of"])
+@pytest.mark.parametrize("record_hour", [22, 23])
+def test_a_bar_stamped_after_the_capture_is_refused(
+    ledger: Ledger, stamp: str, record_hour: int
+) -> None:
+    # M1 (point in time): one bar's fetched_at / as_of is an hour after the store
+    # clock that stamps captured_at. At 23:30 the record itself is later than the
+    # bar, so only the captured_at comparison can catch it.
+    ledger.clock.now = _at(T, 22, 10)
+    future = bar(T)
+    future[stamp] = _at(T, 23, 10)
+    series = ledger.snapshot(T, bars=[bar(date(2026, 11, 12)), future], catch_up=False)
+    (stored,) = ledger.rows("forecast_input_series")
+    assert stored["captured_at"] == "2026-11-13T14:10:00.000000+00:00"
+    ledger.clock.now = _at(T, record_hour, 30)
+    run_id = ledger.run()
+    with pytest.raises(ForecastStoreError, match="stamped after its captured_at"):
+        ledger.record(run_id, ledger.h3, T, series)
+    assert ledger.rows("forecast_record") == []
+
+
+def test_a_bar_stamped_exactly_at_the_capture_is_accepted(ledger: Ledger) -> None:
+    ledger.clock.now = _at(T, 20, 0)
+    bars = [bar(date(2026, 11, 12)), bar(T, fetched=_at(T, 20, 0))]
+    series = ledger.snapshot(T, bars=bars, catch_up=False)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    (stored,) = ledger.rows("forecast_record")
+    (snapshot,) = ledger.rows("forecast_input_series")
+    assert stored["inputs_max_fetched_at"] == snapshot["captured_at"]
+    assert stored["inputs_max_fetched_at"] == "2026-11-13T12:00:00.000000+00:00"
 
 
 def test_unknown_references_are_refused(ledger: Ledger) -> None:

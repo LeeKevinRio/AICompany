@@ -425,6 +425,10 @@ CHECK_CASES: list[tuple[str, dict[str, object], bool]] = [
     ("forecast_record", {"base_close": ""}, False),
     ("forecast_record", {"range_basis": "sigma_band"}, True),
     ("forecast_record", {"range_basis": " "}, False),
+    # inputs_max_fetched_at <= created_at (the valid row has them equal).
+    ("forecast_record", {"inputs_max_fetched_at": "2026-11-13T14:10:00.000001+00:00"}, False),
+    ("forecast_record", {"inputs_max_fetched_at": "2026-11-13T15:10:00.000000+00:00"}, False),
+    ("forecast_record", {"inputs_max_fetched_at": "2026-11-13T14:09:59.999999+00:00"}, True),
 ]
 
 
