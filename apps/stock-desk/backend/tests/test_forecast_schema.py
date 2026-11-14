@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -37,12 +38,19 @@ from tests.forecast_ledger_helpers import (
     row,
 )
 
+
+@pytest.fixture
+def conn() -> Iterator[sqlite3.Connection]:
+    connection = memory_ledger()
+    yield connection
+    connection.close()
+
+
 # --- append-only triggers (S-1) --------------------------------------------------------
 
 
 @pytest.mark.parametrize("table", TABLES)
-def test_update_is_refused_on_every_table(table: str) -> None:
-    conn = memory_ledger()
+def test_update_is_refused_on_every_table(table: str, conn: sqlite3.Connection) -> None:
     insert(conn, table, VALID_ROWS[table])
     column = next(iter(VALID_ROWS[table]))
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -51,16 +59,14 @@ def test_update_is_refused_on_every_table(table: str) -> None:
 
 
 @pytest.mark.parametrize("table", TABLES)
-def test_delete_is_refused_on_every_table(table: str) -> None:
-    conn = memory_ledger()
+def test_delete_is_refused_on_every_table(table: str, conn: sqlite3.Connection) -> None:
     insert(conn, table, VALID_ROWS[table])
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         conn.execute(f"DELETE FROM {table}")
     assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 1
 
 
-def test_an_upsert_update_is_refused_too() -> None:
-    conn = memory_ledger()
+def test_an_upsert_update_is_refused_too(conn: sqlite3.Connection) -> None:
     insert(conn, "forecast_input_series", VALID_ROWS["forecast_input_series"])
     columns = VALID_ROWS["forecast_input_series"]
     names = ", ".join(columns)
@@ -83,10 +89,11 @@ def _replace(conn: sqlite3.Connection) -> None:
     )
 
 
-def test_insert_or_replace_is_refused_when_recursive_triggers_are_on() -> None:
+def test_insert_or_replace_is_refused_when_recursive_triggers_are_on(
+    conn: sqlite3.Connection,
+) -> None:
     # The store's connections turn recursive_triggers on (store.py), so the
     # delete REPLACE performs fires the append-only DELETE trigger.
-    conn = memory_ledger()
     conn.execute("PRAGMA recursive_triggers = ON")
     insert(conn, "forecast_record", VALID_ROWS["forecast_record"])
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
@@ -102,16 +109,16 @@ def test_insert_or_replace_is_refused_when_recursive_triggers_are_on() -> None:
         "alone do not stop a rewrite from a connection outside the store"
     ),
 )
-def test_insert_or_replace_is_refused_on_a_default_connection() -> None:
-    conn = memory_ledger()
+def test_insert_or_replace_is_refused_on_a_default_connection(conn: sqlite3.Connection) -> None:
     insert(conn, "forecast_record", VALID_ROWS["forecast_record"])
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         _replace(conn)
 
 
-def test_insert_or_replace_rewrites_a_record_on_a_default_connection() -> None:
+def test_insert_or_replace_rewrites_a_record_on_a_default_connection(
+    conn: sqlite3.Connection,
+) -> None:
     # The fact behind SP-1, shown directly: the label of the stored row changed.
-    conn = memory_ledger()
     insert(conn, "forecast_record", VALID_ROWS["forecast_record"])
     _replace(conn)
     assert conn.execute("SELECT label FROM forecast_record").fetchall() == [("bearish",)]
@@ -124,6 +131,11 @@ _BAD_TS = (
     "2026-11-13T22:10:00.000000+08:00",  # not UTC
     "2026-11-13 14:10:00.000000+00:00",  # space separator
 )
+
+
+def _o(**overrides: object) -> dict[str, object]:
+    return overrides
+
 
 #: ``(table, overrides, accepted)``: each column CHECK with a pass and a fail.
 CHECK_CASES: list[tuple[str, dict[str, object], bool]] = [
@@ -138,10 +150,10 @@ CHECK_CASES: list[tuple[str, dict[str, object], bool]] = [
     ("forecast_run", {"code_commit": ""}, False),
     ("forecast_run", {"runtime_json": "[]"}, False),
     ("forecast_run", {"runtime_json": "{not json"}, False),
-    *[("forecast_run", {"started_at": bad}, False) for bad in _BAD_TS],
+    *[("forecast_run", _o(started_at=bad), False) for bad in _BAD_TS],
     # forecast_run_end
     *[
-        ("forecast_run_end", {"outcome": outcome, "records_written": 0}, True)
+        ("forecast_run_end", _o(outcome=outcome, records_written=0), True)
         for outcome in ("ok", "no_new_session", "inputs_not_ready")
     ],
     ("forecast_run_end", {"outcome": "gate_closed", "records_written": 0}, True),
@@ -218,7 +230,7 @@ CHECK_CASES: list[tuple[str, dict[str, object], bool]] = [
     ("forecast_record", {"validation_status": "unverified"}, True),
     ("forecast_record", {"validation_status": "verified"}, False),
     ("forecast_record", {"validation_status": "better_than_baseline"}, False),
-    *[("forecast_record", {"label": label}, True) for label in ("bullish", "range", "bearish")],
+    *[("forecast_record", _o(label=label), True) for label in ("bullish", "range", "bearish")],
     ("forecast_record", {"label": "neutral"}, False),
     ("forecast_record", {"label": "insufficient"}, False),  # missing_json is empty
     (
@@ -279,8 +291,9 @@ CHECK_CASES: list[tuple[str, dict[str, object], bool]] = [
         for i, (table, o, ok) in enumerate(CHECK_CASES)
     ],
 )
-def test_column_checks(table: str, overrides: dict[str, object], accepted: bool) -> None:
-    conn = memory_ledger()
+def test_column_checks(
+    table: str, overrides: dict[str, object], accepted: bool, conn: sqlite3.Connection
+) -> None:
     candidate = row(table, **overrides)
     if accepted:
         insert(conn, table, candidate)
@@ -290,8 +303,7 @@ def test_column_checks(table: str, overrides: dict[str, object], accepted: bool)
             insert(conn, table, candidate)
 
 
-def test_claim_and_day_are_unique() -> None:
-    conn = memory_ledger()
+def test_claim_and_day_are_unique(conn: sqlite3.Connection) -> None:
     insert(conn, "forecast_record", VALID_ROWS["forecast_record"])
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
         insert(
@@ -301,15 +313,13 @@ def test_claim_and_day_are_unique() -> None:
         )
 
 
-def test_snapshot_content_is_unique() -> None:
-    conn = memory_ledger()
+def test_snapshot_content_is_unique(conn: sqlite3.Connection) -> None:
     insert(conn, "forecast_input_series", VALID_ROWS["forecast_input_series"])
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
         insert(conn, "forecast_input_series", row("forecast_input_series", content_sha256=HEX_B))
 
 
-def test_foreign_keys_hold_when_enabled() -> None:
-    conn = memory_ledger()
+def test_foreign_keys_hold_when_enabled(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
     with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
         insert(conn, "forecast_record", VALID_ROWS["forecast_record"])
@@ -336,21 +346,25 @@ def test_every_table_has_exactly_the_two_triggers() -> None:
 
 def test_a_fresh_schema_is_complete(tmp_path: Path) -> None:
     path = file_ledger(tmp_path)
-    with sqlite3.connect(path) as conn:
-        status = schema_status(conn)
-        require_complete_schema(conn)
+    connection = sqlite3.connect(path)
+    try:
+        status = schema_status(connection)
+        require_complete_schema(connection)
+    finally:
+        connection.close()
     assert status.complete
     assert status.missing == status.altered == status.unexpected == ()
 
 
 def test_an_empty_database_is_incomplete() -> None:
-    status = schema_status(sqlite3.connect(":memory:"))
+    connection = sqlite3.connect(":memory:")
+    status = schema_status(connection)
+    connection.close()
     assert not status.complete
     assert len(status.missing) == len(EXPECTED_OBJECTS) == 15
 
 
-def test_a_missing_table_is_incomplete() -> None:
-    conn = memory_ledger()
+def test_a_missing_table_is_incomplete(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE forecast_run_end")
     status = schema_status(conn)
     assert not status.complete
@@ -359,16 +373,14 @@ def test_a_missing_table_is_incomplete() -> None:
         require_complete_schema(conn)
 
 
-def test_a_missing_trigger_is_incomplete() -> None:
-    conn = memory_ledger()
+def test_a_missing_trigger_is_incomplete(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TRIGGER forecast_record_no_delete")
     status = schema_status(conn)
     assert status.missing == ("trigger:forecast_record_no_delete",)
     assert not status.complete
 
 
-def test_an_altered_trigger_is_incomplete() -> None:
-    conn = memory_ledger()
+def test_an_altered_trigger_is_incomplete(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TRIGGER forecast_record_no_update")
     conn.execute(
         "CREATE TRIGGER forecast_record_no_update BEFORE UPDATE ON forecast_record WHEN 0\n"
@@ -389,22 +401,19 @@ def test_an_altered_trigger_is_incomplete() -> None:
         "CREATE TRIGGER sneaky AFTER INSERT ON forecast_record BEGIN SELECT 1; END",
     ],
 )
-def test_an_extra_ledger_object_is_incomplete(ddl: str) -> None:
-    conn = memory_ledger()
+def test_an_extra_ledger_object_is_incomplete(ddl: str, conn: sqlite3.Connection) -> None:
     conn.execute(ddl)
     status = schema_status(conn)
     assert status.unexpected != ()
     assert not status.complete
 
 
-def test_other_tables_do_not_matter() -> None:
-    conn = memory_ledger()
+def test_other_tables_do_not_matter(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE TABLE alert_rules (x)")
     assert schema_status(conn).complete
 
 
-def test_create_schema_refuses_a_database_with_ledger_objects() -> None:
-    conn = memory_ledger()
+def test_create_schema_refuses_a_database_with_ledger_objects(conn: sqlite3.Connection) -> None:
     with pytest.raises(SchemaNotEmptyError):
         create_schema(conn)
     conn.execute("DROP TABLE forecast_record")
@@ -420,6 +429,7 @@ def test_create_schema_rolls_back_on_failure() -> None:
         create_schema(conn)
     assert not conn.in_transaction
     assert "table:forecast_run" in schema_status(conn).missing
+    conn.close()
 
 
 def test_the_schema_module_has_no_migration() -> None:

@@ -1,4 +1,7 @@
-"""Bar normalisation, ``content_sha256``, ``record_content_hash`` and ``code_digest`` (ADR-0030 D-2, D-5)."""
+"""Bar normalisation and the ledger digests (ADR-0030 D-2, D-5).
+
+``content_sha256``, ``record_content_hash`` and ``code_digest``.
+"""
 
 from __future__ import annotations
 
