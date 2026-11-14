@@ -1825,10 +1825,13 @@ class PlaybookService:
         line, which is what 「不得靜默」 asks for.
         """
         as_of = today or datetime.now(UTC).date()
-        batches = self._store.list_batches()
-        symbols = sorted({batch.symbol for batch in batches})
+        listed = self._store.list_batches()
+        symbols = sorted({batch.symbol for batch in listed})
         loaded = self._load_symbol_bars(symbols, today=as_of)
-        portfolio = self._store.portfolio_state()
+        # N-196: value the book from one read taken after the bars are loaded.
+        book = self._store.read_rebalance_inputs()
+        batches = book.batches
+        portfolio = book.portfolio
         params = self._store.active_params(as_of)
 
         deployed = Decimal("0")
