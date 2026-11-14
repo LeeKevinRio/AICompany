@@ -238,6 +238,7 @@ def test_the_scanned_packages_hold_exactly_the_b1_and_b2_modules() -> None:
         "dirdef/strings.py",
         "forecast/__init__.py",
         "forecast/band.py",
+        "forecast/canonical.py",
         "forecast/claims.py",
         "forecast/definitions.py",
         "forecast/errors.py",
