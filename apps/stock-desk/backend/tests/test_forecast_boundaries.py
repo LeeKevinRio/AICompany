@@ -241,6 +241,7 @@ def test_the_scanned_packages_hold_exactly_the_b1_and_b2_modules() -> None:
         "forecast/claims.py",
         "forecast/definitions.py",
         "forecast/errors.py",
+        "forecast/schema.py",
         "ops_alert/__init__.py",
         "ops_alert/model.py",
         "outlook/__init__.py",
