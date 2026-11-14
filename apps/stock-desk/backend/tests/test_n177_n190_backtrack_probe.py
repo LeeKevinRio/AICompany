@@ -506,6 +506,10 @@ def test_audited_s2_lines_drop_out_of_the_candidate_list(tmp_path: Path) -> None
 
 def test_the_report_states_whether_the_audit_table_exists(tmp_path: Path) -> None:
     path = _db(tmp_path)
+    # N-177a merged (C14): the store now creates the audit table, so a copy that no
+    # N-177a build has opened is staged by dropping it again.
+    with closing(sqlite3.connect(path)) as conn, conn:
+        conn.execute("DROP TABLE playbook_fill_moves")
     _stage_phantom(path)
     result = _report(tmp_path, path)
     assert result["meta"]["tables"]["playbook_fill_moves"] is False
