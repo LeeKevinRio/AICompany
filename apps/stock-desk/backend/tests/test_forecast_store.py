@@ -12,6 +12,7 @@ import inspect
 import json
 import re
 import sqlite3
+import struct
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Any
 import pytest
 
 from app.dirdef.definition import DirectionDefinition, definition_logic_sha256, definition_sha256
+from app.dirdef.hashing import canonical_json
 from app.forecast import store as store_module
 from app.forecast.canonical import canonical_timestamp, content_sha256, record_content_hash
 from app.forecast.definitions import UnpublishedVersionError
@@ -34,6 +36,7 @@ from app.forecast.store import (
     valid_until_session_estimate,
 )
 from app.outlook.missing import MissingItem
+from app.outlook.volatility import SigmaEstimate, sigma_d
 from tests.forecast_ledger_helpers import (
     BASELINES,
     FakeClock,
@@ -54,12 +57,12 @@ LOGIC = "1" * 64
 CODE = "2" * 64
 
 
-def _missing(day: date) -> MissingItem:
+def _missing(day: date, code: str = "E-BARS-SHORT", available: str = "12") -> MissingItem:
     return MissingItem(
-        code="E-BARS-SHORT",
-        item="index_bars",
+        code=code,
+        item="index_bars" if code == "E-BARS-SHORT" else "sigma_d",
         required="315",
-        available="12",
+        available=available,
         source=None,
         source_status=None,
         attempted_at=None,
@@ -142,15 +145,24 @@ class Ledger:
         return self.store.write_record(**kwargs)
 
     def insufficient(self, run_id: int, claim: str, day: date, series: str) -> str:
-        none_band = dict.fromkeys(("K_h", "EPS", "sigma_d", "valid_returns", "up_pct", "down_pct"))
+        # Short bars, hence too few returns for sigma_d (E-VOL-SHORT): sigma_d is null.
+        horizon = 3 if claim == self.h3 else 5
+        short_band: dict[str, object] = {
+            "K_h": self.definition.k_for(horizon),
+            "EPS": self.definition.EPS,
+            "sigma_d": None,
+            "valid_returns": 11,
+            "up_pct": None,
+            "down_pct": None,
+        }
         return self.record(
             run_id,
             claim,
             day,
             series,
             label="insufficient",
-            missing=[_missing(day)],
-            band_def=none_band,
+            missing=[_missing(day), _missing(day, "E-VOL-SHORT", "11")],
+            band_def=short_band,
         )
 
     def rows(self, table: str) -> list[dict[str, Any]]:
@@ -528,8 +540,9 @@ def test_an_insufficient_record(ledger: Ledger) -> None:
     ledger.insufficient(ledger.run(), ledger.h3, T, series)
     (stored,) = ledger.rows("forecast_record")
     assert stored["label"] == "insufficient"
-    (item,) = json.loads(stored["missing_json"])
-    assert MissingItem.model_validate(item) == _missing(T)
+    items = [MissingItem.model_validate(item) for item in json.loads(stored["missing_json"])]
+    assert items == [_missing(T), _missing(T, "E-VOL-SHORT", "11")]
+    assert json.loads(stored["band_def"])["sigma_d"] is None
 
 
 def _rejected(ledger: Ledger, **overrides: Any) -> None:
@@ -568,6 +581,145 @@ def test_bad_record_inputs_are_refused(ledger: Ledger, overrides: dict[str, Any]
 
 def test_an_insufficient_record_has_no_bounds(ledger: Ledger) -> None:
     _rejected(ledger, label="insufficient", missing=[_missing(T)])  # band has up/down pct
+
+
+# --- insufficient records and sigma_d (ADR-0030 freeze pack Q3) ---------------------------
+
+#: A window of daily log returns whose sample std is well above the fixture's SIGMA_FLOOR.
+VOLATILE = [0.004 * ((i % 7) - 3) + 0.0001 * (i % 3) for i in range(60)]
+
+
+def _insufficient_band(
+    definition: DirectionDefinition, estimate: SigmaEstimate, horizon: int = 3
+) -> dict[str, object]:
+    """``band_def`` of an insufficient record, from a ``volatility.sigma_d`` result."""
+    return {
+        "K_h": definition.k_for(horizon),
+        "EPS": definition.EPS,
+        "sigma_d": estimate.value,
+        "valid_returns": estimate.valid_returns,
+        "up_pct": None,
+        "down_pct": None,
+    }
+
+
+def test_q3_i_an_insufficient_record_keeps_an_available_sigma(ledger: Ledger) -> None:
+    # (i) E-BARS-SHORT, sigma_d available: written, sigma_d is the number; recomputed
+    # from the same returns, band_def is the same to the bit.
+    estimate = sigma_d(VOLATILE, definition=ledger.definition)
+    assert estimate.value is not None and estimate.missing_code is None
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(
+        ledger.run(),
+        ledger.h3,
+        T,
+        series,
+        label="insufficient",
+        missing=[_missing(T)],
+        band_def=_insufficient_band(ledger.definition, estimate),
+    )
+    (stored,) = ledger.rows("forecast_record")
+    stored_band = json.loads(stored["band_def"])
+    assert isinstance(stored_band["sigma_d"], float)
+    again = _insufficient_band(ledger.definition, sigma_d(VOLATILE, definition=ledger.definition))
+    assert stored["band_def"] == canonical_json(again)
+    for key in ("K_h", "EPS", "sigma_d"):
+        assert struct.pack("<d", stored_band[key]) == struct.pack("<d", again[key])
+    assert stored_band["valid_returns"] == again["valid_returns"] == 60
+
+
+@pytest.mark.parametrize(
+    ("returns", "code"),
+    [([0.001] * 60, "E-VOL-DEGENERATE"), ([0.01, -0.01] * 5, "E-VOL-SHORT")],
+    ids=["degenerate", "short"],
+)
+def test_q3_ii_a_sigma_without_value_is_null(
+    ledger: Ledger, returns: list[float | None], code: str
+) -> None:
+    # (ii) sigma_d returned no value: null, with its E-VOL-* item; written.
+    estimate = sigma_d(returns, definition=ledger.definition)
+    assert estimate.value is None and estimate.missing_code == code
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(
+        ledger.run(),
+        ledger.h3,
+        T,
+        series,
+        label="insufficient",
+        missing=[_missing(T, code, str(estimate.raw_std))],
+        band_def=_insufficient_band(ledger.definition, estimate),
+    )
+    (stored,) = ledger.rows("forecast_record")
+    assert json.loads(stored["band_def"])["sigma_d"] is None
+    assert json.loads(stored["band_def"])["valid_returns"] == estimate.valid_returns
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "violation"),
+    [
+        ("sigma_d", 0.0005, "sigma_d_below_floor"),
+        ("sigma_d", 0.0, "sigma_d_not_positive_finite"),
+        ("K_h", 0.5, "k_h_mismatch"),
+        ("valid_returns", 3, "valid_returns_below_min"),
+    ],
+)
+def test_q3_iii_a_non_null_sigma_goes_through_band(
+    ledger: Ledger, key: str, value: object, violation: str
+) -> None:
+    # (iii) insufficient with a sigma_d below the floor (or another violation): refused.
+    snapshot = _insufficient_band(
+        ledger.definition, sigma_d(VOLATILE, definition=ledger.definition)
+    )
+    snapshot[key] = value
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    with pytest.raises(ForecastStoreError, match=violation):
+        ledger.record(
+            run_id,
+            ledger.h3,
+            T,
+            series,
+            label="insufficient",
+            missing=[_missing(T)],
+            band_def=snapshot,
+        )
+    assert ledger.rows("forecast_record") == []
+
+
+@pytest.mark.parametrize(
+    ("sigma", "codes"),
+    [
+        (None, ["E-BARS-SHORT"]),
+        (0.01, ["E-BARS-SHORT", "E-VOL-DEGENERATE"]),
+        (0.01, ["E-VOL-SHORT"]),
+    ],
+    ids=["iv-null-without-e-vol", "value-with-e-vol-degenerate", "value-with-e-vol-short"],
+)
+def test_q3_iv_sigma_is_null_exactly_with_an_e_vol_item(
+    ledger: Ledger, sigma: float | None, codes: list[str]
+) -> None:
+    # (iv) null sigma_d without an E-VOL-* item, and the converse: refused.
+    snapshot = _insufficient_band(
+        ledger.definition, sigma_d(VOLATILE, definition=ledger.definition)
+    )
+    snapshot["sigma_d"] = sigma
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    with pytest.raises(ForecastStoreError, match="null exactly when missing holds an E-VOL"):
+        ledger.record(
+            run_id,
+            ledger.h3,
+            T,
+            series,
+            label="insufficient",
+            missing=[_missing(T, code) for code in codes],
+            band_def=snapshot,
+        )
+    assert ledger.rows("forecast_record") == []
 
 
 def test_a_broken_missing_item_is_revalidated(ledger: Ledger) -> None:

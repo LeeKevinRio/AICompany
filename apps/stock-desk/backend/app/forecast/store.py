@@ -24,6 +24,10 @@ Record write validation (D-2 point 7; D-3 points 1, 2, 4, 6):
 * ``missing`` items are ``app.outlook.missing.MissingItem`` and re-validated;
   ``label = insufficient`` exactly when ``missing`` is non-empty, and then
   ``up_pct`` / ``down_pct`` are null;
+* an insufficient record's ``band_def.sigma_d`` is what
+  ``app.outlook.volatility.sigma_d`` returned: null exactly when ``missing``
+  holds an ``E-VOL-*`` item, and when it is not null the snapshot must have no
+  violation under ``labeled_snapshot_violations`` (ADR-0030 freeze pack Q3);
 * a labelled record's ``band_def`` must have no violation under
   ``app.forecast.band.labeled_snapshot_violations`` against the definition from
   ``app.forecast.definitions.get_definition`` -- whose ``definition_sha256``
@@ -78,7 +82,11 @@ from app.forecast.canonical import (
 )
 from app.forecast.claims import claim_id as make_claim_id
 from app.forecast.definitions import get_definition
-from app.forecast.errors import LabeledThresholdSnapshotIncompleteError, exception_class_name
+from app.forecast.errors import (
+    LabeledThresholdSnapshotIncompleteError,
+    ThresholdViolation,
+    exception_class_name,
+)
 from app.forecast.schema import (
     BAND_DEF_KEYS,
     BASELINE_KEYS,
@@ -103,6 +111,10 @@ RUN_TRIGGER: Final = "scheduled"
 SERIES_KIND: Final = "index_bars"
 #: The market whose finality rule the TAIEX snapshot bars are judged by.
 SNAPSHOT_MARKET: Final = "TW"
+
+#: The code prefix of ``app.outlook.volatility``'s missing codes (``E-VOL-SHORT``,
+#: ``E-VOL-DEGENERATE``): exactly the cases where ``sigma_d`` returns no value.
+VOLATILITY_MISSING_PREFIX: Final = "E-VOL-"
 
 #: Milliseconds a connection waits for a concurrent writer before failing.
 BUSY_TIMEOUT_MS: Final = 5000
@@ -499,6 +511,13 @@ class ForecastStore:
         band_json = _json_text("band_def", band)
         if label == "insufficient" and (band["up_pct"] is not None or band["down_pct"] is not None):
             raise ForecastStoreError("an insufficient record has null up_pct and down_pct")
+        if label == "insufficient" and (band["sigma_d"] is None) != any(
+            item.code.startswith(VOLATILITY_MISSING_PREFIX) for item in missing
+        ):
+            raise ForecastStoreError(
+                "an insufficient record's sigma_d is null exactly when missing holds"
+                " an E-VOL-* item"
+            )
         if not isinstance(evidence, Mapping):
             raise ForecastStoreError("evidence must be a mapping")
         evidence_json = _json_text("evidence", dict(evidence))
@@ -523,6 +542,13 @@ class ForecastStore:
             max_fetched_at = self._check_snapshot(conn, input_series_sha256, data_as_of, created)
             if label != "insufficient":
                 self._check_band(band, claim, data_as_of)
+            elif band["sigma_d"] is not None:
+                violations = self._band_violations(band, claim)
+                if violations:
+                    raise ForecastStoreError(
+                        f"an insufficient record's sigma_d snapshot has violations: "
+                        f"{list(violations)}"
+                    )
             cutoff = late_cutoff_at(data_as_of)
             columns: dict[str, object] = {
                 "forecast_id": new_ulid(created),
@@ -604,11 +630,18 @@ class ForecastStore:
         return {key: band_def[key] for key in BAND_DEF_KEYS}
 
     @staticmethod
-    def _check_band(band: Mapping[str, object], claim: ClaimRow, data_as_of: date) -> None:
+    def _band_violations(
+        band: Mapping[str, object], claim: ClaimRow
+    ) -> tuple[ThresholdViolation, ...]:
+        """``band.labeled_snapshot_violations`` under the claim's published definition."""
         definition = get_definition(claim.definition_version)
         if definition_sha256(definition) != claim.definition_sha256:
             raise ForecastStoreError("published definition differs from the claim's definition")
-        violations = labeled_snapshot_violations(band, horizon=claim.horizon, definition=definition)
+        return labeled_snapshot_violations(band, horizon=claim.horizon, definition=definition)
+
+    @classmethod
+    def _check_band(cls, band: Mapping[str, object], claim: ClaimRow, data_as_of: date) -> None:
+        violations = cls._band_violations(band, claim)
         if violations:
             raise LabeledThresholdSnapshotIncompleteError(
                 source="record",
