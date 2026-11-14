@@ -630,6 +630,33 @@ def test_an_extra_ledger_object_is_incomplete(ddl: str, conn: sqlite3.Connection
     assert not status.complete
 
 
+@pytest.mark.parametrize(
+    "ddl",
+    [
+        "CREATE TABLE Forecast_x (x)",
+        "CREATE TABLE PLAN_x (x)",
+        "CREATE TABLE FORECAST_AUDIT (x)",
+        "CREATE INDEX Forecast_record_label ON forecast_record (label)",
+        "CREATE TRIGGER sneaky AFTER INSERT ON Forecast_record BEGIN SELECT 1; END",
+    ],
+)
+def test_the_ledger_prefixes_match_in_any_case(ddl: str, conn: sqlite3.Connection) -> None:
+    conn.execute(ddl)
+    status = schema_status(conn)
+    assert len(status.unexpected) == 1
+    assert not status.complete
+    with pytest.raises(SchemaIncompleteError):
+        require_complete_schema(conn)
+
+
+def test_a_mixed_case_ledger_object_blocks_create_schema() -> None:
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    conn.execute("CREATE TABLE Forecast_x (x)")
+    with pytest.raises(SchemaNotEmptyError):
+        create_schema(conn)
+    conn.close()
+
+
 def test_other_tables_do_not_matter(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE TABLE alert_rules (x)")
     assert schema_status(conn).complete

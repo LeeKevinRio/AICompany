@@ -333,9 +333,13 @@ class SchemaStatus:
 
 
 def _ledger_objects(conn: sqlite3.Connection) -> dict[tuple[str, str], str | None]:
-    """Every ``sqlite_master`` object named or attached to a ``forecast_`` / ``plan_`` table."""
+    """Every ``sqlite_master`` object named or attached to a ``forecast_`` / ``plan_`` table.
+
+    The prefixes are matched case-insensitively, as SQLite matches names:
+    ``Forecast_audit`` and ``PLAN_x`` are ledger objects too.
+    """
     clauses = " OR ".join(
-        f"substr({column}, 1, {len(prefix)}) = '{prefix}'"
+        f"substr(lower({column}), 1, {len(prefix)}) = '{prefix}'"
         for prefix in LEDGER_PREFIXES
         for column in ("name", "tbl_name")
     )
