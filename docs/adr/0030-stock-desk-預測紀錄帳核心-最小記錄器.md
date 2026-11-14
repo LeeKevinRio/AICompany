@@ -1,6 +1,7 @@
 # ADR-0030：stock-desk 預測紀錄帳核心——最小記錄器
 
 - 狀態：accepted（CEO 2026-10-26 核可，含 C-M1～C-M4 與 C-M4、G-5→CG-3 的明確同意；決策包二補遺 #64～#67）
+- 補充紀錄：2026-11-14 append 補充一（SP-1：5 張表加 BEFORE INSERT 拒絕重複鍵 trigger；tech-architect 裁示，加嚴，不改產品行為與字面，CEO 可推翻；來源 `work/reviews/2026-11-14-G1位置與SP1裁示-tech-architect.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -350,3 +351,25 @@
 - 強制重抓的方式、`staleness_minutes` 與被丟棄列在取數路徑上能否取得，都沒有逐行確認。
 - ADR-0027 D-10 第 3 點前瞻 claim 的轉值時點，我只讀到登記與重放的部分；「第一筆 `forecast_record`」這個讀法依欄位名與事先宣告 §12 推定〔推論〕。
 - 時程與容量數字取自 quant 量化確認，都是推論。
+
+---
+
+## 補充一：SP-1 預測帳可被 INSERT OR REPLACE 改寫的收緊（2026-11-14）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-14-NM5儲存層交件-dev-lead.md` SP-1（已實證：SQLite 預設 `recursive_triggers=OFF` 時，REPLACE 刪除舊列不觸發 BEFORE DELETE trigger，`label` 被改寫）。
+- 性質：收緊 D-2 第 6 點與 S-1。補充本文，不改本文；不改任何產品行為與字面，不擴大 CEO 核可範圍。CEO 可推翻。
+
+1. 5 張表各加一個 trigger `{table}_no_replace`：`BEFORE INSERT`，`WHEN EXISTS` 同表中已有任一鍵相同的列，`SELECT RAISE(ABORT, 'append-only')`。須比對的鍵：
+   - `forecast_run`：`run_id`；
+   - `forecast_run_end`：`run_id`；
+   - `forecast_input_series`：`series_id`、`content_sha256`；
+   - `forecast_claim_registry`：`rowid`、`claim_id`；
+   - `forecast_record`：`rowid`、`forecast_id`、(`claim_id`, `data_as_of`)。
+   `WHEN` 子句只比對上列的鍵，不得有其他條件。
+2. D-2 第 6 點的 UPDATE／DELETE trigger 不變，仍然沒有 `WHEN`、沒有例外。store 連線維持 `recursive_triggers=ON`，作為第二層防護。
+3. `schema_status` 的預期物件含這 5 個 trigger（合計 15 個 trigger）；少一個、內容被改或多一個，都判為不完整，store 拒絕寫入。
+4. 本補充必須在 CG-3 正式建表之前落地。正式主 DB 一旦建表，再加這些 trigger 就是遷移，依 K-12 禁止。
+5. 未明確指定 rowid 時，SQLite 文件記載 `NEW.rowid` 的值為 undefined。在 D-5 第 6 點鎖定的執行環境下，它若誤中既有列，結果是拒絕寫入（fail-closed），不會放行。
+6. 殘留風險（知悉，不處理）：其他程式仍可以 `DROP TRIGGER`、開 `writable_schema` 或直接改檔。`schema_status` 只偵測得到少了或被改過的物件；`report verify` 偵測得到 D-5 第 3 點涵蓋的欄位；但刪掉 trigger 再改寫 `created_at`／`late`，帳內無法偵測。依 ADR-0025 F-1（純自用、單一使用者），蓄意竄改不在威脅模型內。F-4 不變。
+
+- **S-1a（逐條可檢查）**：在預設連線（`recursive_triggers=OFF`）上，第 1 點列出的 9 條鍵路徑各自執行 `INSERT OR REPLACE`，都以 `append-only` 被拒絕，而且原列內容與總列數都不變；store 的正常寫入全部通過（測試）。`sqlite_master` 中恰好有 15 個 ledger trigger（`schema_status`）。
