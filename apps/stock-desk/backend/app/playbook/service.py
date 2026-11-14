@@ -1905,11 +1905,7 @@ class PlaybookService:
                 )
             )
 
-        self._store.set_capital(
-            cash=portfolio.cash,
-            total_deploy=new_total_deploy,
-            source=REBALANCE_SOURCE,
-        )
+        self._store.set_total_deploy(total_deploy=new_total_deploy, source=REBALANCE_SOURCE)
         result = RebalanceResult(
             executed_at=as_of,
             status="ok",
