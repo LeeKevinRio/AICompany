@@ -1063,6 +1063,78 @@ def test_n_hat_counts_grid_points_whose_h_th_session_has_appeared(ledger: Ledger
     assert ledger.store.n_hat(ledger.h5) == 0
 
 
+def test_the_phase0_grid_is_the_n_hat_grid_and_counts_its_lost_points(ledger: Ledger) -> None:
+    assert ledger.store.phase0_grid(ledger.h3).points == ()  # no D_v yet
+    for index in (0, 3, 6, 7):
+        _on_time(ledger, ledger.h3, index)
+    _on_time(ledger, ledger.h3, 9, late=True)
+    ledger.snapshot(DAYS[12], bars=[bar(d) for d in DAYS[:13]])
+    grid = ledger.store.phase0_grid(ledger.h3)
+    assert grid.sessions == tuple(DAYS[:13]) and grid.first == 0
+    assert grid.points == (DAYS[0], DAYS[3], DAYS[6], DAYS[9], DAYS[12])
+    assert grid.on_time == frozenset({DAYS[0], DAYS[3], DAYS[6], DAYS[7]})
+    assert grid.lost == 2  # 9 is late, 12 has no record; 7 is off the grid
+    assert grid.n_hat == ledger.store.n_hat(ledger.h3) == 3
+    assert ledger.store.on_time_sessions(ledger.h3) == grid.on_time
+
+
+def test_review_trigger_t2_starts_90_days_before_d_1(ledger: Ledger) -> None:
+    store = ledger.store
+    before = store.review_trigger(ledger.h3, today=DAYS[0])
+    assert (before.d_v, before.d_1, before.t1, before.t2, before.triggered) == (
+        None,
+        None,
+        False,
+        False,
+        False,
+    )
+    assert before.c1 == 30 and before.horizon == 3 and before.n_hat == 0
+    _on_time(ledger, ledger.h3, 0)
+    d_1 = store_module._weekdays_after(DAYS[0], 30 * 3)
+    assert d_1.weekday() < 5 and (d_1 - DAYS[0]).days > 90
+    early = store.review_trigger(ledger.h3, today=d_1 - timedelta(days=91))
+    due = store.review_trigger(ledger.h3, today=d_1 - timedelta(days=90))
+    assert (early.d_v, early.d_1, early.t2) == (DAYS[0], d_1, False)
+    assert (due.t2, due.triggered, due.t1) == (True, True, False)
+    with pytest.raises(ForecastStoreError, match="today must be a date"):
+        store.review_trigger(ledger.h3, today=_at(DAYS[0], 9))
+
+
+def test_review_trigger_t1_is_half_of_the_first_checkpoint(
+    ledger: Ledger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _on_time(ledger, ledger.h3, 0)
+    sessions = tuple(weekdays(DAYS[0], 60))
+    for n_hat, t1 in ((14, False), (15, True)):
+        on_time = frozenset(sessions[: 3 * n_hat : 3])
+        grid = store_module.Phase0Grid(horizon=3, sessions=sessions, first=0, on_time=on_time)
+        assert grid.n_hat == n_hat
+        monkeypatch.setattr(ledger.store, "phase0_grid", lambda claim_id, g=grid: g)
+        trigger = ledger.store.review_trigger(ledger.h3, today=DAYS[0])
+        assert (trigger.n_hat, trigger.t1, trigger.t2) == (n_hat, t1, False)
+
+
+def test_registered_material_is_the_stored_bytes_and_definition(ledger: Ledger) -> None:
+    material = ledger.store.registered_material(ledger.h5)
+    assert material.rules_bytes == RULES_H5
+    assert material.claim == ledger.store.claim(ledger.h5)
+    assert DirectionDefinition.model_validate_json(material.definition_json) == ledger.definition
+    with pytest.raises(ForecastStoreError, match="not registered"):
+        ledger.store.registered_material("market|h3|x|dirdef-v1.0|forward")
+
+
+def test_runs_and_snapshot_digests_list_in_order(ledger: Ledger) -> None:
+    assert ledger.store.runs() == [] and ledger.store.snapshot_digests() == []
+    first, second = ledger.run(), ledger.run()
+    ledger.store.end_run(first, outcome="gate_closed", candidate_t=None, records_written=0)
+    runs = ledger.store.runs()
+    assert [(r.run_id, r.outcome) for r in runs] == [(first, "gate_closed"), (second, None)]
+    a = ledger.snapshot(DAYS[3])
+    b = ledger.snapshot(DAYS[5])
+    assert ledger.store.snapshot_digests() == [a, b]
+    assert ledger.store.ledger_schema_status().complete
+
+
 def test_n_hat_needs_a_registered_claim(ledger: Ledger) -> None:
     with pytest.raises(ForecastStoreError):
         ledger.store.n_hat("market|h3|x|dirdef-v1.0|forward")
@@ -1341,12 +1413,16 @@ def test_f4_connect_is_opened_only_on_the_write_path() -> None:
     public = {name for name in vars(ForecastStore) if not name.startswith("_")}
     assert readers & WRITE_METHODS == set()
     assert {"stored_records", "snapshot", "expected_record_columns", "claim"} <= readers
-    # check_record_content is the pure content validation: no connection at all.
+    # check_record_content is the pure content validation: no connection at all;
+    # n_hat, phase0_grid and review_trigger compose the read queries above.
     assert public - WRITE_METHODS - readers <= {
         "now",
         "counts_toward_m",
         "recording_claims",
         "check_record_content",
+        "n_hat",
+        "phase0_grid",
+        "review_trigger",
     }
     assert _users("_read", {"check_record_content": functions["check_record_content"]}) == set()
 
@@ -1404,6 +1480,13 @@ def test_f4_every_read_query_runs_on_a_query_only_connection(
         "d_v": lambda: store.d_v(ledger.h3),
         "final_sessions": store.final_sessions,
         "n_hat": lambda: store.n_hat(ledger.h3),
+        "on_time_sessions": lambda: store.on_time_sessions(ledger.h3),
+        "phase0_grid": lambda: store.phase0_grid(ledger.h3),
+        "review_trigger": lambda: store.review_trigger(ledger.h3, today=T),
+        "registered_material": lambda: store.registered_material(ledger.h3),
+        "runs": store.runs,
+        "snapshot_digests": store.snapshot_digests,
+        "ledger_schema_status": store.ledger_schema_status,
         "latest_run": store.latest_run,
         "latest_run_before": lambda: store.latest_run_before(run_id + 1),
         "has_record": lambda: store.has_record(ledger.h3, T),

@@ -57,7 +57,13 @@ Read-only queries: ``first_record_at`` and "counts toward m" are the D-2 point
 6 definitions; ``m_db`` counts the forward claims with at least one record
 (m itself also needs the ``work/`` registrations and is not computed here);
 ``recording_claims`` is the latest-registered forward claim per
-``(scope_kind, horizon)`` (D-6 CG-2); ``d_v`` and ``n_hat`` follow D-8 point 4.
+``(scope_kind, horizon)`` (D-6 CG-2); ``d_v`` and ``n_hat`` follow D-8 point 4,
+over the one grid definition ``phase0_grid`` (which also gives the F-2
+phase-0 grid point loss count), and ``review_trigger`` derives d_1 and whether
+T1 or T2 holds (D-8 point 4: only from this module's read-only queries).
+For the operator report (``report.py``): ``registered_material`` (the stored
+rule bytes and definition JSON, D-5 points 2-3), ``runs``,
+``snapshot_digests``, ``on_time_sessions`` and ``ledger_schema_status``.
 For the recorder (``recorder.py``): ``now`` (the store clock, the recorder's
 only clock), ``latest_run_before``, ``has_record``, ``stored_records``,
 ``snapshot`` and ``expected_record_columns`` -- the last one derives the
@@ -74,7 +80,7 @@ import sqlite3
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Final, Literal, get_args
@@ -86,6 +92,7 @@ from app.dirdef.definition import (
     Horizon,
     definition_logic_sha256,
     definition_sha256,
+    n_min,
 )
 from app.dirdef.hashing import canonical_json
 from app.forecast import claims as claim_keys  # a module import: claims.py imports this module
@@ -107,7 +114,9 @@ from app.forecast.schema import (
     BAND_DEF_KEYS,
     BASELINE_KEYS,
     SCHEMA_VERSION,
+    SchemaStatus,
     require_complete_schema,
+    schema_status,
 )
 from app.outlook.inputs import late_cutoff_at as late_cutoff_at  # re-exported (tests)
 from app.outlook.missing import MissingItem
@@ -384,12 +393,79 @@ def replacement_violations(forward: Sequence[ClaimRow]) -> list[str]:
     return found
 
 
-def valid_until_session_estimate(data_as_of: date, horizon: int) -> date:
-    """T moved by ``horizon`` Monday-Friday days; exchange holidays are not modelled."""
-    day = data_as_of
-    for _ in range(horizon):
+def _weekdays_after(day: date, count: int) -> date:
+    """``day`` moved by ``count`` Monday-Friday days; exchange holidays are not modelled."""
+    for _ in range(count):
         day = next_weekday(day)
     return day
+
+
+def valid_until_session_estimate(data_as_of: date, horizon: int) -> date:
+    """T moved by ``horizon`` Monday-Friday days; exchange holidays are not modelled."""
+    return _weekdays_after(data_as_of, horizon)
+
+
+@dataclass(frozen=True)
+class Phase0Grid:
+    """The phase-0 grid of one claim (D-8 point 4): the one definition of its points.
+
+    ``sessions`` is the union of final sessions of every snapshot, ``first``
+    the index of D_v in it; the points are ``sessions[first::horizon]``.
+    """
+
+    horizon: int
+    sessions: tuple[date, ...]
+    first: int
+    on_time: frozenset[date]
+
+    @property
+    def points(self) -> tuple[date, ...]:
+        return self.sessions[self.first :: self.horizon]
+
+    @property
+    def n_hat(self) -> int:
+        """Points with a ``late = 0`` record whose h-th final session after it has appeared."""
+        return sum(
+            1
+            for index in range(self.first, len(self.sessions), self.horizon)
+            if self.sessions[index] in self.on_time and index + self.horizon < len(self.sessions)
+        )
+
+    @property
+    def lost(self) -> int:
+        """Points without a ``late = 0`` record (the F-2 phase-0 grid point loss count)."""
+        return sum(1 for point in self.points if point not in self.on_time)
+
+
+#: D-8 point 4 (T2): the review starts this many calendar days before d_1.
+REVIEW_T2_DAYS: Final = 90
+
+
+@dataclass(frozen=True)
+class ReviewTrigger:
+    """D-8 point 4 for one claim, as :meth:`ForecastStore.review_trigger` derives it."""
+
+    claim_id: str
+    horizon: int
+    c1: int
+    d_v: date | None
+    n_hat: int
+    d_1: date | None
+    t1: bool
+    t2: bool
+
+    @property
+    def triggered(self) -> bool:
+        return self.t1 or self.t2
+
+
+@dataclass(frozen=True)
+class RegisteredMaterial:
+    """A claim's registry row with the stored rule bytes and definition JSON (D-5 point 2)."""
+
+    claim: ClaimRow
+    rules_bytes: bytes
+    definition_json: str
 
 
 def new_ulid(at: datetime, random_bytes: Callable[[int], bytes] = secrets.token_bytes) -> str:
@@ -1127,6 +1203,39 @@ class ForecastStore:
         }
         return sorted(sessions)
 
+    def on_time_sessions(self, claim_id: str) -> frozenset[date]:
+        """The T of every ``late = 0`` record of the claim."""
+        with self._read() as conn:
+            rows = conn.execute(
+                "SELECT data_as_of FROM forecast_record WHERE claim_id = ? AND late = 0",
+                (claim_id,),
+            ).fetchall()
+        return frozenset(date.fromisoformat(str(row[0])) for row in rows)
+
+    def phase0_grid(self, claim_id: str) -> Phase0Grid:
+        """The phase-0 grid of D-8 point 4: D_v and every h-th final session after it.
+
+        Over the union of final sessions of every snapshot (``final_sessions``).
+        The one grid definition behind :meth:`n_hat` and the F-2 "phase-0 grid
+        point loss" count (D-4 point 5). No D_v (no ``late = 0`` record) is an
+        empty grid.
+        """
+        claim = self.claim(claim_id)
+        if claim is None:
+            raise ForecastStoreError("claim_id is not registered")
+        start = self.d_v(claim_id)
+        if start is None:
+            return Phase0Grid(horizon=claim.horizon, sessions=(), first=0, on_time=frozenset())
+        sessions = self.final_sessions()
+        if start not in sessions:
+            raise LedgerInconsistentError("D_v is not a final session of any snapshot")
+        return Phase0Grid(
+            horizon=claim.horizon,
+            sessions=tuple(sessions),
+            first=sessions.index(start),
+            on_time=self.on_time_sessions(claim_id),
+        )
+
     def n_hat(self, claim_id: str) -> int:
         """The review trigger count n-hat of D-8 point 4 (T1); an approximate upper bound of n.
 
@@ -1136,28 +1245,75 @@ class ForecastStore:
         it has appeared. Nothing is deducted (insufficient, void, unavailable
         baselines, PIT violations).
         """
-        claim = self.claim(claim_id)
-        if claim is None:
-            raise ForecastStoreError("claim_id is not registered")
+        return self.phase0_grid(claim_id).n_hat
+
+    def review_trigger(self, claim_id: str, *, today: date) -> ReviewTrigger:
+        """D-8 point 4 for one claim: n-hat, d_1 and whether T1 or T2 holds on ``today``.
+
+        c_1 is the first checkpoint of the claim's *registered* definition
+        (``definition_json``; :func:`app.dirdef.definition.n_min`, 30 for the
+        market). (T1) n-hat >= ceil(c_1 / 2). (T2) ``today`` >= d_1 - 90 calendar
+        days, d_1 = D_v plus c_1 x h Monday-Friday days, holidays not deducted.
+        Without D_v neither holds and d_1 is ``None``. ``today`` is the caller's
+        reading of the date (the report's clock), not a stored value.
+        """
+        if isinstance(today, datetime) or not isinstance(today, date):
+            raise ForecastStoreError("today must be a date")
+        material = self.registered_material(claim_id)
+        try:
+            definition = DirectionDefinition.model_validate_json(material.definition_json)
+        except ValueError as exc:
+            raise LedgerInconsistentError(
+                f"registered definition_json cannot be read ({type(exc).__name__})"
+            ) from None
+        c1 = n_min(definition)
+        grid = self.phase0_grid(claim_id)
         start = self.d_v(claim_id)
-        if start is None:
-            return 0
-        sessions = self.final_sessions()
-        if start not in sessions:
-            raise LedgerInconsistentError("D_v is not a final session of any snapshot")
+        d_1 = None if start is None else _weekdays_after(start, c1 * grid.horizon)
+        return ReviewTrigger(
+            claim_id=claim_id,
+            horizon=grid.horizon,
+            c1=c1,
+            d_v=start,
+            n_hat=grid.n_hat,
+            d_1=d_1,
+            t1=start is not None and grid.n_hat >= -(-c1 // 2),
+            t2=d_1 is not None and today >= d_1 - timedelta(days=REVIEW_T2_DAYS),
+        )
+
+    def registered_material(self, claim_id: str) -> RegisteredMaterial:
+        """The registry row's stored rule bytes and definition JSON (D-5 point 2)."""
+        with self._read() as conn:
+            claim = self._claim(conn, claim_id)
+            row = conn.execute(
+                "SELECT rules_bytes, definition_json FROM forecast_claim_registry"
+                " WHERE claim_id = ?",
+                (claim_id,),
+            ).fetchone()
+        if claim is None or row is None:
+            raise ForecastStoreError("claim_id is not registered")
+        return RegisteredMaterial(
+            claim=claim, rules_bytes=bytes(row[0]), definition_json=str(row[1])
+        )
+
+    def runs(self) -> list[RunRow]:
+        """Every run with its end row, if any, by ``run_id``."""
+        with self._read() as conn:
+            rows = conn.execute(f"{_RUN_SELECT} ORDER BY r.run_id").fetchall()
+        return [_run_row(row) for row in rows]
+
+    def snapshot_digests(self) -> list[str]:
+        """Every stored snapshot's ``content_sha256``, in capture order."""
         with self._read() as conn:
             rows = conn.execute(
-                "SELECT data_as_of FROM forecast_record WHERE claim_id = ? AND late = 0",
-                (claim_id,),
+                "SELECT content_sha256 FROM forecast_input_series ORDER BY captured_at, rowid"
             ).fetchall()
-        on_time = {date.fromisoformat(str(row[0])) for row in rows}
-        h = claim.horizon
-        first = sessions.index(start)
-        return sum(
-            1
-            for index in range(first, len(sessions), h)
-            if sessions[index] in on_time and index + h < len(sessions)
-        )
+        return [str(row[0]) for row in rows]
+
+    def ledger_schema_status(self) -> SchemaStatus:
+        """``schema.schema_status`` on a read-only connection."""
+        with self._read() as conn:
+            return schema_status(conn)
 
     def latest_run(self) -> RunRow | None:
         """The run with the highest ``run_id`` and its end row, if any."""
