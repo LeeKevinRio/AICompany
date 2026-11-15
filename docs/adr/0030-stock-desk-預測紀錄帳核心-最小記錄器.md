@@ -4,6 +4,7 @@
 - 補充紀錄：2026-11-14 append 補充一（SP-1：5 張表加 BEFORE INSERT 拒絕重複鍵 trigger；tech-architect 裁示，加嚴，不改產品行為與字面，CEO 可推翻；來源 `work/reviews/2026-11-14-G1位置與SP1裁示-tech-architect.md`）。
 - 補充紀錄：2026-11-15 append 補充二（SP-B 輸入注入、SP-C 未定案 bar 分流、快照時間欄與 PIT 缺項名；tech-architect 裁示，釐清，不放寬，不改使用者面字面，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第二批交件-dev-lead.md`）。
 - 補充紀錄：2026-11-15 append 補充三（跨 commit 比對基準、執行環境取值時點、K-2 禁詞來源、無定案 bar 與 source_status；tech-architect 裁示，收緊與釐清，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第三批recorder交件-dev-lead.md`）。
+- 補充紀錄：2026-11-15 append 補充三（修訂版）（跨 commit 比對基準、取值時點、K-2 禁詞來源、取代鏈、原子寫入、例外歸類；tech-architect 裁示，收緊與釐清，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第三批recorder交件-dev-lead.md`、`work/reviews/2026-11-15-NM5第三批recorder審查-qa-reviewer.md`）。**補充三（修訂版）取代同日稍早落檔的補充三**：兩者衝突時以修訂版為準；初版依 append-only 原樣保留（tech-architect 回報 `work/reviews/2026-11-15-NM5recorder四題與f1f4裁示-tech-architect.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -411,3 +412,48 @@
   - 可達集合與 `app.api*` 沒有交集，可達的 advice 模組恰好如第 3 點（import graph）；`loader.BANNED_PHRASES is banned_phrases.BANNED_PHRASES`；h3、h5 的 `rules_sha256`、`rules_logic_sha256` 與 `definition_sha256` 不變（測試）。
   - 只有 (a) bar 時，`candidate_t` 等於最大的 S；沒有任何 bar 時，`candidate_t` 為 null（測試）。
   - 同一組 bars 分別配上 4 種 `DataStatus`，第 5 點所列欄位都逐位相同（測試）。
+
+---
+
+## 補充三（修訂版）：跨 commit 比對基準、取值時點、K-2 禁詞來源、取代鏈、原子寫入、例外歸類（2026-11-15）
+
+- 決策者：tech-architect。來源：dev-lead 第三批交件「下一步」第 1～4 點；qa 第三批審查 f1～f5。已實證的路徑：`app/advice/loader.py:44` → `context.py:29` → `limits.py:54` → `app.api.kelly_wording`。
+- 性質：本補充收緊 D-5 第 6 點、D-6 CG-2、K-2、D-4 第 1 點；釐清 D-2 第 1～2 點與補充二第 2 點。補充本文，不改本文；不改使用者面字面，也不改規則檔與定義物件的雜湊。本補充取代 ADR-0027 N113-1「代價」段所述的可達狀態。CEO 可推翻。
+
+1. **比對基準**：D-5 第 6 點的「前一次執行」讀為下列兩者：
+   - (i) run_id 小於本次的最近一次執行；
+   - (ii) 最後一次通過執行，即 outcome ∈ {`ok`, `no_new_session`, `inputs_not_ready`} 的執行。
+   本次的 `code_digest` 或 `runtime_json` 與 (i)、(ii) 任一不同，就執行 D-5 第 6 點。沒有通過執行時，視為不同。`gate_closed`、`error`，以及沒有 end 列的執行，都不算通過執行。
+2. **取值時點**：
+   - `code_digest`、`runtime_json`、`code_commit` 在 recorder 模組 import 時取值一次，同一程序內的各次執行都沿用。
+   - `code_digest` 涵蓋的原始檔，不得在函式內 import，也不得使用 `importlib`、`__import__`。`app/scheduler.py` 在模組層級 import recorder。
+   - 每次執行都重算一次磁碟上的 digest。與取值時不同時，記一行 WARNING，不含標籤，照常執行。
+   - 更換程式或依賴之後，須重啟排程程序才生效。
+3. **K-2 禁詞來源**：
+   - K-2 依可達性判定：`app.forecast.*`、`app.outlook.*` 不得可達 `app.api` 及其子模組。
+   - `BANNED_PHRASES` 的唯一定義移到 `app/advice/banned_phrases.py`，該模組不 import 任何模組。
+   - `app/advice/loader.py` 以 `from app.advice.banned_phrases import BANNED_PHRASES as BANNED_PHRASES` 再匯出；`app/forecast/definitions.py` 改由 `app.advice.banned_phrases` import。
+   - 禁詞的值與順序不變。`app/advice/__init__.py` 不含 import。
+   - 從上述兩個套件可達的 `app.advice` 模組，恰好是 `app.advice` 與 `app.advice.banned_phrases`。
+4. **沒有定案 bar**：補充二第 2 點 (a) 優先適用。處理後若沒有任何定案 bar，也沒有屬 (a) 的 bar，就記 `inputs_not_ready`，`candidate_t` 為 null，不寫紀錄，並計入 F-2。
+5. **`source_status`**：照實記錄，不設拒收規則。它不得作為 recorder 或 `app/outlook/**` 的分支條件，也不影響 T、`label`、`band_def`、`baseline_predictions_json`、`missing_json`。要設拒收規則，須修訂本 ADR。
+6. **取代鏈**：
+   - `replaces_claim_id` 必須指向登記較早、`(scope_kind, scope_key, horizon)` 相同的前瞻 claim；每個 claim 至多被取代一次。
+   - 登記 CLI 拒收不合上述條件者；recorder 的 CG-2 核對同樣的條件。
+   - 本點須在第一次 CG-2 登記之前落地。
+7. **原子寫入**：同一次執行的 `put_input_series` 與全部 `write_record` 放在同一個交易內。任一筆失敗就全部回滾，`records_written` 記 0。INSERT 仍只在 `store.py`（K-4）。
+8. **重算失敗的歸類**：
+   - 讀取或解析既有紀錄、快照失敗，記 `error`，`error_class` 照例外類別。
+   - 目前程式重算失敗，或重算值驗證不過，記 `gate_closed`，`error_class=SemanticsChanged`。
+9. **唯讀連線**：store 的唯讀查詢一律經 `_read()`（`query_only`）。
+
+- **S-12a（逐條可檢查）**：
+  - 第 1 點：序列 A ok → B gate_closed → B，第三次仍記 `gate_closed`；改回 A 後會重算並通過；沒有通過執行時會重算（測試）。
+  - 第 2 點：AST 確認禁用的 import 形式不存在、scheduler 在模組層級 import recorder；有測試確認 digest 不同時只記 WARNING。
+  - 第 3 點：可達集合與 `app.api*` 沒有交集（import graph）；`loader.BANNED_PHRASES is banned_phrases.BANNED_PHRASES`；h3、h5 的三種雜湊都不變（測試）。
+  - 第 4 點：只有 (a) bar 時，`candidate_t` 等於最大的 S；沒有任何 bar 時，`candidate_t` 為 null（測試）。
+  - 第 5 點：同一組 bars 分別配上 4 種 `DataStatus`，第 5 點所列欄位都逐位相同（測試）。
+  - 第 6 點：三個反例（跨 horizon、取代兩次、指向較晚的 claim）都被拒收（測試）。
+  - 第 7 點：注入第二筆失敗時，ledger 列數為 0（測試）。
+  - 第 8 點：兩類失敗各有一個測試，outcome 不同。
+  - 第 9 點：`_connect()` 只出現在寫入路徑（AST）。
