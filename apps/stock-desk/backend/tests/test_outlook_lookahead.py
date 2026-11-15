@@ -247,6 +247,9 @@ def test_la_g2_4_only_b2_may_move_beyond_lag_120() -> None:
 
 @pytest.mark.parametrize("horizon", [3, 5])
 def test_la_g2_5_a_non_final_bar_after_t_leaves_the_record_unchanged(horizon: int) -> None:
+    # Computation level. The recorder level, with the TA SP-C clock premise (the
+    # injected clock before the next day's 15:00) and the stored content_hash, is
+    # tests/test_forecast_recorder.py::test_la_g2_5_*.
     bars = fixture_bars("FX-D")
     t = bars[-1].session_date
     following = t + timedelta(days=3 if t.weekday() == 4 else 1)

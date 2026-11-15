@@ -1,0 +1,1051 @@
+"""Job ``forecast_record`` (``app/forecast/recorder.py``; ADR-0030 D-1 point 3, D-2, D-3, D-5, D-6).
+
+Every ledger is a ``tmp_path`` file and every clock an injected ``FakeClock``.
+The index answer comes from the real ``app.services.index.load_market_benchmark``
+over a fake price service holding synthetic bars (freeze pack 2.10 FX-B closes
+on consecutive weekdays): no network, no service database, no real ``^TWII``
+value. The rule sets are the landed h3 / h5 files and the definition the G7
+stand-in, registered for each test only (K-11: the production registries stay
+empty).
+
+Covered: every outcome once; no end row on interruption; the first write
+before any market read; CG-2's positive case and each counter-example; the
+cross-commit check (a label-changing byte, a byte that changes nothing, a
+runtime change, no change, and the run after a ``gate_closed`` one);
+supplement 2 S-4a ((a) re-fetch once then ``inputs_not_ready``; (b) the
+LA-G2-5 clock premise and the unchanged ``content_hash``; ``fetched_at ==
+as_of`` in the stored snapshot); the ``late`` boundary (23:59:59.999999 and
+00:00:00); K-4, K-10 and the S-4a call-site rule.
+"""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import inspect
+import json
+import operator
+import shutil
+import sqlite3
+from collections.abc import Mapping, Sequence
+from contextlib import closing
+from dataclasses import replace
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+
+import pytest
+
+from app.data.interface import Market, PriceBar, ProviderResult
+from app.dirdef.definition import DirectionDefinition
+from app.dirdef.registry import PublishedRuleset
+from app.dirdef.rules import rules_logic_sha256
+from app.forecast import definitions
+from app.forecast import recorder as recorder_module
+from app.forecast.canonical import APP_ROOT, code_digest
+from app.forecast.recorder import (
+    LOADED,
+    BenchmarkLoader,
+    Provenance,
+    RunResult,
+    check_recording_claims,
+    load_provenance,
+    record_forecasts,
+)
+from app.forecast.store import ForecastStore
+from app.outlook import engine
+from app.outlook.inputs import late_cutoff_at
+from app.services.index import IndexServiceResolver, load_market_benchmark
+from tests.dirdef_helpers import DIRDEF_V1_0_G7
+from tests.forecast_ledger_helpers import FakeClock, file_ledger, publish_definition
+from tests.import_graph import offenders, reachable_app_modules
+from tests.outlook_helpers import (
+    FIXTURES,
+    TAIPEI,
+    FakeIndexService,
+    closes_from_logs,
+    definition,
+    price_bar,
+    rule_bytes,
+    ruleset,
+)
+
+#: Static check (mypy): the production loader has the shape the entry takes.
+_LOADER: BenchmarkLoader[IndexServiceResolver] = load_market_benchmark
+
+T = date(2026, 11, 12)  # a Thursday
+NEXT = date(2026, 11, 13)  # the Friday after it
+H3 = "outlook-market-v1.0-h3"
+H5 = "outlook-market-v1.0-h5"
+
+TIME_PARAMS = frozenset(
+    {"t", "T", "as_of", "data_as_of", "decision_date", "clock", "now", "today", "when"}
+)
+
+
+def _sessions_ending(last: date, count: int) -> list[date]:
+    days: list[date] = []
+    day = last
+    while len(days) < count:
+        if day.weekday() < 5:
+            days.append(day)
+        day -= timedelta(days=1)
+    return list(reversed(days))
+
+
+_FXB = closes_from_logs(FIXTURES["FX-B"])
+#: 316 synthetic closes: FX-B ending on T, then one more session (NEXT).
+CLOSES = [*_FXB, _FXB[-1] * 1.002]
+SESSIONS = _sessions_ending(NEXT, len(CLOSES))
+assert SESSIONS[-2] == T
+
+
+def at(day: date, hour: int, minute: int = 0, second: int = 0, micro: int = 0) -> datetime:
+    return datetime(day.year, day.month, day.day, hour, minute, second, micro, tzinfo=TAIPEI)
+
+
+def series(*, until: date = NEXT, stamps: Mapping[date, datetime] | None = None) -> list[PriceBar]:
+    """The synthetic bars up to ``until``, each stamped 20:00 on its session unless given."""
+    stamps = stamps or {}
+    return [
+        price_bar(day, Decimal(close), stamps.get(day, at(day, 20)))
+        for day, close in zip(SESSIONS, CLOSES, strict=True)
+        if day <= until
+    ]
+
+
+class SequencedService(FakeIndexService):
+    """Serves one bar list per call, then keeps serving the last one."""
+
+    def __init__(self, *answers: Sequence[PriceBar]) -> None:
+        super().__init__(answers[0])
+        self.answers = [list(answer) for answer in answers]
+
+    def get_daily_bars(self, symbol: str, market: Market, start: date, end: date) -> ProviderResult:
+        self.bars = self.answers[min(len(self.calls), len(self.answers) - 1)]
+        return super().get_daily_bars(symbol, market, start, end)
+
+
+def _definition_like(**overrides: Any) -> DirectionDefinition:
+    return DirectionDefinition.model_validate({**DIRDEF_V1_0_G7, **overrides})
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def publish(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    defn: DirectionDefinition | None = None,
+    rulesets: Mapping[str, PublishedRuleset] | None = None,
+) -> None:
+    """Register the definition and the rule sets in ``app.forecast.definitions`` (test only)."""
+    publish_definition(monkeypatch, defn or definition())
+    entries = rulesets
+    if entries is None:
+        entries = {
+            H3: PublishedRuleset(horizon=3, rules_sha256=_sha(rule_bytes(3))),
+            H5: PublishedRuleset(horizon=5, rules_sha256=_sha(rule_bytes(5))),
+        }
+    monkeypatch.setattr(definitions, "PUBLISHED_RULESETS", MappingProxyType(dict(entries)))
+    monkeypatch.setattr(definitions, "_RULESET_CACHE", {})
+
+
+class Desk:
+    """A ``tmp_path`` ledger with an injected clock and the two core claims registered."""
+
+    def __init__(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch, *, register: bool = True
+    ) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        self.path = file_ledger(root)
+        self.clock = FakeClock(at(date(2026, 10, 1), 9))
+        self.store = ForecastStore(self.path, clock=self.clock)
+        self.monkeypatch = monkeypatch
+        publish(monkeypatch)
+        self.service: FakeIndexService | None = None
+        if register:
+            self.h3 = self.register(3)
+            self.h5 = self.register(5)
+
+    def register(self, horizon: int, **overrides: Any) -> str:
+        self.clock.advance(seconds=1)
+        kwargs: dict[str, Any] = {
+            "horizon": horizon,
+            "rules_version": H3 if horizon == 3 else H5,
+            "rules_bytes": rule_bytes(horizon),
+            "rules_logic_sha256": rules_logic_sha256(ruleset(horizon)),
+            "definition": definition(),
+            "frozen_commit": "abc123",
+            "prereg_doc_path": "docs/prereg-v0.32.md",
+            "prereg_doc_blob": b"prereg",
+            "review_refs": "work/reviews/x.md",
+            "replaces_claim_id": None,
+            "replace_reason": None,
+            "provisional_results_seen": False,
+        }
+        kwargs.update(overrides)
+        return self.store.register_claim(**kwargs)
+
+    def run(
+        self,
+        now: datetime,
+        bars: Sequence[PriceBar] | None = None,
+        *,
+        service: FakeIndexService | None = None,
+    ) -> RunResult:
+        self.clock.now = now
+        self.service = service or FakeIndexService(series() if bars is None else bars)
+        resolver: IndexServiceResolver = {"TW": self.service}
+        return record_forecasts(self.store, load_benchmark=load_market_benchmark, resolver=resolver)
+
+    def rows(self, table: str) -> list[dict[str, Any]]:
+        with closing(sqlite3.connect(self.path)) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+
+    def count(self, table: str) -> int:
+        return len(self.rows(table))
+
+
+@pytest.fixture
+def desk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Desk:
+    return Desk(tmp_path, monkeypatch)
+
+
+EVENING = at(T, 22, 10)
+
+
+def _end(desk: Desk, run_id: int) -> dict[str, Any]:
+    (row,) = [r for r in desk.rows("forecast_run_end") if r["run_id"] == run_id]
+    return row
+
+
+# --- ok ----------------------------------------------------------------------------------
+
+
+def test_ok_writes_one_record_per_recording_claim_from_one_snapshot(desk: Desk) -> None:
+    result = desk.run(EVENING)
+    assert result.outcome == "ok"
+    assert (result.candidate_t, result.records_written, result.error_class) == (T, 2, None)
+    end = _end(desk, result.run_id)
+    assert (end["outcome"], end["candidate_t"], end["records_written"]) == ("ok", "2026-11-12", 2)
+    assert end["error_class"] is None
+    records = desk.rows("forecast_record")
+    assert [r["claim_id"] for r in records] == [desk.h3, desk.h5]
+    assert {r["data_as_of"] for r in records} == {"2026-11-12"}
+    assert {r["late"] for r in records} == {0}
+    (snapshot,) = desk.rows("forecast_input_series")
+    # D-4 point 1: the model and the four baselines of both records read one snapshot.
+    assert {r["input_series_sha256"] for r in records} == {snapshot["content_sha256"]}
+    for record in records:
+        assert set(json.loads(record["baseline_predictions_json"])) == {"B1", "B2", "B6", "B8"}
+    bars = json.loads(snapshot["bars_json"])
+    assert len(bars) == 315 and bars[-1]["session_date"] == "2026-11-12"
+    # Supplement 2 point 3 / S-4a: one retrieval stamp per bar.
+    assert all(bar["fetched_at"] == bar["as_of"] for bar in bars)
+    assert snapshot["raw_timestamp_available"] == 0
+    assert json.loads(snapshot["dropped_rows_json"]) == []
+
+
+def test_the_run_row_carries_the_loaded_provenance(desk: Desk) -> None:
+    result = desk.run(EVENING)
+    (run,) = desk.rows("forecast_run")
+    assert run["run_id"] == result.run_id and run["trigger"] == "scheduled"
+    assert run["code_digest"] == LOADED.code_digest == code_digest()
+    assert run["runtime_json"] == LOADED.runtime_json
+    runtime = json.loads(run["runtime_json"])
+    assert set(runtime) == {
+        "python_version",
+        "python_implementation",
+        "python_build",
+        "platform",
+        "machine",
+        "lockfile_sha256",
+    }
+    assert runtime["lockfile_sha256"] == _sha((APP_ROOT.parent / "uv.lock").read_bytes())
+
+
+def test_the_loader_is_called_with_the_market_and_a_500_day_window(desk: Desk) -> None:
+    desk.run(EVENING)
+    assert desk.service is not None
+    ((symbol, market, start, end),) = desk.service.calls
+    assert (symbol, market, end) == ("^TWII", "TW", T)
+    assert (T - start).days >= 500
+
+
+def test_the_first_write_precedes_every_market_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    desk = Desk(tmp_path, monkeypatch)
+    seen: list[tuple[int, int, int, int]] = []
+
+    def loader(resolver: IndexServiceResolver, *, market: Market, start: date, end: date) -> Any:
+        seen.append(
+            (
+                desk.count("forecast_run"),
+                desk.count("forecast_run_end"),
+                desk.count("forecast_input_series"),
+                desk.count("forecast_record"),
+            )
+        )
+        return load_market_benchmark(resolver, market=market, start=start, end=end)
+
+    desk.clock.now = EVENING
+    resolver: IndexServiceResolver = {"TW": FakeIndexService(series())}
+    result = record_forecasts(desk.store, load_benchmark=loader, resolver=resolver)
+    assert result.outcome == "ok"
+    assert seen == [(1, 0, 0, 0)]
+
+
+# --- no_new_session ----------------------------------------------------------------------------
+
+
+def test_a_second_run_for_the_same_t_is_no_new_session(desk: Desk) -> None:
+    desk.run(EVENING)
+    before = desk.rows("forecast_record")
+    result = desk.run(EVENING + timedelta(hours=1))
+    assert (result.outcome, result.candidate_t, result.records_written) == (
+        "no_new_session",
+        T,
+        0,
+    )
+    end = _end(desk, result.run_id)
+    assert (end["outcome"], end["candidate_t"], end["error_class"]) == (
+        "no_new_session",
+        "2026-11-12",
+        None,
+    )
+    assert desk.rows("forecast_record") == before
+    assert desk.count("forecast_input_series") == 1
+
+
+def test_only_the_claim_without_a_record_for_t_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    desk = Desk(tmp_path, monkeypatch)
+    real = desk.store.write_record
+    calls: list[str] = []
+
+    def failing_h5(**kwargs: Any) -> str:
+        calls.append(kwargs["claim_id"])
+        if kwargs["claim_id"] == desk.h5 and len(calls) == 2:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real(**kwargs)
+
+    monkeypatch.setattr(desk.store, "write_record", failing_h5)
+    first = desk.run(EVENING)
+    assert (first.outcome, first.records_written, first.error_class) == (
+        "error",
+        1,
+        "OperationalError",
+    )
+    assert _end(desk, first.run_id)["records_written"] == 1
+    second = desk.run(EVENING + timedelta(minutes=30))
+    assert (second.outcome, second.records_written) == ("ok", 1)
+    assert [r["claim_id"] for r in desk.rows("forecast_record")] == [desk.h3, desk.h5]
+
+
+# --- inputs_not_ready: supplement 2 point 2 (a) -----------------------------------------------
+
+
+def test_a_non_final_t_bar_after_its_cutoff_is_refetched_once_then_not_ready(desk: Desk) -> None:
+    # 22:10 on T, and T's bar is still the copy fetched at 14:00 (not final).
+    bars = series(until=T, stamps={T: at(T, 14)})
+    result = desk.run(EVENING, bars)
+    assert (result.outcome, result.candidate_t, result.records_written) == (
+        "inputs_not_ready",
+        T,
+        0,
+    )
+    assert desk.service is not None and len(desk.service.calls) == 2
+    assert desk.count("forecast_record") == 0
+    assert desk.count("forecast_input_series") == 0  # not the previous day either
+    assert _end(desk, result.run_id)["candidate_t"] == "2026-11-12"
+
+
+def test_a_refetch_that_brings_the_final_bar_records_t(desk: Desk) -> None:
+    service = SequencedService(series(until=T, stamps={T: at(T, 14)}), series(until=T))
+    result = desk.run(EVENING, service=service)
+    assert (result.outcome, result.candidate_t, result.records_written) == ("ok", T, 2)
+    assert len(service.calls) == 2
+
+
+def test_after_the_next_day_cutoff_a_non_final_next_bar_is_not_ready(desk: Desk) -> None:
+    # TA SP-C counter-example: the clock is past NEXT's 15:00 and NEXT's bar stays
+    # non-final after the re-fetch -> inputs_not_ready, T is not moved back.
+    bars = series(until=NEXT, stamps={NEXT: at(NEXT, 10)})
+    result = desk.run(at(NEXT, 22, 10), bars)
+    assert (result.outcome, result.candidate_t) == ("inputs_not_ready", NEXT)
+    assert desk.service is not None and len(desk.service.calls) == 2
+    assert desk.count("forecast_record") == 0
+
+
+def test_an_older_non_final_bar_is_not_ready_with_its_session(desk: Desk) -> None:
+    # A gap inside the series (qa low, 2026-11-15): never a snapshot with a hole.
+    hole = SESSIONS[-10]
+    bars = series(until=T, stamps={hole: at(hole, 13)})
+    result = desk.run(EVENING, bars)
+    assert (result.outcome, result.candidate_t) == ("inputs_not_ready", hole)
+    assert desk.count("forecast_record") == 0
+
+
+def test_no_bar_at_all_is_not_ready_without_a_candidate(desk: Desk) -> None:
+    result = desk.run(EVENING, [])
+    assert (result.outcome, result.candidate_t, result.records_written) == (
+        "inputs_not_ready",
+        None,
+        0,
+    )
+    assert desk.service is not None and len(desk.service.calls) == 1
+    assert _end(desk, result.run_id)["candidate_t"] is None
+
+
+# --- supplement 2 point 2 (b): LA-G2-5 with its clock premise ----------------------------------
+
+
+def test_la_g2_5_a_next_day_bar_before_its_cutoff_is_dropped_and_leaves_the_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    morning = at(NEXT, 10, 5)  # premise: the clock is before NEXT's 15:00
+    assert morning < at(NEXT, 15)
+    early = {NEXT: at(NEXT, 10)}
+    with_bar = Desk(tmp_path / "with", monkeypatch)
+    result = with_bar.run(morning, series(until=NEXT, stamps=early))
+    without = Desk(tmp_path / "without", monkeypatch)
+    plain = without.run(morning, series(until=T))
+    assert (result.outcome, result.candidate_t) == ("ok", T)
+    assert (plain.outcome, plain.candidate_t) == ("ok", T)
+    assert with_bar.service is not None and len(with_bar.service.calls) == 1
+    (snapshot,) = with_bar.rows("forecast_input_series")
+    assert json.loads(snapshot["dropped_rows_json"]) == [
+        {"reason": "not_final", "session_date": "2026-11-13"}
+    ]
+    assert json.loads(snapshot["bars_json"])[-1]["session_date"] == "2026-11-12"
+    hashes = [r["content_hash"] for r in with_bar.rows("forecast_record")]
+    assert hashes == [r["content_hash"] for r in without.rows("forecast_record")]
+    assert {r["late"] for r in with_bar.rows("forecast_record")} == {1}
+
+
+# --- late boundary (D-3 point 3) ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("now", "late"),
+    [
+        pytest.param(at(T, 23, 59, 59, 999999), 0, id="23:59:59.999999"),
+        pytest.param(at(NEXT, 0), 1, id="00:00:00"),
+    ],
+)
+def test_late_at_the_cutoff_boundary(desk: Desk, now: datetime, late: int) -> None:
+    result = desk.run(now, series(until=T))
+    assert result.outcome == "ok"
+    records = desk.rows("forecast_record")
+    assert {r["late"] for r in records} == {late}
+    assert {r["late_cutoff_at"] for r in records} == {
+        late_cutoff_at(T).isoformat(timespec="microseconds")
+    }
+    assert {r["label"] for r in records} != {"insufficient"}
+
+
+# --- gate_closed: CG-2 (D-6) --------------------------------------------------------------------
+
+
+def _closed(desk: Desk) -> None:
+    result = desk.run(EVENING)
+    assert (result.outcome, result.error_class) == ("gate_closed", "WriteGateClosedError")
+    assert (result.candidate_t, result.records_written) == (None, 0)
+    end = _end(desk, result.run_id)
+    assert (end["outcome"], end["error_class"]) == ("gate_closed", "WriteGateClosedError")
+    assert desk.service is not None and desk.service.calls == []  # no market read
+    assert desk.count("forecast_record") == 0
+    assert desk.count("forecast_input_series") == 0
+
+
+def test_cg2_no_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _closed(Desk(tmp_path, monkeypatch, register=False))
+
+
+@pytest.mark.parametrize("horizon", [3, 5])
+def test_cg2_one_claim_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, horizon: int) -> None:
+    desk = Desk(tmp_path, monkeypatch, register=False)
+    desk.register(horizon)
+    _closed(desk)
+
+
+def _publish_with_v11(monkeypatch: pytest.MonkeyPatch, data: bytes | None = None) -> None:
+    publish(
+        monkeypatch,
+        rulesets={
+            H3: PublishedRuleset(horizon=3, rules_sha256=_sha(rule_bytes(3))),
+            H5: PublishedRuleset(horizon=5, rules_sha256=_sha(rule_bytes(5))),
+            "outlook-market-v1.1-h3": PublishedRuleset(
+                horizon=3, rules_sha256=_sha(data or rule_bytes(3))
+            ),
+        },
+    )
+
+
+def test_cg2_a_later_claim_without_replacement_leaves_one_unreplaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    desk = Desk(tmp_path, monkeypatch)
+    _publish_with_v11(monkeypatch)
+    desk.register(3, rules_version="outlook-market-v1.1-h3")
+    _closed(desk)
+
+
+def test_cg2_a_replaced_claim_is_not_recorded_and_the_gate_opens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    desk = Desk(tmp_path, monkeypatch)
+    _publish_with_v11(monkeypatch)
+    newer = desk.register(
+        3,
+        rules_version="outlook-market-v1.1-h3",
+        replaces_claim_id=desk.h3,
+        replace_reason="test replacement",
+    )
+    assert {c.claim.claim_id for c in check_recording_claims(desk.store)} == {newer, desk.h5}
+    result = desk.run(EVENING)
+    assert result.outcome == "ok"
+    assert [r["claim_id"] for r in desk.rows("forecast_record")] == [newer, desk.h5]
+
+
+def test_cg2_the_recording_claims_carry_their_checked_objects(desk: Desk) -> None:
+    checked = check_recording_claims(desk.store)
+    assert [c.claim.horizon for c in checked] == [3, 5]
+    assert [c.ruleset for c in checked] == [ruleset(3), ruleset(5)]
+    assert all(c.definition == definition() for c in checked)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "definition-unpublished",
+        "ruleset-unpublished",
+        "definition-text-changed",
+        "definition-logic-changed",
+        "rules-bytes-differ",
+        "rules-logic-differs",
+        "ruleset-published-for-the-other-horizon",
+        "rule-file-unreadable",
+    ],
+)
+def test_cg2_hash_counter_examples(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    desk = Desk(
+        tmp_path, monkeypatch, register=case not in {"rules-bytes-differ", "rules-logic-differs"}
+    )
+    if case == "definition-unpublished":
+        monkeypatch.setattr(definitions, "PUBLISHED_DIRECTION_DEFINITIONS", MappingProxyType({}))
+        monkeypatch.setattr(definitions, "_DEFINITION_CACHE", {})
+    elif case == "ruleset-unpublished":
+        publish(monkeypatch, rulesets={H5: PublishedRuleset(5, _sha(rule_bytes(5)))})
+    elif case == "definition-text-changed":
+        publish(monkeypatch, defn=_definition_like(description="another fixture text"))
+    elif case == "definition-logic-changed":
+        publish(monkeypatch, defn=_definition_like(K3=0.44))
+    elif case == "rules-bytes-differ":
+        desk.register(3, rules_bytes=rule_bytes(3) + b"# appended\n")
+        desk.register(5)
+    elif case == "rules-logic-differs":
+        desk.register(3, rules_logic_sha256="0" * 64)
+        desk.register(5)
+    elif case == "ruleset-published-for-the-other-horizon":
+        publish(
+            monkeypatch,
+            rulesets={
+                H3: PublishedRuleset(horizon=5, rules_sha256=_sha(rule_bytes(3))),
+                H5: PublishedRuleset(horizon=5, rules_sha256=_sha(rule_bytes(5))),
+            },
+        )
+    else:
+        monkeypatch.setattr(definitions, "RULES_DIR", tmp_path / "missing")
+    _closed(desk)
+
+
+def test_cg2_a_recording_claim_outside_the_core_scope_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The store's CHECKs keep scope_key = TAIEX; the run-time check does not rely on them.
+    desk = Desk(tmp_path, monkeypatch)
+    real = desk.store.recording_claims()
+    other = {key: replace(claim, scope_key="OTHER") for key, claim in real.items()}
+    monkeypatch.setattr(desk.store, "recording_claims", lambda: other)
+    _closed(desk)
+
+
+def test_cg2_a_rules_version_whose_entry_names_another_horizon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Bytes and hashes match, only the registry entry's horizon is wrong.
+    desk = Desk(tmp_path, monkeypatch)
+    publish(
+        monkeypatch,
+        rulesets={
+            H3: PublishedRuleset(horizon=5, rules_sha256=_sha(rule_bytes(3))),
+            H5: PublishedRuleset(horizon=5, rules_sha256=_sha(rule_bytes(5))),
+        },
+    )
+    monkeypatch.setattr(definitions, "_read_rules_bytes", lambda horizon: rule_bytes(3))
+    _closed(desk)
+
+
+# --- error and interruption ---------------------------------------------------------------------
+
+
+class _Boom(RuntimeError):
+    pass
+
+
+def _raising(exc: BaseException) -> Any:
+    def loader(resolver: Any, *, market: Market, start: date, end: date) -> Any:
+        raise exc
+
+    return loader
+
+
+def test_an_exception_ends_the_run_as_error_with_its_class(desk: Desk) -> None:
+    desk.clock.now = EVENING
+    result = record_forecasts(desk.store, load_benchmark=_raising(_Boom("x")), resolver={})
+    assert (result.outcome, result.error_class, result.records_written) == ("error", "_Boom", 0)
+    end = _end(desk, result.run_id)
+    assert (end["outcome"], end["error_class"]) == ("error", "_Boom")
+    assert desk.count("forecast_record") == 0
+
+
+def test_the_error_class_goes_through_exception_class_name(desk: Desk) -> None:
+    weird = type("bad-name", (RuntimeError,), {})
+    desk.clock.now = EVENING
+    result = record_forecasts(desk.store, load_benchmark=_raising(weird()), resolver={})
+    assert result.error_class == "invalid_exception_class"
+    assert _end(desk, result.run_id)["error_class"] == "invalid_exception_class"
+
+
+def test_a_series_of_another_symbol_is_an_error(desk: Desk) -> None:
+    result = desk.run(EVENING, [price_bar(T, Decimal("1"), at(T, 20), symbol="^GSPC")])
+    assert (result.outcome, result.error_class) == ("error", "SnapshotShapeError")
+
+
+@pytest.mark.parametrize("exc", [KeyboardInterrupt(), SystemExit(1)], ids=["sigint", "exit"])
+def test_an_interrupted_run_has_no_end_row(desk: Desk, exc: BaseException) -> None:
+    desk.clock.now = EVENING
+    with pytest.raises(type(exc)):
+        record_forecasts(desk.store, load_benchmark=_raising(exc), resolver={})
+    assert desk.count("forecast_run") == 1
+    assert desk.count("forecast_run_end") == 0
+    latest = desk.store.latest_run()
+    assert latest is not None and latest.outcome is None
+
+
+# --- gate_closed: cross-commit (D-5 point 6) ----------------------------------------------------
+
+
+def _tree_copy(tmp_path: Path, edit: tuple[str, str, str] | None = None) -> Path:
+    """A copy of the ``code_digest`` sources; ``edit`` = (relative file, old, new) applied once."""
+    root = tmp_path / "app"
+    for package in ("forecast", "outlook", "dirdef"):
+        shutil.copytree(
+            APP_ROOT / package, root / package, ignore=shutil.ignore_patterns("__pycache__")
+        )
+    (root / "data").mkdir(parents=True)
+    shutil.copy2(APP_ROOT / "data" / "session_calendar.py", root / "data" / "session_calendar.py")
+    if edit is not None:
+        name, old, new = edit
+        path = root / name
+        text = path.read_text(encoding="utf-8")
+        assert text.count(old) == 1
+        path.write_text(text.replace(old, new), encoding="utf-8")
+    return root
+
+
+def _as_loaded(monkeypatch: pytest.MonkeyPatch, provenance: Provenance) -> None:
+    monkeypatch.setattr(recorder_module, "LOADED", provenance)
+
+
+def _count_recomputes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    seen: list[str] = []
+    real = recorder_module._reproduces
+
+    def spy(store: ForecastStore, recording: Any, row: Mapping[str, object]) -> bool:
+        seen.append(str(row["claim_id"]))
+        return real(store, recording, row)
+
+    monkeypatch.setattr(recorder_module, "_reproduces", spy)
+    return seen
+
+
+def test_an_unedited_copy_has_the_loaded_digest(tmp_path: Path) -> None:
+    assert load_provenance(_tree_copy(tmp_path)).code_digest == LOADED.code_digest
+
+
+def test_the_loaded_commit_is_a_sha_or_unknown(tmp_path: Path) -> None:
+    commit = LOADED.code_commit
+    assert commit == "unknown" or (len(commit) == 40 and not commit.strip("0123456789abcdef"))
+    assert recorder_module.code_commit(tmp_path) == "unknown"  # not a checkout
+    assert recorder_module.code_commit(tmp_path / "missing") == "unknown"  # no directory
+
+
+def test_runtime_info_hashes_the_given_lock_file(tmp_path: Path) -> None:
+    lock = tmp_path / "uv.lock"
+    lock.write_bytes(b"version = 1\n")
+    info = recorder_module.runtime_info(lock)
+    assert info["lockfile_sha256"] == _sha(b"version = 1\n")
+    assert json.loads(Provenance("c", "d" * 64, info).runtime_json) == info
+
+
+def test_a_label_changing_byte_closes_the_gate(
+    desk: Desk, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = desk.run(EVENING, series(until=T))
+    assert first.outcome == "ok"
+    # One byte of engine.py changes: "gt" now compares as "<" -- in the file and
+    # in the running program alike.
+    tree = _tree_copy(tmp_path, ("outlook/engine.py", '"gt": operator.gt,', '"gt": operator.lt,'))
+    _as_loaded(monkeypatch, load_provenance(tree))
+    monkeypatch.setitem(engine._OPS, "gt", operator.lt)
+    second = desk.run(at(NEXT, 22, 10))
+    assert (second.outcome, second.error_class) == ("gate_closed", "SemanticsChanged")
+    assert (second.candidate_t, second.records_written) == (None, 0)
+    assert desk.service is not None and desk.service.calls == []
+    assert [r["data_as_of"] for r in desk.rows("forecast_record")] == ["2026-11-12"] * 2
+    # The next run under the same changed program does not skip the check.
+    third = desk.run(at(NEXT, 23, 10))
+    assert (third.outcome, third.error_class) == ("gate_closed", "SemanticsChanged")
+    assert desk.count("forecast_record") == 2
+
+
+def test_a_byte_that_changes_no_result_keeps_recording(
+    desk: Desk, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert desk.run(EVENING, series(until=T)).outcome == "ok"
+    tree = _tree_copy(
+        tmp_path, ("outlook/engine.py", "# --- Rules ---", "# --- Rule evaluation ---")
+    )
+    changed = load_provenance(tree)
+    assert changed.code_digest != LOADED.code_digest
+    _as_loaded(monkeypatch, changed)
+    recomputed = _count_recomputes(monkeypatch)
+    second = desk.run(at(NEXT, 22, 10))
+    assert (second.outcome, second.candidate_t, second.records_written) == ("ok", NEXT, 2)
+    assert sorted(recomputed) == sorted([desk.h3, desk.h5])
+    assert desk.rows("forecast_run")[-1]["code_digest"] == changed.code_digest
+
+
+def test_a_runtime_change_alone_triggers_the_recomputation(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert desk.run(EVENING, series(until=T)).outcome == "ok"
+    runtime = {**LOADED.runtime, "python_version": "3.99.0"}
+    _as_loaded(
+        monkeypatch,
+        Provenance(code_commit=LOADED.code_commit, code_digest=LOADED.code_digest, runtime=runtime),
+    )
+    recomputed = _count_recomputes(monkeypatch)
+    assert desk.run(at(NEXT, 22, 10)).outcome == "ok"
+    assert len(recomputed) == 2
+
+
+def test_the_same_program_skips_the_recomputation(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert desk.run(EVENING, series(until=T)).outcome == "ok"
+    recomputed = _count_recomputes(monkeypatch)
+    assert desk.run(at(NEXT, 22, 10)).outcome == "ok"
+    assert recomputed == []
+
+
+def test_a_recomputation_the_program_refuses_counts_as_changed(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert desk.run(EVENING, series(until=T)).outcome == "ok"
+    _as_loaded(
+        monkeypatch,
+        Provenance(code_commit="x", code_digest="9" * 64, runtime=LOADED.runtime),
+    )
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise engine.OutlookInvariantError("refused")
+
+    monkeypatch.setattr(recorder_module, "compute_outlook", refuse)
+    result = desk.run(at(NEXT, 22, 10))
+    assert (result.outcome, result.error_class) == ("gate_closed", "SemanticsChanged")
+
+
+def test_a_ledger_read_failure_during_the_recomputation_is_an_error(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert desk.run(EVENING, series(until=T)).outcome == "ok"
+    _as_loaded(
+        monkeypatch,
+        Provenance(code_commit="x", code_digest="9" * 64, runtime=LOADED.runtime),
+    )
+
+    def broken(content_sha256: str) -> Any:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(desk.store, "snapshot", broken)
+    result = desk.run(at(NEXT, 22, 10))
+    assert (result.outcome, result.error_class) == ("error", "OperationalError")
+
+
+def test_the_check_compares_with_the_last_run_that_passed(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Old program A writes; B closes the gate; back on A the previous run (B)
+    # differs, so the records are recomputed -- and A reproduces them.
+    assert desk.run(EVENING, series(until=T)).outcome == "ok"
+    loaded = LOADED
+    _as_loaded(
+        monkeypatch, Provenance(code_commit="b", code_digest="9" * 64, runtime=loaded.runtime)
+    )
+    monkeypatch.setitem(engine._OPS, "gt", operator.lt)
+    assert desk.run(at(NEXT, 22, 10)).outcome == "gate_closed"
+    monkeypatch.setitem(engine._OPS, "gt", operator.gt)
+    _as_loaded(monkeypatch, loaded)
+    recomputed = _count_recomputes(monkeypatch)
+    result = desk.run(at(NEXT, 23, 10))
+    assert (result.outcome, result.records_written) == ("ok", 2)
+    assert len(recomputed) == 2
+
+
+# --- K-10, K-4, S-4a call sites -----------------------------------------------------------------
+
+
+def _public_functions() -> dict[str, Any]:
+    return {
+        name: value
+        for name, value in vars(recorder_module).items()
+        if inspect.isfunction(value)
+        and value.__module__ == recorder_module.__name__
+        and not name.startswith("_")
+    }
+
+
+def test_the_entry_takes_the_store_the_loader_and_its_resolver_only() -> None:
+    params = inspect.signature(record_forecasts).parameters
+    assert list(params) == ["store", "load_benchmark", "resolver"]
+    assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in list(params.values())[1:])
+
+
+def test_no_public_recorder_function_takes_a_time_parameter() -> None:
+    functions = _public_functions()
+    assert {"record_forecasts", "check_recording_claims", "check_semantics"} <= set(functions)
+    offenders = {
+        name: sorted(set(inspect.signature(f).parameters) & TIME_PARAMS)
+        for name, f in functions.items()
+        if set(inspect.signature(f).parameters) & TIME_PARAMS
+    }
+    assert offenders == {}
+
+
+def _app_sources() -> dict[str, str]:
+    return {
+        path.relative_to(APP_ROOT).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(APP_ROOT.rglob("*.py"))
+    }
+
+
+def _referrers(name: str, sources: Mapping[str, str]) -> set[str]:
+    """Files that name ``name`` in code (call, reference, attribute or import)."""
+    found: set[str] = set()
+    for path, source in sources.items():
+        for node in ast.walk(ast.parse(source)):
+            if (
+                (isinstance(node, ast.Name) and node.id == name)
+                or (isinstance(node, ast.Attribute) and node.attr == name)
+                or (isinstance(node, ast.ImportFrom) and any(a.name == name for a in node.names))
+            ):
+                found.add(path)
+    return found
+
+
+#: Supplement 2 S-4a. This batch wires nothing, so no app/ module refers to the
+#: entry. The wiring PR changes WIRED_REFERRERS to {"scheduler.py"}, keeps
+#: ``_wiring_violations`` at [] for the scheduler source and adds the ``is``
+#: check on the registered job (``_job_wiring_violations``).
+WIRED_REFERRERS: frozenset[str] = frozenset()
+
+
+def test_s4a_only_the_scheduler_may_refer_to_the_entry() -> None:
+    sources = {p: s for p, s in _app_sources().items() if p != "forecast/recorder.py"}
+    assert _referrers("record_forecasts", sources) == WIRED_REFERRERS
+    assert "record_forecasts" not in (APP_ROOT / "scheduler.py").read_text(encoding="utf-8")
+
+
+def test_the_referrer_scan_has_teeth() -> None:
+    sources = {
+        "a.py": "from app.forecast.recorder import record_forecasts\n",
+        "b.py": "recorder.record_forecasts(store, load_benchmark=f, resolver=r)\n",
+        "c.py": "engine.add_job(record_forecasts, id='forecast_record')\n",
+        "d.py": "record_forecasts_x = 1\n",
+    }
+    assert _referrers("record_forecasts", sources) == {"a.py", "b.py", "c.py"}
+
+
+def _wiring_violations(source: str) -> list[str]:
+    """The wiring rule for ``app/scheduler.py``: ``load_benchmark`` is the index loader itself.
+
+    ``load_market_benchmark`` must be imported from ``app.services.index`` and
+    every ``load_benchmark=`` keyword must pass that bare name.
+    """
+    tree = ast.parse(source)
+    found: list[str] = []
+    imported = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "app.services.index"
+        and any(a.name == "load_market_benchmark" and a.asname is None for a in node.names)
+        for node in ast.walk(tree)
+    )
+    if not imported:
+        found.append("load_market_benchmark is not imported from app.services.index")
+    keywords = [kw for node in ast.walk(tree) if isinstance(node, ast.Call) for kw in node.keywords]
+    loaders = [kw.value for kw in keywords if kw.arg == "load_benchmark"]
+    dict_values = [
+        value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        for key, value in zip(node.keys, node.values, strict=True)
+        if isinstance(key, ast.Constant) and key.value == "load_benchmark"
+    ]
+    passed = [*loaders, *dict_values]
+    if not passed:
+        found.append("no load_benchmark is passed")
+    found += [
+        f"load_benchmark={ast.unparse(value)}"
+        for value in passed
+        if not (isinstance(value, ast.Name) and value.id == "load_market_benchmark")
+    ]
+    return found
+
+
+def _job_wiring_violations(job_kwargs: Mapping[str, object]) -> list[str]:
+    """The ``is`` check on a registered job's kwargs (S-4a; used by the wiring PR)."""
+    if job_kwargs.get("load_benchmark") is not load_market_benchmark:
+        return ["the job's load_benchmark is not app.services.index.load_market_benchmark"]
+    return []
+
+
+@pytest.mark.parametrize(
+    ("source", "ok"),
+    [
+        pytest.param(
+            "from app.services.index import load_market_benchmark\n"
+            "engine.add_job(record_forecasts, kwargs={'store': s,"
+            " 'load_benchmark': load_market_benchmark, 'resolver': r})\n",
+            True,
+            id="wired",
+        ),
+        pytest.param(
+            "from app.services.index import load_market_benchmark\n"
+            "record_forecasts(s, load_benchmark=load_market_benchmark, resolver=r)\n",
+            True,
+            id="called",
+        ),
+        pytest.param(
+            "from app.services.index import load_market_benchmark\n"
+            "record_forecasts(s, load_benchmark=partial(load_market_benchmark), resolver=r)\n",
+            False,
+            id="wrapped",
+        ),
+        pytest.param(
+            "record_forecasts(s, load_benchmark=load_market_benchmark, resolver=r)\n",
+            False,
+            id="not-imported",
+        ),
+        pytest.param(
+            "from app.services.index import load_market_benchmark as lmb\n"
+            "record_forecasts(s, load_benchmark=lmb, resolver=r)\n",
+            False,
+            id="aliased",
+        ),
+        pytest.param(
+            "from app.services.index import load_market_benchmark\n"
+            "record_forecasts(s, load_benchmark=other_loader, resolver=r)\n",
+            False,
+            id="other-loader",
+        ),
+    ],
+)
+def test_the_wiring_scan_has_teeth(source: str, ok: bool) -> None:
+    assert (_wiring_violations(source) == []) is ok
+
+
+def test_the_job_is_check_has_teeth() -> None:
+    assert _job_wiring_violations({"load_benchmark": load_market_benchmark}) == []
+    assert _job_wiring_violations({"load_benchmark": _raising(RuntimeError())}) != []
+    assert _job_wiring_violations({}) != []
+
+
+WRITE_METHODS = ("begin_run", "end_run", "put_input_series", "write_record")
+
+
+def _callers(name: str, sources: Mapping[str, str]) -> set[str]:
+    return {
+        path
+        for path, source in sources.items()
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == name
+    }
+
+
+@pytest.mark.parametrize("method", WRITE_METHODS)
+def test_k4_the_ledger_writes_are_called_from_the_recorder_only(method: str) -> None:
+    assert _callers(method, _app_sources()) == {"forecast/recorder.py"}
+
+
+def test_k4_no_app_module_registers_a_claim_yet() -> None:
+    # The registration CLI (claims.py) is a later batch.
+    assert _callers("register_claim", _app_sources()) == set()
+
+
+def test_the_caller_scan_has_teeth() -> None:
+    assert _callers("write_record", {"x.py": "store.write_record(run_id=1)\n"}) == {"x.py"}
+    assert _callers("write_record", {"y.py": "write_record = 1\n"}) == set()
+
+
+# --- K-2 reachability (supplement 2 point 1: unchanged, by reachability) ----------------------
+
+K2_UNREACHABLE = (
+    "app.services",
+    "app.portfolio",
+    "app.positions",
+    "app.demo",
+    "app.backtest",
+    "app.research",
+    "app.sectors",
+    "app.data.market_panel",
+    "app.ops_alert",
+    "app.main",
+    "app.scheduler",
+)
+
+
+@pytest.mark.parametrize("package", K2_UNREACHABLE)
+def test_k2_the_recorder_reaches_none_of_the_forbidden_packages(package: str) -> None:
+    assert offenders(reachable_app_modules(("app.forecast.recorder",)), package) == []
+
+
+def test_k2_the_advice_and_api_modules_come_only_through_the_banned_phrase_import() -> None:
+    # K-2 lets definitions.py import BANNED_PHRASES from app.advice.loader; what that
+    # module reaches (app.advice.context / limits, app.api.kelly_wording) is all the
+    # recorder reaches of app.advice and app.api.
+    reached = reachable_app_modules(("app.forecast.recorder",))
+    via_phrases = reachable_app_modules(("app.advice.loader",)) | {
+        "app.advice.loader.BANNED_PHRASES"
+    }
+    for package in ("app.advice", "app.api"):
+        assert set(offenders(reached, package)) <= set(via_phrases)
+    assert offenders(reached, "app.api") != []  # the transitive path exists (reported)
+
+
+def test_the_recorder_reachability_scan_has_teeth() -> None:
+    reached = reachable_app_modules(("app.forecast.recorder",))
+    assert "app.outlook.engine" in reached and "app.forecast.store" in reached

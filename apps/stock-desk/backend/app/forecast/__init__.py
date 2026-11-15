@@ -22,5 +22,8 @@ Contents (ADR-0027 D-1):
 * ``canonical.py`` (NM-5) -- bar normalisation, ``content_sha256``,
   ``record_content_hash`` and ``code_digest`` (ADR-0030 D-2, D-5);
 * ``store.py`` (NM-5) -- append-only writes with write validation and the
-  read-only queries (ADR-0030 D-2 points 6 and 7, D-8 point 4).
+  read-only queries (ADR-0030 D-2 points 6 and 7, D-8 point 4);
+* ``recorder.py`` (NM-5) -- job ``forecast_record``'s one orchestration
+  (ADR-0030 D-1 point 3): CG-2 run-time check, cross-commit check, T, snapshot,
+  computation, writes. Not registered as a job until the wiring PR.
 """

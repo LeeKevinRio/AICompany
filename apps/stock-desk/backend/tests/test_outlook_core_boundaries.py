@@ -1,6 +1,6 @@
 """Structural rules of the NM-5 outlook modules (risk RC-130; TA Q1, Q2, G1; ADR-0030 K-2, K-6).
 
-* RC-130 / K-10 / S-6: the recorder does not exist yet; the ``app/outlook``
+* RC-130 / K-10 / S-6: the recorder's entry has no such parameter; the ``app/outlook``
   functions with a T / ``as_of`` / clock parameter are not referenced from any
   other ``app/`` module (one exception, ``late_cutoff_at``, see its cell); the
   recorder-facing entries have no such parameter; the decision-session cut is
@@ -29,6 +29,7 @@ import pytest
 
 from app.advice.engine import COMPARISON_OPS
 from app.dirdef.rules import ComparisonOp
+from app.forecast.recorder import record_forecasts
 from app.outlook.engine import _OPS, PIT_ITEM, compute_outlook
 from app.outlook.inputs import capture_market_snapshot
 from tests.import_graph import APP_ROOT, offenders, reachable_app_modules
@@ -83,9 +84,11 @@ def _outside_outlook() -> dict[str, str]:
 # --- RC-130 ------------------------------------------------------------------------------------
 
 
-def test_the_recorder_does_not_exist_yet() -> None:
-    assert not (APP_ROOT / "forecast" / "recorder.py").exists()
-    assert not any("recorder" in p for p in _sources(APP_ROOT / "forecast"))
+def test_the_recorder_entry_takes_no_time_parameter() -> None:
+    # NM-5 third batch: the recorder exists; K-10 / S-6 hold on its entry (the full
+    # signature and call-site checks are in tests/test_forecast_recorder.py).
+    assert (APP_ROOT / "forecast" / "recorder.py").exists()
+    assert set(inspect.signature(record_forecasts).parameters) & TIME_PARAMS == set()
 
 
 def test_the_time_parameter_functions_are_the_known_ones() -> None:
@@ -262,13 +265,19 @@ def test_the_parser_scan_has_teeth(probe: str) -> None:
 def _comparison_table_keys(source: str, name: str) -> set[str]:
     """The string keys of the module-level dict literal bound to ``name``."""
     for node in ast.parse(source).body:
-        target = node.target if isinstance(node, ast.AnnAssign) else None
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
+        target: ast.expr | None = None
+        value: ast.expr | None = None
+        if isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
         if isinstance(target, ast.Name) and target.id == name:
-            value = node.value if isinstance(node, ast.Assign | ast.AnnAssign) else None
             assert isinstance(value, ast.Dict)
-            return {key.value for key in value.keys if isinstance(key, ast.Constant)}
+            return {
+                key.value
+                for key in value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
     raise AssertionError(f"{name} is not bound at module level")
 
 
