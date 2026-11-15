@@ -111,6 +111,7 @@ from app.forecast.store import (
     RunRow,
     SnapshotInput,
     StoredSnapshot,
+    replacement_violations,
 )
 from app.outlook.engine import OutlookOutcome, compute_outlook, n_snapshot
 from app.outlook.inputs import (
@@ -411,11 +412,15 @@ def check_recording_claims(store: ForecastStore) -> tuple[RecordingClaim, ...]:
     is the recording claim -- exactly two of them; each one's rule and
     definition hashes equal what ``app.forecast.definitions`` returns; every
     other forward claim is named by the ``replaces_claim_id`` of a row
-    registered after it.
+    registered after it; and the replacements follow the chain rule of
+    supplement 3 (revised) point 6 (``store.replacement_violations``: an
+    earlier claim of the same scope and horizon, replaced at most once).
     """
     forward = store.forward_claims()
     recording = store.recording_claims()
     if set(recording) != {(SCOPE_KIND, horizon) for horizon in CORE_HORIZONS}:
+        raise _gate_closed()
+    if replacement_violations(forward):
         raise _gate_closed()
     recording_ids = {claim.claim_id for claim in recording.values()}
     for index, claim in enumerate(forward):

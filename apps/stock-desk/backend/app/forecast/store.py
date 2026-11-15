@@ -340,6 +340,46 @@ def _claim_row(row: Sequence[object]) -> ClaimRow:
     )
 
 
+def replacement_violations(forward: Sequence[ClaimRow]) -> list[str]:
+    """The replacement chain rule over the forward claims in registration order.
+
+    ADR-0030 supplement 3 (revised) point 6: a ``replaces_claim_id`` names a
+    forward claim registered earlier with the same ``(scope_kind, scope_key,
+    horizon)``, and no claim is replaced more than once. With CG-2's "every
+    other forward claim is replaced by a later one" this makes each key one
+    linear chain ending in its recording claim. The one definition: the
+    registration (:meth:`ForecastStore.register_claim`) refuses a row that
+    breaks it, the recorder's CG-2 check closes the gate on a registry that
+    breaks it. An empty list means the rule holds.
+    """
+    earlier: dict[str, ClaimRow] = {}
+    replaced: set[str] = set()
+    found: list[str] = []
+    for claim in forward:
+        target_id = claim.replaces_claim_id
+        if target_id is not None:
+            target = earlier.get(target_id)
+            if target is None:
+                found.append(
+                    f"{claim.claim_id}: replaces_claim_id names no forward claim registered"
+                    " before it"
+                )
+            elif (target.scope_kind, target.scope_key, target.horizon) != (
+                claim.scope_kind,
+                claim.scope_key,
+                claim.horizon,
+            ):
+                found.append(
+                    f"{claim.claim_id}: a replacement keeps the scope and horizon of the claim"
+                    " it replaces"
+                )
+            if target_id in replaced:
+                found.append(f"{target_id}: replaced more than once")
+            replaced.add(target_id)
+        earlier[claim.claim_id] = claim
+    return found
+
+
 def valid_until_session_estimate(data_as_of: date, horizon: int) -> date:
     """T moved by ``horizon`` Monday-Friday days; exchange holidays are not modelled."""
     day = data_as_of
@@ -608,8 +648,10 @@ class ForecastStore:
         ``claim_id``, ``rules_sha256``, ``definition_json`` and both definition
         hashes are derived here; ``registered_at`` comes from the store clock
         and must be later than every earlier registration, so registration
-        order is the time order. A replacement must name an existing forward
-        claim of the same scope and horizon and give a reason (D-1 point 2).
+        order is the time order. A replacement must give a reason (D-1 point 2)
+        and name an earlier forward claim of the same scope and horizon that no
+        other claim replaces yet (:func:`replacement_violations`; ADR-0030
+        supplement 3 (revised) point 6), checked in the write transaction.
         """
         if not isinstance(definition, DirectionDefinition):
             raise ForecastStoreError("definition must be a DirectionDefinition")
@@ -645,8 +687,25 @@ class ForecastStore:
                 replaced = self._claim(conn, replaces_claim_id)
                 if replaced is None or replaced.kind != CLAIM_KIND:
                     raise ForecastStoreError("replaces_claim_id is not a registered forward claim")
-                if replaced.horizon != horizon:
-                    raise ForecastStoreError("a replacement keeps the scope and horizon")
+            # Supplement 3 (revised) point 6, over the registry as it would be.
+            candidate = ClaimRow(
+                claim_id=new_id,
+                scope_kind=SCOPE_KIND,
+                scope_key=SCOPE_KEY,
+                horizon=horizon,
+                kind=CLAIM_KIND,
+                rules_version=rules_version,
+                rules_sha256=hashlib.sha256(rules).hexdigest(),
+                rules_logic_sha256=rules_logic_sha256,
+                definition_version=definition.definition_version,
+                definition_sha256=definition_sha256(definition),
+                definition_logic_sha256=definition_logic_sha256(definition),
+                replaces_claim_id=replaces_claim_id,
+                registered_at=registered_at,
+            )
+            violations = replacement_violations([*self._forward_claims(conn), candidate])
+            if violations:
+                raise ForecastStoreError("; ".join(violations))
             conn.execute(
                 "INSERT INTO forecast_claim_registry (claim_id, scope_kind, scope_key, horizon,"
                 " kind, rules_version, rules_sha256, rules_logic_sha256, rules_bytes,"
@@ -969,15 +1028,19 @@ class ForecastStore:
         with self._read() as conn:
             return self._claim(conn, claim_id)
 
+    @staticmethod
+    def _forward_claims(conn: sqlite3.Connection) -> list[ClaimRow]:
+        rows = conn.execute(
+            f"SELECT {_CLAIM_COLUMNS} FROM forecast_claim_registry WHERE kind = ?"
+            " ORDER BY registered_at, rowid",
+            (CLAIM_KIND,),
+        ).fetchall()
+        return [_claim_row(row) for row in rows]
+
     def forward_claims(self) -> list[ClaimRow]:
         """Every forward claim in registration order."""
         with self._read() as conn:
-            rows = conn.execute(
-                f"SELECT {_CLAIM_COLUMNS} FROM forecast_claim_registry WHERE kind = ?"
-                " ORDER BY registered_at, rowid",
-                (CLAIM_KIND,),
-            ).fetchall()
-        return [_claim_row(row) for row in rows]
+            return self._forward_claims(conn)
 
     def recording_claims(self) -> dict[tuple[str, int], ClaimRow]:
         """The last-registered forward claim of each ``(scope_kind, horizon)`` (D-6 CG-2)."""

@@ -15,6 +15,7 @@ import sqlite3
 import struct
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -431,6 +432,90 @@ def test_a_replacement_needs_a_reason_and_the_same_horizon(ledger: Ledger) -> No
     assert recording[("market", 3)].replaces_claim_id == ledger.h3
     assert recording[("market", 5)].claim_id == ledger.h5
     assert [c.claim_id for c in ledger.store.forward_claims()] == [ledger.h3, ledger.h5, new]
+
+
+# --- supplement 3 (revised) point 6: the replacement chain (f1) -------------------------------
+
+
+def _chain(ledger: Ledger, *links: tuple[str, int, str | None]) -> list[store_module.ClaimRow]:
+    """Claim rows (id, horizon, replaces) in registration order, modelled on a registered row."""
+    model = ledger.store.forward_claims()[0]
+    return [
+        replace(model, claim_id=claim_id, horizon=horizon, replaces_claim_id=replaces)
+        for claim_id, horizon, replaces in links
+    ]
+
+
+def test_f1_a_linear_chain_has_no_violation(ledger: Ledger) -> None:
+    rows = _chain(ledger, ("a", 3, None), ("b", 5, None), ("c", 3, "a"), ("d", 3, "c"))
+    assert store_module.replacement_violations(rows) == []
+
+
+@pytest.mark.parametrize(
+    ("links", "message"),
+    [
+        pytest.param(
+            [("h3-old", 3, None), ("h5-new", 5, "h3-old")], "keeps the scope", id="cross-horizon"
+        ),
+        pytest.param(
+            [("a", 3, None), ("b", 3, "a"), ("c", 3, "a")], "replaced more than once", id="twice"
+        ),
+        pytest.param(
+            [("a", 3, "c"), ("c", 3, "a")], "registered before it", id="names-a-later-claim"
+        ),
+        pytest.param([("a", 3, "a")], "registered before it", id="names-itself"),
+        pytest.param([("a", 3, "ghost")], "registered before it", id="names-nothing"),
+    ],
+)
+def test_f1_the_three_counter_examples_break_the_rule(
+    ledger: Ledger, links: list[tuple[str, int, str | None]], message: str
+) -> None:
+    found = store_module.replacement_violations(_chain(ledger, *links))
+    assert found != [] and any(message in item for item in found)
+
+
+def test_f1_another_scope_key_is_another_chain(ledger: Ledger) -> None:
+    rows = _chain(ledger, ("a", 3, None), ("b", 3, "a"))
+    rows[1] = replace(rows[1], scope_key="OTHER")
+    assert any("keeps the scope" in item for item in store_module.replacement_violations(rows))
+
+
+def _replace_h3(ledger: Ledger, version: str, replaces: str) -> str:
+    ledger.clock.advance(seconds=1)
+    return ledger.register(
+        3, version.encode(), rules_version=version, replaces_claim_id=replaces, replace_reason="x"
+    )
+
+
+def test_f1_the_registration_refuses_a_second_replacement_of_one_claim(ledger: Ledger) -> None:
+    first = _replace_h3(ledger, "1.1.0", ledger.h3)
+    before = ledger.rows("forecast_claim_registry")
+    with pytest.raises(ForecastStoreError, match="replaced more than once"):
+        _replace_h3(ledger, "1.2.0", ledger.h3)
+    assert ledger.rows("forecast_claim_registry") == before
+    # The chain goes on from the claim that replaced it.
+    assert _replace_h3(ledger, "1.2.0", first) != first
+
+
+def test_f1_the_registration_refuses_a_claim_registered_later(ledger: Ledger) -> None:
+    # At registration time a "later" claim does not exist yet: naming the id of a
+    # claim registered afterwards is refused, and so is naming the claim itself.
+    later_id = "market|h3|1.1.0|dirdef-v1.0|forward"
+    before = ledger.rows("forecast_claim_registry")
+    for version, target in (("1.2.0", later_id), ("1.1.0", later_id)):
+        with pytest.raises(ForecastStoreError, match="not a registered forward claim"):
+            _replace_h3(ledger, version, target)
+    assert ledger.rows("forecast_claim_registry") == before
+
+
+def test_f1_the_registration_refuses_a_cross_horizon_replacement(ledger: Ledger) -> None:
+    before = ledger.rows("forecast_claim_registry")
+    ledger.clock.advance(seconds=1)
+    with pytest.raises(ForecastStoreError, match="keeps the scope and horizon"):
+        ledger.register(
+            5, b"v2", rules_version="1.1.0", replaces_claim_id=ledger.h3, replace_reason="x"
+        )
+    assert ledger.rows("forecast_claim_registry") == before
 
 
 @pytest.mark.parametrize(

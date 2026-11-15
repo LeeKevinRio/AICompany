@@ -825,6 +825,53 @@ def test_cg2_a_rules_version_whose_entry_names_another_horizon(
     _closed(desk)
 
 
+# --- CG-2: the replacement chain (supplement 3 (revised) point 6, f1) ---------------------------
+
+OLD_H3 = "market|h3|outlook-market-v0.9-h3|dirdef-v1.0|forward"
+MID_H3 = "market|h3|outlook-market-v0.95-h3|dirdef-v1.0|forward"
+
+
+def _registry(desk: Desk, case: str) -> list[Any]:
+    """A registry the store would refuse, built from the two registered (hash-valid) rows.
+
+    Every case keeps "each other forward claim is replaced by a later one", so
+    only the chain rule can close the gate (except "twice", see the test).
+    """
+    h3, h5 = desk.store.forward_claims()
+    old = replace(h3, claim_id=OLD_H3)
+    if case == "valid":
+        return [old, replace(h3, replaces_claim_id=OLD_H3), h5]
+    if case == "cross-horizon":  # the h3 claim is replaced by the h5 one
+        return [old, h3, replace(h5, replaces_claim_id=OLD_H3)]
+    if case == "names-a-later-claim":
+        return [
+            replace(old, replaces_claim_id=h3.claim_id),
+            replace(h3, replaces_claim_id=OLD_H3),
+            h5,
+        ]
+    assert case == "twice"
+    mid = replace(h3, claim_id=MID_H3, replaces_claim_id=OLD_H3)
+    return [old, mid, replace(h3, replaces_claim_id=OLD_H3), h5]
+
+
+def test_cg2_a_valid_replacement_chain_opens_the_gate(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows = _registry(desk, "valid")
+    monkeypatch.setattr(desk.store, "forward_claims", lambda: rows)
+    assert desk.run(EVENING).outcome == "ok"
+
+
+@pytest.mark.parametrize("case", ["cross-horizon", "names-a-later-claim", "twice"])
+def test_cg2_a_broken_replacement_chain_closes_the_gate(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    rows = _registry(desk, case)
+    assert store_module.replacement_violations(rows) != []
+    monkeypatch.setattr(desk.store, "forward_claims", lambda: rows)
+    _closed(desk)
+
+
 # --- error and interruption ---------------------------------------------------------------------
 
 
