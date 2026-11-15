@@ -2,6 +2,7 @@
 
 - 狀態：accepted（CEO 2026-10-26 核可，含 C-M1～C-M4 與 C-M4、G-5→CG-3 的明確同意；決策包二補遺 #64～#67）
 - 補充紀錄：2026-11-14 append 補充一（SP-1：5 張表加 BEFORE INSERT 拒絕重複鍵 trigger；tech-architect 裁示，加嚴，不改產品行為與字面，CEO 可推翻；來源 `work/reviews/2026-11-14-G1位置與SP1裁示-tech-architect.md`）。
+- 補充紀錄：2026-11-15 append 補充二（SP-B 輸入注入、SP-C 未定案 bar 分流、快照時間欄與 PIT 缺項名；tech-architect 裁示，釐清，不放寬，不改使用者面字面，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第二批交件-dev-lead.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -373,3 +374,19 @@
 6. 殘留風險（知悉，不處理）：其他程式仍可以 `DROP TRIGGER`、開 `writable_schema` 或直接改檔。`schema_status` 只偵測得到少了或被改過的物件；`report verify` 偵測得到 D-5 第 3 點涵蓋的欄位；但刪掉 trigger 再改寫 `created_at`／`late`，帳內無法偵測。依 ADR-0025 F-1（純自用、單一使用者），蓄意竄改不在威脅模型內。F-4 不變。
 
 - **S-1a（逐條可檢查）**：在預設連線（`recursive_triggers=OFF`）上，第 1 點列出的 9 條鍵路徑各自執行 `INSERT OR REPLACE`，都以 `append-only` 被拒絕，而且原列內容與總列數都不變；store 的正常寫入全部通過（測試）。`sqlite_master` 中恰好有 15 個 ledger trigger（`schema_status`）。
+
+---
+
+## 補充二：大盤輸入的取得方式、未定案 bar 的分流、快照時間欄（2026-11-15）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-15-NM5第二批交件-dev-lead.md` SP-B、SP-C 與待確認事項（已實證：`app.services.index` 在模組層級 import `PriceService`，使 import 它的模組可達 `app.portfolio`、`app.positions`）。
+- 性質：釐清 D-1 第 3 點 inputs 列、D-3 第 1～2 點、D-5 第 1 點的讀法。補充本文，不改本文；不放寬 K-2、K-3、K-10、S-4、S-6；不改任何使用者面字面。CEO 可推翻。
+
+1. **取得方式**：正式路徑的大盤輸入，是 `app.services.index.load_market_benchmark` 的回傳值。`app.scheduler` 註冊 job `forecast_record` 時，把這個函式以參數傳入 recorder 的進入點。`app/forecast/**`、`app/outlook/**` 不 import `app.services.index`；`app/outlook/inputs.py` 只依 Protocol 接收回傳值。D-1 第 3 點的「只經 `app.services.index` 取得」以此讀。K-2 依可達性（含遞移 import）判定，不變。這個參數是取數函式，不是 T、`as_of` 或時鐘，K-10 不變；以其他取數函式呼叫 recorder，只限 tests 與 D-7 harness（K-11 不變）。`late` 仍由 store 時鐘判定，所以注入過去的資料只會得到 `late = 1`，或被 UNIQUE 拒絕。
+2. **未定案 bar 的分流**：以 store 時鐘讀取執行時刻 now。對每一根未定案 bar（session 日 S）：
+   (a) now 不早於 S 日 `TW_POLICY.publish_cutoff`：屬 D-3 第 2 點。recorder 重新呼叫取數函式一次；之後仍有任何一根屬 (a)，就記 `inputs_not_ready`（`candidate_t` 填其中最大的 S），不寫紀錄，也不改用更早的定案 bar 當 T。
+   (b) now 早於 S 日 `TW_POLICY.publish_cutoff`：該 session 還不到可以定案的時點，屬 LA-G2-5。這根 bar 不進快照，列入 `dropped_rows_json`；T 為最新一根定案 bar，照常寫紀錄。
+3. **快照時間欄**：這條取數路徑上每根 bar 只有一個取回時間，快照的 `fetched_at` 取 `PriceBar.as_of`，`raw_timestamp_available = false`；D-3 第 2 點的「取較早者」因此等於 `as_of`。資料源或取數路徑更換時，依 F-5 重審本點。
+4. **PIT 缺項名**：`E-PIT-UNVERIFIED` 的 `item` 為 `inputs_max_fetched_at`，只定義一次。
+
+- **S-4a（逐條可檢查）**：可達性測試不變且全綠；正式路徑上 recorder 進入點只由 `app/scheduler.py` 呼叫，而且傳入的物件就是 `app.services.index.load_market_benchmark`（AST 加 `is` 斷言）；(a) 情形重抓一次後記 `inputs_not_ready`、不寫紀錄；(b) 情形的 `content_hash` 與取數端不回傳該 bar 時相同；快照中每根 bar 都是 `fetched_at == as_of`（測試）。
