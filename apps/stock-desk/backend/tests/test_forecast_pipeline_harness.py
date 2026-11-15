@@ -730,6 +730,20 @@ def test_every_test_run_compares_against_stand_ins_only() -> None:
         assert {"backend_dir", "env", "cwd"} <= {k.arg for k in call.keywords}
 
 
+@pytest.mark.parametrize("function", [run_acceptance, refuse_production], ids=lambda f: f.__name__)
+def test_the_production_path_inputs_are_keyword_only_without_defaults(
+    function: Callable[..., object],
+) -> None:
+    # qa batch 5 follow-up 1: no call compares against the real backend, env or cwd by default.
+    parameters = inspect.signature(function).parameters
+    for name in ("backend_dir", "env", "cwd"):
+        assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameters[name].default is inspect.Parameter.empty
+    source = Path(harness.__file__).read_text(encoding="utf-8")
+    assert "BACKEND_DIR" not in source and "os.environ" not in source
+    assert "Path.cwd" not in source
+
+
 def test_the_harness_ledger_kind_is_forward_only(tmp_path: Path) -> None:
     _run(tmp_path, P0)
     store = ForecastStore(tmp_path / "work" / harness.LEDGER_NAME)

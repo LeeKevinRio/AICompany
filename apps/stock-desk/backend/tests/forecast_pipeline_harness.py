@@ -63,7 +63,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import sqlite3
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
@@ -82,7 +81,6 @@ from app.dirdef.definition import (
 )
 from app.dirdef.registry import PublishedDefinition, PublishedRuleset
 from app.forecast import claims, definitions, recorder, report, scoring
-from app.forecast.claims import BACKEND_DIR
 from app.forecast.recorder import RunResult, record_forecasts
 from app.forecast.schema import create_schema
 from app.forecast.store import ForecastStore, system_clock
@@ -414,23 +412,20 @@ def run_acceptance(
     definition: DirectionDefinition,
     wall_clock: Callable[[], datetime] = system_clock,
     run_time: Callable[[date], datetime] | None = None,
-    backend_dir: Path = BACKEND_DIR,
-    env: Mapping[str, str] | None = None,
-    cwd: Path | None = None,
+    backend_dir: Path,
+    env: Mapping[str, str],
+    cwd: Path,
 ) -> AcceptanceResult:
     """One harness run (module docstring); returns what it found, refusing production paths.
 
     ``backend_dir``, ``env`` and ``cwd`` -- what the production path rule
-    compares against -- are for tests; the defaults are this checkout's backend,
-    the process environment and working directory.
+    compares against -- are keyword-only and have no default (qa batch 5
+    follow-up 1): nothing here looks at the real ``<backend>/data/``, the
+    process environment or working directory unless the caller passes them.
+    Tests pass ``tmp_path`` stand-ins.
     """
     db_path = work_dir / LEDGER_NAME
-    refuse_production(
-        db_path,
-        backend_dir=backend_dir,
-        cwd=Path.cwd() if cwd is None else cwd,
-        env=os.environ if env is None else env,
-    )
+    refuse_production(db_path, backend_dir=backend_dir, cwd=cwd, env=env)
     if db_path.exists():
         raise HarnessRefused("refused: the harness ledger already exists")
     now = wall_clock()
