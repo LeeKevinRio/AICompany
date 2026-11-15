@@ -5,6 +5,7 @@
 - 補充紀錄：2026-11-15 append 補充二（SP-B 輸入注入、SP-C 未定案 bar 分流、快照時間欄與 PIT 缺項名；tech-architect 裁示，釐清，不放寬，不改使用者面字面，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第二批交件-dev-lead.md`）。
 - 補充紀錄：2026-11-15 append 補充三（跨 commit 比對基準、執行環境取值時點、K-2 禁詞來源、無定案 bar 與 source_status；tech-architect 裁示，收緊與釐清，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第三批recorder交件-dev-lead.md`）。
 - 補充紀錄：2026-11-15 append 補充三（修訂版）（跨 commit 比對基準、取值時點、K-2 禁詞來源、取代鏈、原子寫入、例外歸類；tech-architect 裁示，收緊與釐清，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第三批recorder交件-dev-lead.md`、`work/reviews/2026-11-15-NM5第三批recorder審查-qa-reviewer.md`）。**補充三（修訂版）取代同日稍早落檔的補充三**：兩者衝突時以修訂版為準；初版依 append-only 原樣保留（tech-architect 回報 `work/reviews/2026-11-15-NM5recorder四題與f1f4裁示-tech-architect.md`）。
+- 補充紀錄：2026-11-15 append 補充四（第四批解讀確認、CG-2／CG-3 正式登記的執行方式與檢查點、剩餘順序；tech-architect 裁示，釐清與收緊，不改使用者面字面與已登記雜湊；第 4 點的執行方式須 CEO 同意，其餘 CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第四批解讀與CG2登記方式裁示-tech-architect.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -457,3 +458,66 @@
   - 第 7 點：注入第二筆失敗時，ledger 列數為 0（測試）。
   - 第 8 點：兩類失敗各有一個測試，outcome 不同。
   - 第 9 點：`_connect()` 只出現在寫入路徑（AST）。
+
+---
+
+## 補充四：第四批解讀確認、正式登記（CG-2／CG-3）的執行方式、剩餘順序（2026-11-15）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-15-NM5第四批交件-dev-lead.md` 下一步第 1、3 點。
+- 性質：釐清補充三（修訂版）第 2、5、8 點與 D-6 CG-2、CG-3；收緊正式路徑的寫入條件。不改使用者面字面，不改規則檔與定義物件的雜湊。CEO 可推翻；第 4 點的執行方式須 CEO 同意。
+
+1. **解讀確認**
+   - (a) 補充三（修訂版）第 5 點的禁令，對象是快照的 `source_status`。`app/outlook/missing.py` 中 `MissingItem` 類別內的 `self.source_status`（D-13 缺項欄位）不在禁令內；豁免只限這個模組的這個類別。
+   - (b) 第 8 點的「目前程式重算失敗」，涵蓋純計算呼叫拋出的任何 `Exception`。`try` 不得包住帳本讀取與解析，也不捕捉 `BaseException`。
+   - (c) 第 2 點的磁碟重算涵蓋 `code_digest` 與 `runtime_json`，可以在接線 PR 之前落地；scheduler 的 AST 檢查仍在接線 PR 套用。
+   - (d) ADR-0027 D-10 第 3 點（含 N-84 暫行限制）屬 D-8 凍結附錄，不實作。FL-78 (i) 的禁詞來源讀為 `app.advice.banned_phrases`。第一次登記早於任何 `forecast_run`，由第 2 點保證。日後依 D-1 第 2 點修訂本 ADR 以取代 claim 時，須一併定新 claim 缺日義務的起點。
+2. **正式路徑**
+   - 正式主 DB 唯一的登記路徑是 `python -m app.forecast.claims bootstrap --production`。`register` 對正式路徑維持一律拒絕。
+   - `bootstrap` 須同時成立以下條件，任一不成立就以結束碼 4 拒絕，不寫入：
+     - 目標是 `<backend>/data/stock-desk.db`；
+     - 環境變數與 `apps/stock-desk/.env` 都沒有設 `STOCK_DESK_DB_PATH`；
+     - 主 DB 沒有任何 `forecast_`、`plan_` 開頭的表；
+     - 一次給齊 D-1 第 1 點的 h3、h5 兩個 claim，依此順序；
+     - `replaces_claim_id` 為空。
+   - schema 的全部物件與兩列登記放在同一個寫入交易內，任一步失敗就全部回滾。提交後以唯讀連線確認：`schema_status` 完整、登記表恰好 2 列、`forecast_run` 為 0 列。
+   - 正式主 DB 上的核心 schema 只能由 `bootstrap` 建立。其他路徑遇到 schema 不存在時拒絕寫入，不建表。
+   - 登記表非空之後，正式路徑沒有任何登記方式。
+3. **`prereg_doc_path`**
+   - 格式：repo 根目錄起算的相對路徑，以 `/` 分隔；不得含 `./`、`..`、`\`、磁碟代號，也不得是絕對路徑。不合格就拒絕，不自動轉換。`review_refs` 用同一格式。
+   - `prereg_doc_blob` 是該路徑在 `frozen_commit` 的 git blob 原始位元組。CLI 須核對 `--prereg-doc-sha256`，不一致就拒絕。
+4. **執行者與順序**
+   - (1) CG-2 登記 PR 合併。
+   - (2) CEO 在本機先執行只讀的預檢檔，回傳結果經 coordinator 核對後，再執行登記檔。登記檔重跑全部預檢，然後依序：
+     - 以 SQLite backup API 取得主 DB 一致備份：放在 git 工作樹之外，`integrity_check` 為 ok，記下 sha256；
+     - 禁詞比對；
+     - `bootstrap`；
+     - 輸出回傳內容。
+
+     任一步不成立就停止。回傳內容只含固定文字、計數、雜湊、commit 與時間，不含路徑與代號。一鍵檔不開寫入連線。
+   - (3) coordinator 當日以 commit 在 `work/` 記錄 `claim_id`、`registered_at`、`frozen_commit` 與備份 sha256。
+   - (4) 接線 PR 在 (3) 之後才合併，記下 CG-3 備份路徑（以家目錄相對寫法）與 sha256。
+5. **檢查點**
+   - 合併前：
+     - M-1：第四、五批已 qa PASS 並合併；D-7 harness 已執行。
+     - M-2：事先宣告 v0.32 的路徑、blob id、`git cat-file blob <commit>:<path>` 的 sha256 都寫進 PR；RC-153～RC-157 套用之後，此檔沒有任何變更。
+     - M-3：C-8 紀錄檔依 RC-152 第 1 點計算，PR 寫出指令與 commit SHA；風控確認之後沒有任何變更。dirdef-v1.0 的 C-8 雜湊欄等於此值。
+     - M-4：`dirdef-v1.0` 登記於 `PUBLISHED_DIRECTION_DEFINITIONS`；兩個 definition 雜湊寫進 PR，並以測試釘住。
+     - M-5：h3、h5 登記於 `PUBLISHED_RULESETS`，`OUTLOOK_RULE_FIELDS` 已設定；四個規則雜湊以測試釘住。
+     - M-6：禁詞比對輸出附在 PR，命中 0。
+     - M-7：YAML 與 M-2、M-3 兩份文件加上 `eol=lf` 屬性，PR 附上 `git ls-files --eol` 的輸出。
+     - M-8：一鍵檔以常數固定 M-2～M-5 的雜湊；測試涵蓋第 2 點每個拒絕條件、整筆回滾，以及回傳內容不含路徑。
+     - M-9：qa PASS（含 Codex）；風控核對 M-2、M-3、M-6；CI 綠燈；`report verify --all` 一致。
+   - 登記前（一鍵檔機械核對，任一不成立就停止）：
+     - R-1：`HEAD` 可由 `origin/product/stock-desk` 到達；`HEAD` 與 CG-2 合併 commit 之間，`app/` 與兩份文件沒有 diff，且這些路徑的工作樹乾淨。`frozen_commit` 取 `HEAD`。
+     - R-2：每個凍結檔的工作樹 sha256 等於 blob 的 sha256，也等於 M-8 的常數。
+     - R-3：port 8000 沒有監聽；沒有設 `STOCK_DESK_DB_PATH`；主 DB 存在於預設位置。
+     - R-4：主 DB 沒有 `forecast_`、`plan_` 開頭的表。
+     - R-5：備份的 `integrity_check` 為 ok，備份內沒有 `forecast_` 表。
+     - R-6：禁詞比對命中 0。
+     - R-7：`bootstrap` 結束碼 0，提交後的核對成立。
+     - R-8：`provisional_results_seen` 由 CEO 鍵入。
+6. **剩餘順序**
+   - 第五批 `report.py`＋D-7 harness（同一批）→ CG-2 登記 PR（含 CLI 正式路徑、一鍵檔、登記值）→ 第 4 點 (2)、(3) → 接線 PR。
+   - CG-2 登記不得早於 harness 通過。接線 PR 不得與 CG-2 PR 合併。
+
+- **S-14a（逐條可檢查）**：第 1 點各款各有 AST 或測試；第 2、3 點每個拒絕條件各一個測試；整筆回滾測試；M-1～M-9 列在 CG-2 PR 說明中；R-1～R-8 各有對應的 STOP 訊息測試；接線 PR 合併時，`work/` 中已有登記紀錄的 commit。
