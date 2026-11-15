@@ -42,6 +42,12 @@ the pre-registration banned phrase check -- every string value of the rule set
 and the definition, NFKC-normalised with whitespace and zero-width characters
 removed -- with the same ``BANNED_PHRASES``.
 
+For ``report verify`` (ADR-0030 D-5 point 3): :func:`registered_ruleset` and
+:func:`registered_definition` rebuild a claim's rule set and definition from
+the bytes and the JSON stored in its registry row -- through the same loader
+call and the same hash and banned phrase checks, without reading the file on
+disk or the published registries, and without caching.
+
 Test seams (named in the tests): the two registry names below, the
 :func:`_read_rules_bytes` reader, and the two cache dicts.
 """
@@ -66,7 +72,7 @@ from app.dirdef.registry import (
     PUBLISHED_RULESETS,
     PublishedRuleset,
 )
-from app.dirdef.rules import OutlookRuleSet, RuleSetLoadError, load_ruleset
+from app.dirdef.rules import OutlookRuleSet, RuleSetLoadError, load_ruleset, rules_logic_sha256
 from app.dirdef.strings import string_values
 
 #: ``app/outlook/rules/``, resolved against the ``app/outlook/`` package directory.
@@ -155,12 +161,65 @@ def get_ruleset(rules_version: str) -> OutlookRuleSet:
         raise PublishedVersionRejectedError(
             f"rule file of horizon {entry.horizon} cannot be read ({type(exc).__name__})"
         ) from exc
-    try:
-        ruleset = load_ruleset(data, rules_sha256=entry.rules_sha256, banned_phrases=BANNED_PHRASES)
-    except RuleSetLoadError as exc:
-        raise PublishedVersionRejectedError(f"rule set rejected: {exc}") from exc
+    ruleset = _load(data, rules_sha256=entry.rules_sha256)
     _RULESET_CACHE[rules_version] = ruleset
     return ruleset
+
+
+def _load(data: bytes, *, rules_sha256: str) -> OutlookRuleSet:
+    """The one loader call in ``app/``: hash check, parse, validate, banned phrases."""
+    try:
+        return load_ruleset(data, rules_sha256=rules_sha256, banned_phrases=BANNED_PHRASES)
+    except RuleSetLoadError as exc:
+        raise PublishedVersionRejectedError(f"rule set rejected: {exc}") from exc
+
+
+def registered_ruleset(
+    rules_bytes: bytes, *, rules_sha256: str, logic_sha256: str
+) -> OutlookRuleSet:
+    """A claim's rule set rebuilt from its *registered* bytes (ADR-0030 D-5 point 3).
+
+    For ``report verify``: the bytes stored in ``forecast_claim_registry``, not
+    the file on disk and not the published registry. They go through the same
+    loader (hash check against the registered ``rules_sha256``, the banned
+    phrases) and the result's logic hash must equal the registered one; any
+    failure raises :class:`PublishedVersionRejectedError`. Nothing is cached.
+    """
+    if not isinstance(rules_bytes, bytes):
+        raise PublishedVersionRejectedError("registered rules_bytes are not bytes")
+    ruleset = _load(rules_bytes, rules_sha256=rules_sha256)
+    if rules_logic_sha256(ruleset) != logic_sha256:
+        raise PublishedVersionRejectedError(
+            "registered rule bytes do not match the registered rules_logic_sha256"
+        )
+    return ruleset
+
+
+def registered_definition(
+    definition_json: str, *, full_sha256: str, logic_sha256: str
+) -> DirectionDefinition:
+    """A claim's definition rebuilt from its *registered* JSON (ADR-0030 D-5 point 3).
+
+    Both hashes must equal the registered ones and no string value may hold a
+    banned phrase (the checks :func:`get_definition` runs); any failure raises
+    :class:`PublishedVersionRejectedError`. Nothing is cached.
+    """
+    try:
+        definition = DirectionDefinition.model_validate_json(definition_json)
+    except ValueError as exc:
+        raise PublishedVersionRejectedError(
+            f"registered definition_json cannot be read ({type(exc).__name__})"
+        ) from None
+    if definition_logic_sha256(definition) != logic_sha256:
+        raise PublishedVersionRejectedError(
+            "registered definition_json does not match its definition_logic_sha256"
+        )
+    if definition_sha256(definition) != full_sha256:
+        raise PublishedVersionRejectedError(
+            "registered definition_json does not match its definition_sha256"
+        )
+    _scan_definition(definition)
+    return definition
 
 
 def get_rules_bytes(rules_version: str) -> bytes:
@@ -197,9 +256,7 @@ class PhraseScan:
 #: Invisible characters ``str.split()`` keeps (qa batch 4 follow-up 4): zero width
 #: space, zero width non-joiner, zero width joiner, word joiner, zero width
 #: no-break space (BOM) and soft hyphen. NFKC leaves every one of them in place.
-ZERO_WIDTH: Final[frozenset[str]] = frozenset(
-    {"​", "‌", "‍", "⁠", "﻿", "­"}
-)
+ZERO_WIDTH: Final[frozenset[str]] = frozenset({"​", "‌", "‍", "⁠", "﻿", "­"})
 
 
 def squeeze(text: str) -> str:

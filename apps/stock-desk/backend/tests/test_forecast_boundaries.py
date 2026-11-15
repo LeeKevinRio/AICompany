@@ -244,6 +244,7 @@ def test_the_scanned_packages_hold_exactly_the_b1_and_b2_modules() -> None:
         "forecast/definitions.py",
         "forecast/errors.py",
         "forecast/recorder.py",
+        "forecast/report.py",
         "forecast/schema.py",
         "forecast/scoring.py",
         "forecast/store.py",

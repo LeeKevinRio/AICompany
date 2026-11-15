@@ -509,14 +509,14 @@ def _reproduces(store: ForecastStore, recording: RecordingClaim, row: Mapping[st
       these two calls (AST) and catches ``Exception`` only, never
       ``BaseException``;
     * the ledger side -- reading or parsing the stored record or its snapshot
-      (``store.snapshot``, :func:`_market_snapshot`, the registry and snapshot
+      (``store.snapshot``, :func:`stored_market_snapshot`, the registry and snapshot
       reads of ``expected_record_columns``, which raise
       ``LedgerInconsistentError``, ``ForecastStoreError`` or a ``sqlite3``
       error) -- is outside the ``try`` and propagates, so the run ends
       ``error`` with that exception's class.
     """
     stored = store.snapshot(str(row["input_series_sha256"]))
-    market = _market_snapshot(stored)
+    market = stored_market_snapshot(stored)
     try:
         outcome = compute_outlook(
             market,
@@ -538,7 +538,17 @@ def _reproduces(store: ForecastStore, recording: RecordingClaim, row: Mapping[st
     )
 
 
-def _market_snapshot(stored: StoredSnapshot) -> MarketSnapshot:
+def reproduces(store: ForecastStore, recording: RecordingClaim, row: Mapping[str, object]) -> bool:
+    """D-5 point 3 for one stored record: whether recomputing it gives the same bytes.
+
+    The cross-commit check's own comparison (:func:`_reproduces`, failures
+    split the same way), for ``report verify``, which passes the rule set and
+    the definition rebuilt from the claim's registry row.
+    """
+    return _reproduces(store, recording, row)
+
+
+def stored_market_snapshot(stored: StoredSnapshot) -> MarketSnapshot:
     """A stored snapshot as the computation reads it (the canonical text read back)."""
     bars = tuple(
         SnapshotBar(

@@ -241,7 +241,7 @@ def test_k7_only_the_report_imports_scoring_in_app() -> None:
                 a.name == "app.forecast.scoring" for a in node.names
             ):
                 importers.add(path.relative_to(APP_ROOT).as_posix())
-    assert importers <= {"forecast/report.py"}
+    assert importers == {"forecast/report.py"}
 
 
 def test_scoring_writes_nothing_and_reads_no_clock() -> None:
