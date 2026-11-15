@@ -24,6 +24,7 @@ import ast
 import hashlib
 import inspect
 import json
+import logging
 import operator
 import shutil
 import sqlite3
@@ -44,7 +45,7 @@ from app.dirdef.registry import PublishedRuleset
 from app.dirdef.rules import rules_logic_sha256
 from app.forecast import definitions
 from app.forecast import recorder as recorder_module
-from app.forecast.canonical import APP_ROOT, code_digest
+from app.forecast.canonical import APP_ROOT, code_digest, code_digest_files
 from app.forecast.recorder import (
     LOADED,
     BenchmarkLoader,
@@ -897,6 +898,212 @@ def test_s12a_an_error_or_interrupted_run_is_not_a_baseline(
     result = desk.run(at(NEXT, 23, 10))
     assert (result.outcome, result.records_written) == ("ok", 2)
     assert len(recomputed) == 4
+
+
+# --- supplement 3 (revised) point 2: provenance taken at import (S-12a) -------------------------
+
+LABEL_WORDS = ("bullish", "bearish", "range", "insufficient", "偏多", "偏空", "震盪")
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == recorder_module.__name__]
+
+
+def _record_view(desk: Desk) -> list[tuple[object, ...]]:
+    return [
+        (r["claim_id"], r["data_as_of"], r["content_hash"]) for r in desk.rows("forecast_record")
+    ]
+
+
+def test_s12a_an_unchanged_disk_logs_nothing(desk: Desk, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG, logger=recorder_module.__name__)
+    assert desk.run(EVENING).outcome == "ok"
+    assert _warnings(caplog) == []
+
+
+@pytest.mark.parametrize("change", ["source", "lock-file", "unreadable"])
+def test_s12a_a_disk_change_without_restart_logs_one_warning_and_changes_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    change: str,
+) -> None:
+    reference = Desk(tmp_path / "reference", monkeypatch)
+    expected = reference.run(EVENING)
+    drifted = Desk(tmp_path / "drifted", monkeypatch)
+    if change == "source":
+        tree = _tree_copy(
+            tmp_path / "tree", ("outlook/engine.py", '"gt": operator.gt,', '"gt": operator.lt,')
+        )
+        assert code_digest(tree) != LOADED.code_digest
+        monkeypatch.setattr(recorder_module, "APP_ROOT", tree)
+    elif change == "lock-file":
+        lock = tmp_path / "uv.lock"
+        lock.write_bytes(b"version = 2\n")
+        monkeypatch.setattr(recorder_module, "LOCK_FILE", lock)
+    else:
+        monkeypatch.setattr(recorder_module, "APP_ROOT", tmp_path / "missing")
+    caplog.set_level(logging.DEBUG, logger=recorder_module.__name__)
+    result = drifted.run(EVENING)
+    # The outcome and every record are the ones of the loaded program.
+    assert (result.outcome, result.candidate_t, result.records_written, result.error_class) == (
+        expected.outcome,
+        expected.candidate_t,
+        expected.records_written,
+        expected.error_class,
+    )
+    assert _record_view(drifted) == _record_view(reference) != []
+    # The run row keeps the provenance taken at import.
+    (run,) = drifted.rows("forecast_run")
+    assert (run["code_digest"], run["runtime_json"]) == (LOADED.code_digest, LOADED.runtime_json)
+    # One WARNING line, no label and no value in it.
+    (warning,) = _warnings(caplog)
+    assert warning.levelno == logging.WARNING
+    message = warning.getMessage()
+    assert message == recorder_module.DISK_DIFFERS_WARNING and "\n" not in message
+    assert not any(word in message for word in LABEL_WORDS)
+    assert LOADED.code_digest not in message
+
+
+def test_s12a_the_warning_check_reports_whether_it_warned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert recorder_module.warn_if_disk_differs() is False
+    monkeypatch.setattr(recorder_module, "APP_ROOT", tmp_path / "missing")
+    assert recorder_module.warn_if_disk_differs() is True
+
+
+def _function_level_imports(source: str) -> list[str]:
+    """Supplement 3 (revised) point 2: imports inside a function, ``importlib``, ``__import__``."""
+    found: list[str] = []
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            found += [
+                f"import in function: {ast.unparse(inner)}"
+                for inner in ast.walk(node)
+                if isinstance(inner, ast.Import | ast.ImportFrom)
+            ]
+        if isinstance(node, ast.Name | ast.Attribute):
+            name = node.id if isinstance(node, ast.Name) else node.attr
+            if name in {"__import__", "importlib", "import_module"}:
+                found.append(name)
+        elif isinstance(node, ast.Import):
+            found += [a.name for a in node.names if a.name.split(".")[0] == "importlib"]
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "importlib":
+            found.append(node.module or "")
+    return found
+
+
+def test_s12a_the_digested_sources_import_at_module_level_only() -> None:
+    files = code_digest_files()
+    assert len(files) > 20
+    violations = {
+        path.relative_to(APP_ROOT).as_posix(): found
+        for path in files
+        if (found := _function_level_imports(path.read_text(encoding="utf-8")))
+    }
+    assert violations == {}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def f():\n    import json\n",
+        "def f():\n    from app.outlook import engine\n",
+        "async def f():\n    import json\n",
+        "class C:\n    def m(self):\n        from . import x\n",
+        "g = lambda: __import__('json')\n",
+        "import importlib\n",
+        "from importlib import import_module\n",
+        "import importlib.util\n",
+        "x = __import__('json')\n",
+    ],
+)
+def test_the_function_level_import_scan_has_teeth(source: str) -> None:
+    assert _function_level_imports(source) != []
+
+
+def test_the_function_level_import_scan_lets_module_imports_through() -> None:
+    source = (
+        "from __future__ import annotations\nimport json\nfrom typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n    from app.forecast.store import ForecastStore\n"
+        "def f():\n    return json.dumps(1)\n"
+    )
+    assert _function_level_imports(source) == []
+
+
+RECORDER_MODULE = "app.forecast.recorder"
+
+
+def _module_level_recorder_import_violations(source: str) -> list[str]:
+    """Supplement 3 (revised) point 2: ``app/scheduler.py`` imports the recorder at module level.
+
+    For the wiring PR (this batch wires nothing, so it is not applied to the
+    scheduler yet): at least one top-level statement imports
+    ``app.forecast.recorder`` (``import``, ``from app.forecast.recorder import
+    ...`` or ``from app.forecast import recorder``), and no import of it sits
+    inside a function.
+    """
+    tree = ast.parse(source)
+
+    def names_recorder(node: ast.stmt) -> bool:
+        if isinstance(node, ast.Import):
+            return any(a.name == RECORDER_MODULE for a in node.names)
+        if isinstance(node, ast.ImportFrom) and not node.level:
+            return node.module == RECORDER_MODULE or (
+                node.module == "app.forecast" and any(a.name == "recorder" for a in node.names)
+            )
+        return False
+
+    found: list[str] = []
+    if not any(names_recorder(node) for node in tree.body):
+        found.append("no module-level import of app.forecast.recorder")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            found += [
+                f"recorder imported inside {node.name}()"
+                for inner in ast.walk(node)
+                if isinstance(inner, ast.Import | ast.ImportFrom) and names_recorder(inner)
+            ]
+    return found
+
+
+@pytest.mark.parametrize(
+    ("source", "ok"),
+    [
+        pytest.param("from app.forecast.recorder import record_forecasts\n", True, id="from"),
+        pytest.param("from app.forecast import recorder\n", True, id="package-from"),
+        pytest.param("import app.forecast.recorder\n", True, id="plain"),
+        pytest.param("import json\n", False, id="absent"),
+        pytest.param(
+            "def job():\n    from app.forecast.recorder import record_forecasts\n",
+            False,
+            id="in-function",
+        ),
+        pytest.param(
+            "from app.forecast.recorder import record_forecasts\n"
+            "def job():\n    from app.forecast import recorder\n",
+            False,
+            id="also-in-function",
+        ),
+        pytest.param(
+            "if True:\n    from app.forecast.recorder import record_forecasts\n",
+            False,
+            id="nested-block",
+        ),
+    ],
+)
+def test_the_module_level_recorder_import_scan_has_teeth(source: str, ok: bool) -> None:
+    assert (_module_level_recorder_import_violations(source) == []) is ok
+
+
+def test_the_scheduler_is_not_wired_yet_so_the_scan_waits() -> None:
+    # The wiring PR asserts _module_level_recorder_import_violations(scheduler) == [].
+    source = (APP_ROOT / "scheduler.py").read_text(encoding="utf-8")
+    assert _module_level_recorder_import_violations(source) == [
+        "no module-level import of app.forecast.recorder"
+    ]
 
 
 # --- K-10, K-4, S-4a call sites -----------------------------------------------------------------

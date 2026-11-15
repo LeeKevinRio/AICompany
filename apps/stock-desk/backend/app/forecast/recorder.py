@@ -47,12 +47,20 @@ and the D-7 harness only (K-11).
 The rule sets and definitions are the ones ``app.forecast.definitions``
 returns for the recording claims, after CG-2 proved their hashes equal the
 registered ones (so they are the registered rule bytes and definition).
-Nothing here logs: no output of this module carries a label (D-4 point 3).
+
+Provenance is taken once, at import (supplement 3 (revised) point 2): every
+run stamps :data:`LOADED`. Each run also recomputes the digest and the runtime
+of the sources on disk; when they differ from :data:`LOADED` the run logs one
+WARNING line (:data:`DISK_DIFFERS_WARNING`, no label, no value) and carries on
+unchanged -- the program it runs is still the loaded one, so the loaded
+provenance is the true one until the scheduler process is restarted. That is
+the only log line of this module: no output here carries a label (D-4 point 3).
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import platform
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -195,6 +203,32 @@ def load_provenance(app_root: Path = APP_ROOT, lock_file: Path = LOCK_FILE) -> P
 #: ``app.outlook`` and ``app.dirdef`` modules it runs were imported.
 LOADED: Provenance = load_provenance()
 
+logger = logging.getLogger(__name__)
+
+#: The one WARNING line of a run whose sources on disk are not the loaded ones.
+DISK_DIFFERS_WARNING: Final = (
+    "forecast_record: the sources or the runtime on disk differ from the loaded program;"
+    " this run keeps the loaded provenance; restart the scheduler process to load them"
+)
+
+
+def warn_if_disk_differs() -> bool:
+    """Recompute the on-disk digest and runtime; log one WARNING when they differ from LOADED.
+
+    Returns whether it warned. A source tree that cannot be read counts as
+    different. Nothing else changes: the run stamps :data:`LOADED` either way.
+    """
+    try:
+        same = (
+            code_digest(APP_ROOT) == LOADED.code_digest
+            and canonical_json(runtime_info(LOCK_FILE)) == LOADED.runtime_json
+        )
+    except OSError:
+        same = False
+    if not same:
+        logger.warning(DISK_DIFFERS_WARNING)
+    return not same
+
 
 # --- the entry ----------------------------------------------------------------------------
 
@@ -255,6 +289,7 @@ def record_forecasts[R](
     run_id = store.begin_run(
         code_commit=LOADED.code_commit, code_digest=LOADED.code_digest, runtime=LOADED.runtime
     )
+    warn_if_disk_differs()
     progress = _Progress()
     try:
         stop = _run(store, run_id, load_benchmark, resolver, progress)
