@@ -33,7 +33,11 @@
 Every run that got its ``forecast_run`` row ends with one ``forecast_run_end``
 row: ``ok``, ``no_new_session``, ``inputs_not_ready``, ``gate_closed`` (CG-2:
 ``WriteGateClosedError``; D-5 point 6: ``SemanticsChanged``) or ``error`` (any
-other ``Exception``); ``error_class`` only through ``exception_class_name``. A
+other ``Exception``); ``error_class`` only through ``exception_class_name``.
+In the D-5 point 6 recomputation a ledger-side failure (reading or parsing a
+stored record or snapshot) is ``error`` and a program-side one (the current
+program cannot recompute a record, or its values fail validation) is
+``SemanticsChanged`` (supplement 3 (revised) point 8; :func:`_reproduces`). A
 ``BaseException`` that is not an ``Exception`` (interruption, ``SystemExit``)
 leaves no end row: no end row means the run was interrupted (D-2 point 2).
 
@@ -100,6 +104,7 @@ from app.forecast.store import (
     SCOPE_KIND,
     ClaimRow,
     ForecastStore,
+    ForecastStoreError,
     Label,
     RecordInput,
     RunOutcome,
@@ -484,22 +489,41 @@ def check_semantics(
 
 
 def _reproduces(store: ForecastStore, recording: RecordingClaim, row: Mapping[str, object]) -> bool:
-    """Whether recomputing ``row`` from its stored snapshot gives the same bytes."""
+    """Whether recomputing ``row`` from its stored snapshot gives the same bytes.
+
+    Failures are split by where they come from (supplement 3 (revised) point 8):
+
+    * the ledger side -- reading or parsing the stored record or its snapshot
+      (``store.snapshot``, :func:`_market_snapshot`, the registry and snapshot
+      reads of ``expected_record_columns``, which raise
+      ``LedgerInconsistentError`` or a ``sqlite3`` error) -- propagates, so the
+      run ends ``error`` with that exception's class;
+    * the program side -- the current program failing to recompute the
+      record, or its recomputed values failing the store's validation
+      (``ForecastStoreError``) -- is a record that does not reproduce: the
+      caller ends the run ``gate_closed`` with ``SemanticsChanged``.
+    """
     stored = store.snapshot(str(row["input_series_sha256"]))
+    market = _market_snapshot(stored)
     try:
         outcome = compute_outlook(
-            _market_snapshot(stored),
+            market,
             ruleset=recording.ruleset,
             definition=recording.definition,
             horizon=recording.claim.horizon,
         )
+        content = _record_content(outcome)
+    except Exception:
+        # The current program cannot compute what it once wrote (a pure step).
+        return False
+    try:
         expected = store.expected_record_columns(
             claim_id=recording.claim.claim_id,
-            **_record_content(outcome),
+            **content,
             input_series_sha256=stored.content_sha256,
         )
-    except (ValueError, ArithmeticError):
-        # The current program refuses or cannot compute what it once wrote.
+    except ForecastStoreError:
+        # The current program's values fail the write validation.
         return False
     return expected["data_as_of"] == row["data_as_of"] and all(
         expected[name] == row[name] for name in RECOMPUTED_COLUMNS

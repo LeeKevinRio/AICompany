@@ -56,7 +56,7 @@ from app.forecast.recorder import (
     load_provenance,
     record_forecasts,
 )
-from app.forecast.store import ForecastStore, ForecastStoreError, SnapshotInput
+from app.forecast.store import ForecastStore, ForecastStoreError, SnapshotInput, StoredSnapshot
 from app.outlook import engine
 from app.outlook.inputs import late_cutoff_at
 from app.services.index import IndexServiceResolver, LoadedBenchmark, load_market_benchmark
@@ -1021,6 +1021,95 @@ def test_a_ledger_read_failure_during_the_recomputation_is_an_error(
     monkeypatch.setattr(desk.store, "snapshot", broken)
     result = desk.run(at(NEXT, 22, 10))
     assert (result.outcome, result.error_class) == ("error", "OperationalError")
+
+
+# --- supplement 3 (revised) point 8: ledger-side vs program-side failures (f3) -----------------
+
+
+def _under_program_b(desk: Desk, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert desk.run(EVENING, series(until=T)).outcome == "ok"
+    _as_loaded(monkeypatch, PROGRAM_B)
+
+
+@pytest.mark.parametrize("case", ["unparsable-bar", "registry-row-gone", "bars-json-unreadable"])
+def test_f3_a_ledger_side_failure_is_an_error_with_its_class(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    _under_program_b(desk, monkeypatch)
+    if case == "unparsable-bar":
+        real = desk.store.snapshot
+
+        def unparsable(content_sha256: str) -> StoredSnapshot:
+            stored = real(content_sha256)
+            bars = ({**stored.bars[0], "open": "not a number"}, *stored.bars[1:])
+            return replace(stored, bars=bars)
+
+        monkeypatch.setattr(desk.store, "snapshot", unparsable)
+        expected = "InvalidOperation"
+    elif case == "registry-row-gone":
+
+        def vanishing(conn: sqlite3.Connection, claim_id: str) -> None:
+            return None
+
+        monkeypatch.setattr(ForecastStore, "_claim", staticmethod(vanishing))
+        expected = "LedgerInconsistentError"
+    else:
+
+        def unreadable(text: str) -> Any:
+            raise KeyError("as_of")
+
+        monkeypatch.setattr(store_module, "_stored_bars", unreadable)
+        expected = "LedgerInconsistentError"
+    result = desk.run(at(NEXT, 22, 10))
+    assert (result.outcome, result.error_class) == ("error", expected)
+    assert result.records_written == 0
+    assert _end(desk, result.run_id)["error_class"] == expected
+    assert desk.count("forecast_record") == 2
+
+
+@pytest.mark.parametrize("case", ["refused", "program-bug", "invalid-values"])
+def test_f3_a_program_side_failure_closes_the_gate_as_semantics_changed(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    _under_program_b(desk, monkeypatch)
+    if case in {"refused", "program-bug"}:
+        exc: Exception = (
+            engine.OutlookInvariantError("refused") if case == "refused" else TypeError("bug")
+        )
+
+        def failing(*args: Any, **kwargs: Any) -> Any:
+            raise exc
+
+        monkeypatch.setattr(recorder_module, "compute_outlook", failing)
+    else:
+        real = recorder_module._record_content
+
+        def invalid(outcome: Any) -> Any:
+            return {**real(outcome), "label": "insufficient", "missing": ()}
+
+        monkeypatch.setattr(recorder_module, "_record_content", invalid)
+    result = desk.run(at(NEXT, 22, 10))
+    assert (result.outcome, result.error_class) == ("gate_closed", "SemanticsChanged")
+    assert _end(desk, result.run_id)["error_class"] == "SemanticsChanged"
+    assert desk.count("forecast_record") == 2
+
+
+def test_f3_both_kinds_leave_the_next_run_to_recompute(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Neither an error nor a gate_closed run is a passed run (point 1), so the
+    # program B run after them recomputes again.
+    _under_program_b(desk, monkeypatch)
+
+    def broken(content_sha256: str) -> Any:
+        raise sqlite3.OperationalError("database is locked")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(desk.store, "snapshot", broken)
+        assert desk.run(at(NEXT, 22, 10)).outcome == "error"
+    recomputed = _count_recomputes(monkeypatch)
+    assert desk.run(at(NEXT, 23, 10)).outcome == "ok"
+    assert len(recomputed) == 2
 
 
 def test_the_check_compares_with_the_last_run_that_passed(

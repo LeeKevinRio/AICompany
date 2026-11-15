@@ -1148,11 +1148,14 @@ def test_expected_columns_are_the_stored_content_columns(ledger: Ledger) -> None
 
 
 def test_expected_columns_refuse_what_the_write_refuses(ledger: Ledger) -> None:
+    # Supplement 3 (revised) point 8: the caller's content is a ForecastStoreError,
+    # what the ledger cannot give is a LedgerInconsistentError.
     series = ledger.snapshot(T)
     store = ledger.store
-    with pytest.raises(ForecastStoreError, match="claim_id"):
+    with pytest.raises(LedgerInconsistentError, match="claim_id"):
         store.expected_record_columns(**_content(ledger, series, claim_id="nope"))
-    with pytest.raises(ForecastStoreError, match="not a stored snapshot"):
+    with pytest.raises(LedgerInconsistentError, match="not a stored snapshot"):
         store.expected_record_columns(**_content(ledger, "f" * 64))
     with pytest.raises(ForecastStoreError, match="insufficient"):
         store.expected_record_columns(**_content(ledger, series, label="insufficient"))
+    assert not issubclass(LedgerInconsistentError, ValueError)

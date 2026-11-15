@@ -755,6 +755,11 @@ class ForecastStore:
         columns outside ``content_hash`` (``forecast_id``, ``run_id``,
         ``created_at``, ``late``). The recorder's D-5 point 6 recomputation
         compares these with the stored rows.
+
+        A content that fails validation raises ``ForecastStoreError`` (the
+        caller's values); a registry or snapshot that cannot be read or parsed
+        raises ``LedgerInconsistentError`` (the ledger's rows; supplement 3
+        (revised) point 8).
         """
         content = self._record_content(
             data_as_of=data_as_of,
@@ -770,14 +775,21 @@ class ForecastStore:
         with self._read() as conn:
             claim = self._claim(conn, claim_id)
             if claim is None or claim.kind != CLAIM_KIND:
-                raise ForecastStoreError("claim_id is not a registered forward claim")
+                raise LedgerInconsistentError("claim_id is not a registered forward claim")
             row = conn.execute(
                 "SELECT bars_json FROM forecast_input_series WHERE content_sha256 = ?",
                 (input_series_sha256,),
             ).fetchone()
         if row is None:
-            raise ForecastStoreError("input_series_sha256 is not a stored snapshot")
-        return _record_columns(claim, content, _max_fetched_at(_stored_bars(str(row[0]))))
+            raise LedgerInconsistentError("input_series_sha256 is not a stored snapshot")
+        try:
+            bars = _stored_bars(str(row[0]))
+            max_fetched_at = _max_fetched_at(bars)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise LedgerInconsistentError(
+                f"stored bars_json cannot be read ({type(exc).__name__})"
+            ) from None
+        return _record_columns(claim, content, max_fetched_at)
 
     @classmethod
     def _record_content(
