@@ -41,6 +41,8 @@ The missing list holds root causes only, in this order, each at most once:
 unusable sessions in ``detail``), ``E-VOL-SHORT`` / ``E-VOL-DEGENERATE``
 (``sigma_d``), ``E-PIT-UNVERIFIED``. "Missing is non-empty iff the label is
 insufficient" is checked on every result and a violation raises.
+``MISSING_CODES`` is that list of codes, defined once; every missing item is
+built from one of its named constants, never a string literal.
 
 ``W`` and the per-rule hits are written to ``evidence`` only, as a Fraction
 string and booleans; they are not a strength or a confidence (PA-3).
@@ -86,7 +88,16 @@ from app.outlook.inputs import (
     snapshot_view,
 )
 from app.outlook.missing import MissingItem
-from app.outlook.volatility import SigmaEstimate, log_return, sigma_at, usable, window_log_returns
+from app.outlook.volatility import (
+    E_VOL_DEGENERATE,
+    E_VOL_SHORT,
+    SigmaEstimate,
+    VolatilityMissingCode,
+    log_return,
+    sigma_at,
+    usable,
+    window_log_returns,
+)
 
 Label = Literal["bullish", "range", "bearish", "insufficient"]
 RangeBasis = Literal["range_evidence", "conflicting_evidence"]
@@ -97,6 +108,17 @@ E_PIT_UNVERIFIED: Final = "E-PIT-UNVERIFIED"
 #: ``item`` of the ``E-PIT-UNVERIFIED`` missing entry (freeze pack FX-F5 left the
 #: name to tech-architect; ADR-0030 supplement 2 point 4 fixes it, defined once).
 PIT_ITEM: Final = "inputs_max_fetched_at"
+#: Every code the missing list may hold (freeze pack 2.5 point 4), in the table's order:
+#: four rows, five codes -- row 3 is ``E-VOL-SHORT`` or ``E-VOL-DEGENERATE`` (one rank,
+#: item ``sigma_d``, mutually exclusive). The one definition in ``app/`` (tech-architect,
+#: ADR-0030 supplement 5 point 3 (c)); codes of other outlooks, such as the basket's
+#: ``E-ADJ-COVERAGE``, are not in it.
+MISSING_CODES: Final[tuple[str, ...]] = (
+    E_BARS_SHORT,
+    E_PRICE_UNUSABLE,
+    *get_args(VolatilityMissingCode),
+    E_PIT_UNVERIFIED,
+)
 
 #: Feature window lengths (freeze pack 2.3), keyed by field.
 _MEAN_WINDOWS: Final[Mapping[str, int]] = {"ma20": 20, "ma60": 60}
@@ -379,20 +401,20 @@ def missing_items(
             _item(E_PRICE_UNUSABLE, "index_close", as_of=as_of, detail={"sessions": sessions})
         )
     sigma = features.sigma
-    if sigma.missing_code == "E-VOL-SHORT":
+    if sigma.missing_code == E_VOL_SHORT:
         found.append(
             _item(
-                sigma.missing_code,
+                E_VOL_SHORT,
                 "sigma_d",
                 as_of=as_of,
                 required=str(definition.SIGMA_MIN_VALID),
                 available=str(sigma.valid_returns),
             )
         )
-    elif sigma.missing_code == "E-VOL-DEGENERATE":
+    elif sigma.missing_code == E_VOL_DEGENERATE:
         found.append(
             _item(
-                sigma.missing_code,
+                E_VOL_DEGENERATE,
                 "sigma_d",
                 as_of=as_of,
                 required=repr(definition.SIGMA_FLOOR),

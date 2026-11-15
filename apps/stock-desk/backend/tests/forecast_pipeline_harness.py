@@ -31,7 +31,8 @@ What one run does (D-7 points 2-6):
    could not have had; the answer's ``reason`` is ``synthetic_timestamps``
    (D-7 point 6: the stamps are injected, not the source's);
 5. checks, record by record (:func:`record_failures`): ``missing`` is
-   non-empty exactly when the label is ``insufficient``; for every record
+   non-empty exactly when the label is ``insufficient``, and every code in it
+   is one of ``app.outlook.engine.MISSING_CODES``; for every record
    that is not ``insufficient`` the placeholder's baseline (P-0: B6, P-1: B8)
    is available and the model label equals it; where a provisional
    comparison exists, the model and that baseline match or not alike; every
@@ -85,6 +86,7 @@ from app.forecast.recorder import RunResult, record_forecasts
 from app.forecast.schema import create_schema
 from app.forecast.store import ForecastStore, system_clock
 from app.outlook.baselines import UNAVAILABLE
+from app.outlook.engine import MISSING_CODES
 from app.outlook.inputs import SERIES_SYMBOL
 from tests.outlook_helpers import TAIPEI
 
@@ -343,6 +345,7 @@ FailureKind = Literal[
     "run_not_ok",
     "record_count",
     "missing_not_iff_insufficient",
+    "missing_code_not_in_set",
     "baseline_unavailable",
     "label_differs",
     "provisional_match_differs",
@@ -478,6 +481,9 @@ def record_failures(row: Mapping[str, object], *, baseline: str) -> list[Failure
     * ``missing_not_iff_insufficient`` -- ``missing`` is non-empty while the
       label is not ``insufficient``, or the other way round (freeze pack 2.5
       invariant, both directions);
+    * ``missing_code_not_in_set`` -- a missing item's code is not one of
+      ``app.outlook.engine.MISSING_CODES`` (2.5 point 4: four rows, five codes;
+      the one definition, imported, not copied);
     * ``baseline_unavailable`` -- the label is not ``insufficient`` and the
       placeholder's baseline is ``unavailable``: judged first, never skipped,
       never reported as a differing label (V32-06: B6 is always available;
@@ -486,8 +492,11 @@ def record_failures(row: Mapping[str, object], *, baseline: str) -> list[Failure
     """
     found: list[FailureKind] = []
     insufficient = row["label"] == "insufficient"
-    if insufficient != (json.loads(str(row["missing_json"])) != []):
+    missing = json.loads(str(row["missing_json"]))
+    if insufficient != (missing != []):
         found.append("missing_not_iff_insufficient")
+    if any(item.get("code") not in MISSING_CODES for item in missing):
+        found.append("missing_code_not_in_set")
     if not insufficient:
         stored = json.loads(str(row["baseline_predictions_json"]))[baseline]
         prediction = scoring.BaselinePrediction.from_stored(stored)

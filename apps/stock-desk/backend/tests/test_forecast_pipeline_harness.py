@@ -49,6 +49,8 @@ from app.dirdef import registry
 from app.forecast import claims, definitions, report
 from app.forecast.recorder import record_forecasts
 from app.forecast.store import ForecastStore, system_clock
+from app.outlook.basket import E_ADJ_COVERAGE
+from app.outlook.engine import MISSING_CODES
 from tests import forecast_pipeline_harness as harness
 from tests.forecast_pipeline_harness import (
     HEADER,
@@ -66,7 +68,7 @@ from tests.forecast_pipeline_harness import (
 )
 from tests.import_graph import APP_ROOT
 from tests.outlook_helpers import TAIPEI, definition
-from tests.test_forecast_report import LABEL_WORDS, N_HAT_NOTE, d4_violations
+from tests.test_forecast_report import LABEL_WORDS, N_HAT_NOTE, _tamper, d4_violations
 
 #: A fixed "actual" clock for the deterministic runs: Monday 2026-11-16, 09:00 Taipei.
 FIXED_NOW = datetime(2026, 11, 16, 9, tzinfo=TAIPEI)
@@ -230,6 +232,24 @@ ITEM = {"code": "E-BARS-SHORT", "item": "index_bars"}
         pytest.param(
             _row("bullish", [], B8={"label": "bearish"}), "B8", ["label_differs"], id="differs"
         ),
+        pytest.param(
+            _row("insufficient", [{"code": E_ADJ_COVERAGE, "item": "basket"}]),
+            "B6",
+            ["missing_code_not_in_set"],
+            id="basket-code-on-a-market-record",
+        ),
+        pytest.param(
+            _row("insufficient", [ITEM, {"code": "E-NOT-A-CODE", "item": "x"}]),
+            "B6",
+            ["missing_code_not_in_set"],
+            id="one-unknown-code-among-known",
+        ),
+        pytest.param(
+            _row("insufficient", [{"code": code, "item": "x"} for code in MISSING_CODES]),
+            "B6",
+            [],
+            id="every-code-of-the-set",
+        ),
     ],
 )
 def test_record_failures(row: dict[str, object], baseline: str, kinds: list[str]) -> None:
@@ -250,6 +270,34 @@ def test_vacuous_failures(compared: dict[int, bool], where: list[str]) -> None:
     # The place is the rule set and the horizon only: no count is printed (D-4 point 5).
     assert [f.where for f in failures] == where
     assert {f.kind for f in failures} <= {"vacuous_equality"}
+
+
+def test_a_missing_code_outside_the_set_fails_the_run(tmp_path: Path) -> None:
+    # Negative fixture (supplement 5 S-13a): an insufficient record carrying E-ADJ-COVERAGE.
+    bars = synthetic_series(LAST, 360, returns=lambda j: 0.0)  # every record insufficient
+    first = _run(tmp_path, P0, bars=bars)
+    assert "missing_code_not_in_set" not in first.failure_kinds
+    ledger = tmp_path / "work" / harness.LEDGER_NAME
+    row = _records(tmp_path)[0]
+    missing = json.loads(str(row["missing_json"]))
+    assert missing and all(item["code"] in MISSING_CODES for item in missing)
+    text = str(row["missing_json"]).replace(f'"{missing[0]["code"]}"', f'"{E_ADJ_COVERAGE}"')
+    _tamper(
+        ledger,
+        "forecast_record",
+        "UPDATE forecast_record SET missing_json = ? WHERE forecast_id = ?",
+        (text, row["forecast_id"]),
+    )
+    again = AcceptanceResult(rules=P0.name, window=first.window)
+    harness._check(ForecastStore(ledger), again, P0, FIXED_NOW)
+    assert not again.passed
+    assert "missing_code_not_in_set" in again.failure_kinds
+    (failure,) = [f for f in again.failures if f.kind == "missing_code_not_in_set"]
+    assert failure.where == f"{row['claim_id']} T={row['data_as_of']}"
+    summary = render_summary(again)
+    assert any(
+        line.startswith("失敗種類：") and "missing_code_not_in_set" in line for line in summary
+    )
 
 
 def _vacuous_where(result: AcceptanceResult) -> list[str]:
