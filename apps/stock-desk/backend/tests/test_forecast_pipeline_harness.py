@@ -13,6 +13,13 @@ Covered:
   record's model label equal to its baseline (P-0: B6, P-1: B8), the
   provisional match of the two alike, every record consistent under
   ``report verify``;
+* the harness's own failure kinds (quant point 1 (a)-(c); ADR-0030
+  supplement 5 point 3 (a)), each with positive and negative cases:
+  ``vacuous_equality`` when a rule set and horizon has no record that is
+  both evaluable and compared (every record insufficient, one combination
+  insufficient, or evaluable records without a comparison),
+  ``baseline_unavailable`` apart from ``label_differs``, and
+  ``missing_not_iff_insufficient`` in both directions;
 * the synthetic fixtures of D-7 point 4: sigma degenerate, insufficient
   evidence (bars short), a short snapshot, and the ``late`` boundary
   (23:59:59.999999 and 00:00:00);
@@ -30,6 +37,7 @@ import ast
 import inspect
 import json
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from types import MappingProxyType
@@ -170,9 +178,168 @@ def test_a_differing_model_label_fails_the_run(tmp_path: Path) -> None:
     wrong = PlaceholderRules(name="P-0", baseline="B8", template=P0.template)
     result = _run(tmp_path, wrong)
     assert not result.passed
-    assert any("model and B8 differ" in failure for failure in result.failures)
-    assert not any(word in failure for failure in result.failures for word in LABEL_WORDS)
+    assert "label_differs" in result.failure_kinds
+    assert "baseline_unavailable" not in result.failure_kinds
+    assert not any(word in str(failure) for failure in result.failures for word in LABEL_WORDS)
     assert "失敗" in "\n".join(render_summary(result))
+
+
+# --- quant point 1 (a)-(c): the harness's own failure kinds --------------------------------------
+
+
+def _row(label: str, missing: list[object], **baselines: object) -> dict[str, object]:
+    stored = {"B1": {"label": "range"}, "B2": {"label": "range"}, "B6": {"label": "range"}}
+    stored["B8"] = {"label": "range"}
+    stored.update(baselines)  # type: ignore[arg-type]
+    return {
+        "label": label,
+        "missing_json": json.dumps(missing),
+        "baseline_predictions_json": json.dumps(stored),
+    }
+
+
+ITEM = {"code": "E-BARS-SHORT", "item": "index_bars"}
+
+
+@pytest.mark.parametrize(
+    ("row", "baseline", "kinds"),
+    [
+        pytest.param(_row("insufficient", [ITEM]), "B6", [], id="insufficient-with-missing"),
+        pytest.param(_row("range", []), "B6", [], id="label-equal-no-missing"),
+        pytest.param(
+            _row("insufficient", []),
+            "B6",
+            ["missing_not_iff_insufficient"],
+            id="insufficient-without-missing",
+        ),
+        pytest.param(
+            _row("range", [ITEM]), "B6", ["missing_not_iff_insufficient"], id="missing-on-a-label"
+        ),
+        pytest.param(
+            _row("bullish", [], B8={"label": "unavailable", "reason": "E-BARS-SHORT"}),
+            "B8",
+            ["baseline_unavailable"],
+            id="baseline-unavailable-not-a-differing-label",
+        ),
+        pytest.param(
+            _row("insufficient", [ITEM], B8={"label": "unavailable", "reason": "E-BARS-SHORT"}),
+            "B8",
+            [],
+            id="unavailable-baseline-on-an-insufficient-record",
+        ),
+        pytest.param(
+            _row("bullish", [], B8={"label": "bearish"}), "B8", ["label_differs"], id="differs"
+        ),
+    ],
+)
+def test_record_failures(row: dict[str, object], baseline: str, kinds: list[str]) -> None:
+    assert harness.record_failures(row, baseline=baseline) == kinds
+
+
+@pytest.mark.parametrize(
+    ("compared", "where"),
+    [
+        pytest.param({3: True, 5: True}, [], id="both"),
+        pytest.param({3: True}, ["P-0 h5"], id="h5-none"),
+        pytest.param({3: True, 5: False}, ["P-0 h5"], id="h5-false"),
+        pytest.param({}, ["P-0 h3", "P-0 h5"], id="none"),
+    ],
+)
+def test_vacuous_failures(compared: dict[int, bool], where: list[str]) -> None:
+    failures = harness.vacuous_failures(P0, compared)
+    # The place is the rule set and the horizon only: no count is printed (D-4 point 5).
+    assert [f.where for f in failures] == where
+    assert {f.kind for f in failures} <= {"vacuous_equality"}
+
+
+def _vacuous_where(result: AcceptanceResult) -> list[str]:
+    return [f.where for f in result.failures if f.kind == "vacuous_equality"]
+
+
+def test_an_unavailable_baseline_is_its_own_failure_kind(tmp_path: Path) -> None:
+    # Negative case: P-1's rules checked against B2, which a 130-bar series cannot vote for.
+    wrong = PlaceholderRules(name="P-1", baseline="B2", template=P1.template)
+    result = _run(tmp_path, wrong, bars=synthetic_series(LAST, 130))
+    assert not result.passed
+    assert result.labels_checked == 42
+    assert set(result.failure_kinds) == {"baseline_unavailable", "vacuous_equality"}
+    assert "label_differs" not in result.failure_kinds
+
+
+def _pit_unverified(
+    bars: Sequence[PriceBar], late: set[date]
+) -> tuple[list[PriceBar], Callable[[date], datetime]]:
+    """Bars of the ``late`` sessions stamped 00:30 the next day, and runs at 01:00 then.
+
+    So those sessions' records are ``insufficient`` with ``E-PIT-UNVERIFIED``
+    (freeze pack 2.5 (0)); the other sessions run at 22:10 as usual.
+    """
+    moved = [
+        bar.model_copy(
+            update={"as_of": datetime.combine(bar.date + timedelta(days=1), time(0, 30), TAIPEI)}
+        )
+        if bar.date in late
+        else bar
+        for bar in bars
+    ]
+
+    def when(day: date) -> datetime:
+        if day in late:
+            return datetime.combine(day + timedelta(days=1), time(1), TAIPEI)
+        return datetime.combine(day, harness.RUN_TIME, TAIPEI)
+
+    return moved, when
+
+
+def _window(bars: Sequence[PriceBar]) -> tuple[date, ...]:
+    return acceptance_window([b.date for b in bars], report.taipei_date(FIXED_NOW))
+
+
+def test_vacuous_equality_when_every_record_is_insufficient(tmp_path: Path) -> None:
+    # Every session's fetched_at is after its cutoff: no record of any combination is evaluable.
+    bars = synthetic_series(LAST, 360)
+    moved, when = _pit_unverified(bars, set(_window(bars)))
+    result = _run(tmp_path, P0, bars=moved, run_time=when)
+    assert result.records == 42 and result.insufficient == 42
+    assert "E-PIT-UNVERIFIED" in _missing_codes(tmp_path)
+    assert result.failure_kinds == ("vacuous_equality",)
+    assert _vacuous_where(result) == ["P-0 h3", "P-0 h5"]
+    assert "失敗種類：vacuous_equality" in render_summary(result)
+
+
+def test_vacuous_equality_when_no_evaluable_record_has_a_comparison(tmp_path: Path) -> None:
+    # ADR-0030 supplement 5 point 3 (a): only the last five sessions are evaluable. h3 records
+    # among them still have T + 3 inside the window; no h5 record has T + 5 there.
+    bars = synthetic_series(LAST, 360)
+    window = _window(bars)
+    moved, when = _pit_unverified(bars, set(window[:-5]))
+    result = _run(tmp_path, P0, bars=moved, run_time=when)
+    assert result.labels_checked == 10 and result.compared > 0
+    assert result.failure_kinds == ("vacuous_equality",)
+    assert _vacuous_where(result) == ["P-0 h5"]
+
+
+@dataclass(frozen=True)
+class _SplitRules(PlaceholderRules):
+    """P-0 at h3; at h5 a rule reading ``vol_ratio_20_120`` (N_req 121)."""
+
+    def rule_bytes(self, horizon: int) -> bytes:
+        data = super().rule_bytes(horizon)
+        if horizon == 5:
+            data = data.replace(b"field: close", b"field: vol_ratio_20_120")
+        return data
+
+
+def test_vacuous_equality_names_the_one_combination_left_insufficient(tmp_path: Path) -> None:
+    # 110 bars: enough for h3's R = 61, never for h5's R = 121 -- only P-0 h5 is all insufficient.
+    split = _SplitRules(name="P-0", baseline="B6", template=P0.template)
+    result = _run(tmp_path, split, bars=synthetic_series(LAST, 110))
+    rows = _records(tmp_path)
+    h5 = [r for r in rows if "|h5|" in str(r["claim_id"])]
+    assert h5 and all(r["label"] == "insufficient" for r in h5)
+    assert all(r["label"] != "insufficient" for r in rows if r not in h5)
+    assert result.failure_kinds == ("vacuous_equality",)
+    assert _vacuous_where(result) == ["P-0 h5"]
 
 
 # --- the window (D-7 point 6) -----------------------------------------------------------------
@@ -218,8 +385,10 @@ def _missing_codes(root: Path) -> set[str]:
 def test_fixture_sigma_degenerate(tmp_path: Path) -> None:
     bars = synthetic_series(LAST, 360, returns=lambda j: 0.0)  # every close equal
     result = _run(tmp_path, P0, bars=bars)
-    assert result.passed and result.records == 42
+    assert result.records == 42
     assert result.insufficient == 42 and result.labels_checked == 0
+    # Nothing was evaluable, so the equalities held over nothing (quant point 1 (a)).
+    assert result.failure_kinds == ("vacuous_equality",)
     assert "E-VOL-DEGENERATE" in _missing_codes(tmp_path)
     rows = _records(tmp_path)
     assert all(json.loads(str(r["band_def"]))["sigma_d"] is None for r in rows)
@@ -228,7 +397,8 @@ def test_fixture_sigma_degenerate(tmp_path: Path) -> None:
 
 def test_fixture_insufficient_evidence_with_short_bars(tmp_path: Path) -> None:
     result = _run(tmp_path, P1, bars=synthetic_series(LAST, 45))
-    assert result.passed and result.records == 42 and result.insufficient == 42
+    assert result.records == 42 and result.insufficient == 42
+    assert result.failure_kinds == ("vacuous_equality",)
     assert _missing_codes(tmp_path) & {"E-BARS-SHORT", "E-VOL-SHORT"}
 
 

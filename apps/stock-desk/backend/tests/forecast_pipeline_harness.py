@@ -30,11 +30,16 @@ What one run does (D-7 points 2-6):
    or before the store clock, so it can answer nothing a fetch at that time
    could not have had; the answer's ``reason`` is ``synthetic_timestamps``
    (D-7 point 6: the stamps are injected, not the source's);
-5. checks, record by record: the model label equals the placeholder's
-   baseline (P-0: B6, P-1: B8) for every record that is not ``insufficient``,
-   an ``insufficient`` record carries a missing item; where a provisional
+5. checks, record by record (:func:`record_failures`): ``missing`` is
+   non-empty exactly when the label is ``insufficient``; for every record
+   that is not ``insufficient`` the placeholder's baseline (P-0: B6, P-1: B8)
+   is available and the model label equals it; where a provisional
    comparison exists, the model and that baseline match or not alike; every
-   record passes ``report verify`` (D-5 point 3); every run ended ``ok``;
+   record passes ``report verify`` (D-5 point 3); every run ended ``ok``.
+   Then, per horizon (:func:`vacuous_failures`), at least one record that is
+   not ``insufficient`` has a provisional comparison -- otherwise the
+   equalities held over nothing (``vacuous_equality``). Each failure is a
+   :class:`Failure`: a kind and a place, never a label or a count;
 6. renders the output: the two fixed lines of D-7 point 5 first
    (:data:`HEADER`), then the report's own ``records``, ``compare`` (between
    its fixed banners), ``verify`` and ``status`` sections, so every D-4
@@ -43,8 +48,8 @@ What one run does (D-7 points 2-6):
    injects one (D-7 point 6).
 
 :func:`render_summary` is what may leave the machine that ran the harness: the
-pass / fail line, counts of runs and records, and hashes -- no label, no
-comparison, no realised value.
+pass / fail line, the failure kinds (no count), counts of runs and records
+written, and hashes -- no label, no comparison, no realised value.
 
 PIT, finality and ``late`` are verified with synthetic fixtures only (D-7
 point 6): :func:`synthetic_series` builds deterministic closes on consecutive
@@ -65,7 +70,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from app.data.interface import DataStatus, Market, PriceBar
 from app.dirdef.definition import (
@@ -79,6 +84,7 @@ from app.forecast.claims import BACKEND_DIR
 from app.forecast.recorder import RunResult, record_forecasts
 from app.forecast.schema import create_schema
 from app.forecast.store import ForecastStore, system_clock
+from app.outlook.baselines import UNAVAILABLE
 from app.outlook.inputs import SERIES_SYMBOL
 from tests.outlook_helpers import TAIPEI
 
@@ -333,9 +339,38 @@ def _final_sessions(bars: Sequence[PriceBar]) -> list[date]:
 # --- the run ------------------------------------------------------------------------------
 
 
+FailureKind = Literal[
+    "run_not_ok",
+    "record_count",
+    "missing_not_iff_insufficient",
+    "baseline_unavailable",
+    "label_differs",
+    "provisional_match_differs",
+    "verify_inconsistent",
+    "vacuous_equality",
+]
+
+
+@dataclass(frozen=True)
+class Failure:
+    """One failed check: its kind, and where -- a run, a record, or a rule set and horizon.
+
+    ``where`` never holds a label, a comparison or a count (D-4 point 5).
+    """
+
+    kind: FailureKind
+    where: str
+
+    def __str__(self) -> str:
+        return f"{self.kind}: {self.where}"
+
+
 @dataclass
 class AcceptanceResult:
-    """What one harness run found; :func:`render_summary` is its shareable part."""
+    """What one harness run found; :func:`render_summary` is its shareable part.
+
+    The counts are for the tests' own assertions; none of them is printed.
+    """
 
     rules: str
     window: tuple[date, ...]
@@ -345,13 +380,18 @@ class AcceptanceResult:
     labels_checked: int = 0
     compared: int = 0
     verified: int = 0
-    failures: list[str] = field(default_factory=list)
+    failures: list[Failure] = field(default_factory=list)
     output: list[str] = field(default_factory=list)
     ledger_sha256: str = ""
 
     @property
     def passed(self) -> bool:
         return not self.failures
+
+    @property
+    def failure_kinds(self) -> tuple[FailureKind, ...]:
+        """The distinct kinds of :attr:`failures`, sorted (no count)."""
+        return tuple(sorted({failure.kind for failure in self.failures}))
 
     @property
     def output_sha256(self) -> str:
@@ -435,52 +475,93 @@ def _recording(store: ForecastStore) -> list[Any]:
     return [recording[key] for key in sorted(recording)]
 
 
+def record_failures(row: Mapping[str, object], *, baseline: str) -> list[FailureKind]:
+    """The per-record checks of step 5 on one stored record (quant point 1 (b), (c)).
+
+    * ``missing_not_iff_insufficient`` -- ``missing`` is non-empty while the
+      label is not ``insufficient``, or the other way round (freeze pack 2.5
+      invariant, both directions);
+    * ``baseline_unavailable`` -- the label is not ``insufficient`` and the
+      placeholder's baseline is ``unavailable``: judged first, never skipped,
+      never reported as a differing label (V32-06: B6 is always available;
+      B8's reasons share P-1's inputs);
+    * ``label_differs`` -- otherwise, the label is not the baseline's.
+    """
+    found: list[FailureKind] = []
+    insufficient = row["label"] == "insufficient"
+    if insufficient != (json.loads(str(row["missing_json"])) != []):
+        found.append("missing_not_iff_insufficient")
+    if not insufficient:
+        stored = json.loads(str(row["baseline_predictions_json"]))[baseline]
+        prediction = scoring.BaselinePrediction.from_stored(stored)
+        if prediction.label == UNAVAILABLE:
+            found.append("baseline_unavailable")
+        elif row["label"] != prediction.label:
+            found.append("label_differs")
+    return found
+
+
+def vacuous_failures(rules: PlaceholderRules, compared: Mapping[int, bool]) -> list[Failure]:
+    """Quant point 1 (a), as tightened by ADR-0030 supplement 5 point 3 (a).
+
+    For each horizon of :data:`HORIZONS`: unless at least one record that is
+    not ``insufficient`` also has a provisional comparison (not "no
+    comparison") -- ``compared[h]`` -- the record-by-record equalities were
+    checked on nothing, and the run fails with ``vacuous_equality``. The
+    failure names the rule set and the horizon only, never a count.
+    """
+    return [
+        Failure("vacuous_equality", f"{rules.name} h{horizon}")
+        for horizon in HORIZONS
+        if not compared.get(horizon, False)
+    ]
+
+
 def _check(
     store: ForecastStore, result: AcceptanceResult, rules: PlaceholderRules, now: datetime
 ) -> None:
-    """Step 5 of the module docstring; every failure is a line without a label."""
+    """Step 5 of the module docstring; every failure is a kind and a place (no label, no count)."""
 
     for run in result.runs:
         if run.outcome != "ok":
-            result.failures.append(f"run {run.run_id}: outcome {run.outcome} ({run.error_class})")
+            result.failures.append(Failure("run_not_ok", f"run {run.run_id} ({run.error_class})"))
     today = report.taipei_date(now)
     known = store.final_sessions()
     snapshots = [
         recorder.stored_market_snapshot(store.snapshot(d)) for d in store.snapshot_digests()
     ]
+    compared_by_horizon: dict[int, bool] = {}
     for claim in _recording(store):
         for row in store.stored_records(claim.claim_id):
             result.records += 1
             where = f"{claim.claim_id} T={row['data_as_of']}"
-            baseline = json.loads(str(row["baseline_predictions_json"]))[rules.baseline]
+            kinds = record_failures(row, baseline=rules.baseline)
+            result.failures += [Failure(kind, where) for kind in kinds]
             if row["label"] == "insufficient":
                 result.insufficient += 1
-                if json.loads(str(row["missing_json"])) == []:
-                    result.failures.append(f"{where}: insufficient without a missing item")
-            else:
-                result.labels_checked += 1
-                if row["label"] != baseline["label"]:
-                    result.failures.append(f"{where}: model and {rules.baseline} differ")
+                continue
+            result.labels_checked += 1
+            if "baseline_unavailable" in kinds:
+                continue
             record = scoring.ComparedRecord.from_row(row)
             later = report.later_snapshot(snapshots, record.data_as_of, record.horizon)
             compared = scoring.provisional_comparison(
                 record, later, known_sessions=known, today=today
             )
-            if compared.reason is None and row["label"] != "insufficient":
+            if compared.reason is None:
                 result.compared += 1
+                compared_by_horizon[claim.horizon] = True
                 matches = dict(compared.matches)
                 if matches[scoring.MODEL] != matches[rules.baseline]:
-                    result.failures.append(
-                        f"{where}: provisional match of model and {rules.baseline} differ"
-                    )
+                    result.failures.append(Failure("provisional_match_differs", where))
+    result.failures += vacuous_failures(rules, compared_by_horizon)
     for item in report.verify_records(store, _recording(store)):
         result.verified += 1
         if not item.consistent:
-            result.failures.append(f"{item.claim_id} T={item.data_as_of}: verify {item.problem}")
+            where = f"{item.claim_id} T={item.data_as_of} {item.problem}"
+            result.failures.append(Failure("verify_inconsistent", where))
     if result.records != len(HORIZONS) * len(result.window):
-        result.failures.append(
-            f"{result.records} records for {len(result.window)} sessions and two claims"
-        )
+        result.failures.append(Failure("record_count", "not one record per claim and session"))
 
 
 def render_summary(result: AcceptanceResult) -> list[str]:
@@ -500,7 +581,7 @@ def render_summary(result: AcceptanceResult) -> list[str]:
         f"管線驗收 {result.rules}：{'通過' if result.passed else '失敗'}",
         f"視窗定案 session 數：{len(result.window)}",
         f"執行次數：{runs}；records_written 合計：{written}",
-        f"失敗項目數：{len(result.failures)}",
+        f"失敗種類：{'，'.join(result.failure_kinds) or '無'}",
         f"暫存帳 sha256：{result.ledger_sha256}",
         f"輸出 sha256：{result.output_sha256}",
     ]
