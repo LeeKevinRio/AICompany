@@ -814,6 +814,91 @@ def test_the_check_compares_with_the_last_run_that_passed(
     assert len(recomputed) == 2
 
 
+# --- supplement 3 (revised) point 1: the comparison baseline (S-12a) ----------------------------
+
+PROGRAM_B = Provenance(code_commit="b", code_digest="9" * 64, runtime=LOADED.runtime)
+
+
+def test_s12a_a_ok_then_b_closed_twice_then_back_on_a_it_passes(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recomputed = _count_recomputes(monkeypatch)
+    assert desk.run(EVENING, series(until=T)).outcome == "ok"  # program A
+    recomputed.clear()
+    _as_loaded(monkeypatch, PROGRAM_B)
+    monkeypatch.setitem(engine._OPS, "gt", operator.lt)
+    second = desk.run(at(NEXT, 22, 10))
+    assert (second.outcome, second.error_class) == ("gate_closed", "SemanticsChanged")
+    assert len(recomputed) == 2
+    # Third run, still B: the previous run (B) is the same program, the last passed
+    # run (A) is not -- recomputed again and still closed.
+    third = desk.run(at(NEXT, 23, 10))
+    assert (third.outcome, third.error_class) == ("gate_closed", "SemanticsChanged")
+    assert len(recomputed) == 4
+    # Back on A: the previous run (B) differs, A reproduces every record.
+    monkeypatch.setitem(engine._OPS, "gt", operator.gt)
+    _as_loaded(monkeypatch, LOADED)
+    fourth = desk.run(at(NEXT, 23, 30))
+    assert (fourth.outcome, fourth.records_written) == ("ok", 2)
+    assert len(recomputed) == 6
+    assert [r["outcome"] for r in desk.rows("forecast_run_end")] == [
+        "ok",
+        "gate_closed",
+        "gate_closed",
+        "ok",
+    ]
+
+
+def test_s12a_without_a_passed_run_the_records_are_recomputed(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The first run commits its records and is interrupted before its end row:
+    # there is no passed run, so the next run under the same program recomputes.
+    real_end = desk.store.end_run
+
+    def interrupted(run_id: int, **kwargs: Any) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(desk.store, "end_run", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        desk.run(EVENING, series(until=T))
+    monkeypatch.setattr(desk.store, "end_run", real_end)
+    assert desk.count("forecast_record") == 2 and desk.count("forecast_run_end") == 0
+    assert desk.store.latest_run_before(10**6, outcomes=("ok",)) is None
+    recomputed = _count_recomputes(monkeypatch)
+    result = desk.run(at(NEXT, 22, 10))
+    assert (result.outcome, result.records_written) == ("ok", 2)
+    assert sorted(recomputed) == sorted([desk.h3, desk.h5])
+
+
+@pytest.mark.parametrize(
+    ("exc", "ends"),
+    [
+        pytest.param(_Boom("x"), True, id="error"),
+        pytest.param(KeyboardInterrupt(), False, id="no-end-row"),
+    ],
+)
+def test_s12a_an_error_or_interrupted_run_is_not_a_baseline(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch, exc: BaseException, ends: bool
+) -> None:
+    assert desk.run(EVENING, series(until=T)).outcome == "ok"  # program A
+    _as_loaded(monkeypatch, PROGRAM_B)  # B reproduces every record (no semantic change)
+    recomputed = _count_recomputes(monkeypatch)
+    desk.clock.now = at(NEXT, 22, 10)
+    if ends:
+        failed = record_forecasts(desk.store, load_benchmark=_raising(exc), resolver={})
+        assert failed.outcome == "error"
+    else:
+        with pytest.raises(KeyboardInterrupt):
+            record_forecasts(desk.store, load_benchmark=_raising(exc), resolver={})
+    assert len(recomputed) == 2
+    # The previous run is B itself, but it is not a passed run: the baseline (ii) is
+    # still A, so B recomputes again.
+    result = desk.run(at(NEXT, 23, 10))
+    assert (result.outcome, result.records_written) == ("ok", 2)
+    assert len(recomputed) == 4
+
+
 # --- K-10, K-4, S-4a call sites -----------------------------------------------------------------
 
 

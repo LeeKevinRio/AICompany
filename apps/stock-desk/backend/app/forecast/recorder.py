@@ -8,9 +8,10 @@
    imported, so a source tree edited under a running scheduler does not stamp
    old code with a new digest);
 2. CG-2 run-time check (D-6, K-9, S-7, S-14) -- :func:`check_recording_claims`;
-3. cross-commit check (D-5 points 3 and 6, S-12) -- when this run's
-   ``code_digest`` or ``runtime_json`` differs from the previous run's, or from
-   the latest run that got past both checks, every stored record of each
+3. cross-commit check (D-5 points 3 and 6, S-12; supplement 3 (revised) point
+   1) -- when this run's ``code_digest`` or ``runtime_json`` differs from the
+   previous run's, or from the latest passed run (``ok``, ``no_new_session``,
+   ``inputs_not_ready``), or there is no passed run, every stored record of each
    recording claim is recomputed from its stored snapshot with the current
    program; ``label``, ``band_def``, ``baseline_predictions_json``,
    ``missing_json`` and ``content_hash`` must be equal byte for byte;
@@ -404,8 +405,11 @@ def check_recording_claims(store: ForecastStore) -> tuple[RecordingClaim, ...]:
 
 
 def _differs(run: RunRow | None) -> bool:
-    return run is not None and (
-        run.code_digest != LOADED.code_digest or run.runtime_json != LOADED.runtime_json
+    """Whether ``run`` is missing or ran another program or runtime than this process."""
+    return (
+        run is None
+        or run.code_digest != LOADED.code_digest
+        or run.runtime_json != LOADED.runtime_json
     )
 
 
@@ -414,10 +418,14 @@ def check_semantics(
 ) -> SemanticsChanged | None:
     """D-5 point 6: ``SemanticsChanged`` when the current program does not reproduce the ledger.
 
-    Runs when this run's ``code_digest`` / ``runtime_json`` differ from the
-    previous run's (the ADR's trigger), or from the latest run that got past
-    both checks (so a ``gate_closed`` run under new code does not make the
-    next run under that code skip the check).
+    The comparison baseline is supplement 3 (revised) point 1: (i) the latest
+    run before this one and (ii) the latest passed run -- outcome ``ok``,
+    ``no_new_session`` or ``inputs_not_ready``; ``gate_closed``, ``error`` and
+    a run without an end row are never (ii). When this run's ``code_digest`` or
+    ``runtime_json`` differs from either, or there is no passed run at all,
+    every stored record of each recording claim is recomputed. So a
+    ``gate_closed`` or ``error`` run under new code does not make the next run
+    under that code skip the check.
     """
     previous = store.latest_run_before(run_id)
     passed = store.latest_run_before(run_id, outcomes=CHECKED_OUTCOMES)
