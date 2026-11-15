@@ -39,7 +39,7 @@ from typing import Any
 
 import pytest
 
-from app.data.interface import Market, PriceBar, ProviderResult
+from app.data.interface import DataStatus, Market, PriceBar, ProviderResult
 from app.dirdef.definition import DirectionDefinition
 from app.dirdef.registry import PublishedRuleset
 from app.dirdef.rules import rules_logic_sha256
@@ -58,7 +58,7 @@ from app.forecast.recorder import (
 from app.forecast.store import ForecastStore
 from app.outlook import engine
 from app.outlook.inputs import late_cutoff_at
-from app.services.index import IndexServiceResolver, load_market_benchmark
+from app.services.index import IndexServiceResolver, LoadedBenchmark, load_market_benchmark
 from tests.dirdef_helpers import DIRDEF_V1_0_G7
 from tests.forecast_ledger_helpers import FakeClock, file_ledger, publish_definition
 from tests.import_graph import executed_app_modules, offenders, reachable_app_modules
@@ -403,6 +403,171 @@ def test_no_bar_at_all_is_not_ready_without_a_candidate(desk: Desk) -> None:
     )
     assert desk.service is not None and len(desk.service.calls) == 1
     assert _end(desk, result.run_id)["candidate_t"] is None
+
+
+# --- supplement 3 (revised) point 4: no final bar (S-12a) ----------------------------------------
+
+
+def test_s12a_only_settling_bars_is_not_ready_with_the_largest_session(desk: Desk) -> None:
+    # Every bar the loader returns is (a): non-final with its publish cutoff passed.
+    early = SESSIONS[-3]
+    bars = [
+        price_bar(day, Decimal(close), at(day, 14))
+        for day, close in zip(SESSIONS, CLOSES, strict=True)
+        if early <= day <= T
+    ]
+    assert len(bars) == 2 and bars[-1].date == T
+    result = desk.run(EVENING, bars)
+    assert (result.outcome, result.candidate_t, result.records_written) == (
+        "inputs_not_ready",
+        T,
+        0,
+    )
+    assert desk.service is not None and len(desk.service.calls) == 2  # re-fetched once
+    assert _end(desk, result.run_id)["candidate_t"] == T.isoformat()
+    assert desk.count("forecast_input_series") == 0 and desk.count("forecast_record") == 0
+
+
+def test_s12a_only_bars_before_their_cutoff_is_not_ready_without_a_candidate(desk: Desk) -> None:
+    # The loader returns one (b) bar and nothing final: no T, no (a) bar.
+    morning = at(NEXT, 10, 5)
+    result = desk.run(morning, [price_bar(NEXT, Decimal(CLOSES[-1]), at(NEXT, 10))])
+    assert (result.outcome, result.candidate_t, result.records_written) == (
+        "inputs_not_ready",
+        None,
+        0,
+    )
+    assert desk.service is not None and len(desk.service.calls) == 1
+    assert _end(desk, result.run_id)["candidate_t"] is None
+    assert desk.count("forecast_input_series") == 0
+
+
+# --- supplement 3 (revised) point 5: source_status is recorded, never branched on -------------
+
+
+def _status_loader(status: DataStatus) -> Any:
+    """A loader answering the synthetic bars with ``status`` (the service layer bypassed)."""
+
+    def loader(resolver: Any, *, market: Market, start: date, end: date) -> LoadedBenchmark:
+        return LoadedBenchmark(
+            series_symbol="^TWII",
+            label="TAIEX",
+            bars=[b for b in series(until=T) if start <= b.date <= end],
+            status=status,
+            source="yfinance",
+            staleness_minutes=0,
+            reason=None,
+        )
+
+    return loader
+
+
+POINT5_COLUMNS = ("data_as_of", "label", "band_def", "baseline_predictions_json", "missing_json")
+
+
+def test_s12a_the_four_data_statuses_give_the_same_record_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, tuple[object, ...]] = {}
+    for status in DataStatus:
+        desk = Desk(tmp_path / status.value, monkeypatch)
+        desk.clock.now = EVENING
+        result = record_forecasts(desk.store, load_benchmark=_status_loader(status), resolver={})
+        assert (result.outcome, result.candidate_t, result.records_written) == ("ok", T, 2)
+        (snapshot,) = desk.rows("forecast_input_series")
+        assert snapshot["source_status"] == status.value  # recorded as it came
+        seen[status.value] = (
+            result.candidate_t,
+            *(tuple(r[c] for c in POINT5_COLUMNS) for r in desk.rows("forecast_record")),
+        )
+    assert len(seen) == 4
+    assert len(set(seen.values())) == 1
+
+
+def _status_branches(source: str) -> list[str]:
+    """Branch conditions that read ``source_status`` or an answer's ``status``.
+
+    ``MissingItem``'s own ``self.source_status`` (the D-13 missing-item field,
+    ``fetch_failed`` / ``not_yet_published``, not the snapshot's DataStatus) is
+    its validator's invariant and is not counted.
+    """
+    found: list[str] = []
+
+    def reads_status(expr: ast.AST, owner: str | None) -> bool:
+        for node in ast.walk(expr):
+            if isinstance(node, ast.Name) and node.id in {"source_status", "DataStatus"}:
+                return True
+            if isinstance(node, ast.Attribute) and node.attr in {"source_status", "status"}:
+                own = (
+                    owner == "MissingItem"
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "self"
+                    and node.attr == "source_status"
+                )
+                if not own:
+                    return True
+        return False
+
+    def visit(node: ast.AST, owner: str | None) -> None:
+        if isinstance(node, ast.ClassDef):
+            owner = node.name
+        tests: list[ast.AST] = []
+        if isinstance(node, ast.If | ast.IfExp | ast.While | ast.Assert):
+            tests.append(node.test)
+        elif isinstance(node, ast.comprehension):
+            tests.extend(node.ifs)
+        elif isinstance(node, ast.Match):
+            tests.append(node.subject)
+        elif isinstance(node, ast.match_case) and node.guard is not None:
+            tests.append(node.guard)
+        elif isinstance(node, ast.BoolOp):
+            tests.extend(node.values)
+        found.extend(ast.unparse(test) for test in tests if reads_status(test, owner))
+        for child in ast.iter_child_nodes(node):
+            visit(child, owner)
+
+    visit(ast.parse(source), None)
+    return found
+
+
+def test_s12a_source_status_is_no_branch_condition_in_the_recorder_or_the_outlook() -> None:
+    paths = [APP_ROOT / "forecast" / "recorder.py", *sorted((APP_ROOT / "outlook").rglob("*.py"))]
+    violations = {
+        path.relative_to(APP_ROOT).as_posix(): found
+        for path in paths
+        if (found := _status_branches(path.read_text(encoding="utf-8")))
+    }
+    assert violations == {}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "if snapshot.source_status != 'backup':\n    pass\n",
+        "x = 1 if answer.status is DataStatus.FRESH else 2\n",
+        "while source_status:\n    pass\n",
+        "ok = [b for b in bars if answer.status == 'fresh']\n",
+        "ready = done and snapshot.source_status == 'fresh'\n",
+        "match answer.status:\n    case _:\n        pass\n",
+        "assert snapshot.source_status\n",
+        "class MissingItem:\n    def f(self, other):\n"
+        "        if other.source_status:\n            pass\n",
+        "class Other:\n    def f(self):\n        if self.source_status:\n            pass\n",
+    ],
+)
+def test_the_status_branch_scan_has_teeth(source: str) -> None:
+    assert _status_branches(source) != []
+
+
+def test_the_status_branch_scan_lets_recording_and_the_missing_item_through() -> None:
+    assert _status_branches("row = {'source_status': answer.status.value}\n") == []
+    assert (
+        _status_branches(
+            "class MissingItem:\n    def f(self):\n        if self.source_status is None:\n"
+            "            pass\n"
+        )
+        == []
+    )
 
 
 # --- supplement 2 point 2 (b): LA-G2-5 with its clock premise ----------------------------------
