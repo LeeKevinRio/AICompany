@@ -13,6 +13,8 @@ import json
 import re
 import sqlite3
 import struct
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -1159,3 +1161,128 @@ def test_expected_columns_refuse_what_the_write_refuses(ledger: Ledger) -> None:
     with pytest.raises(ForecastStoreError, match="insufficient"):
         store.expected_record_columns(**_content(ledger, series, label="insufficient"))
     assert not issubclass(LedgerInconsistentError, ValueError)
+
+
+# --- supplement 3 (revised) point 9: read-only connections (f4) -------------------------------
+
+#: The store's writes: the only methods that may open a write transaction.
+WRITE_METHODS = frozenset(
+    {
+        "begin_run",
+        "end_run",
+        "put_input_series",
+        "write_run_records",
+        "register_claim",
+        "write_record",
+    }
+)
+
+
+def _store_functions() -> dict[str, ast.FunctionDef]:
+    tree = ast.parse(Path(store_module.__file__).read_text(encoding="utf-8"))
+    found: dict[str, ast.FunctionDef] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            found[node.name] = node
+    return found
+
+
+def _users(name: str, functions: dict[str, ast.FunctionDef]) -> set[str]:
+    """The functions that call ``name`` (``self.name(...)``, ``x.name(...)`` or ``name(...)``)."""
+    return {
+        fname
+        for fname, node in functions.items()
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and (
+            (isinstance(call.func, ast.Attribute) and call.func.attr == name)
+            or (isinstance(call.func, ast.Name) and call.func.id == name)
+        )
+    }
+
+
+def test_f4_connect_is_opened_only_on_the_write_path() -> None:
+    functions = _store_functions()
+    assert _users("_connect", functions) == {"_write"}
+    assert _users("_open_connection", functions) == {"_connect", "_read"}
+    assert _users("connect", functions) == {"_open_connection"}  # sqlite3.connect
+    assert _users("_write", functions) <= WRITE_METHODS
+    # Every other public method reads, if at all, through _read only.
+    readers = _users("_read", functions)
+    public = {name for name in vars(ForecastStore) if not name.startswith("_")}
+    assert readers & WRITE_METHODS == set()
+    assert {"stored_records", "snapshot", "expected_record_columns", "claim"} <= readers
+    assert public - WRITE_METHODS - readers <= {"now", "counts_toward_m", "recording_claims"}
+
+
+def test_the_store_connection_scan_has_teeth() -> None:
+    tree = ast.parse(
+        "class S:\n    def stored(self):\n        with closing(self._connect()) as c:\n"
+        "            pass\n"
+    )
+    functions = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert _users("_connect", functions) == {"stored"}
+
+
+def test_f4_a_write_on_a_read_connection_fails(ledger: Ledger) -> None:
+    before = ledger.rows("forecast_run")
+    with ledger.store._read() as conn:
+        assert conn.execute("PRAGMA query_only").fetchone()[0] == 1
+        for sql in (
+            'INSERT INTO forecast_run (started_at, "trigger", code_commit, code_digest,'
+            " runtime_json, schema_version) VALUES ('x', 'scheduled', 'c', 'd', '{}', 1)",
+            "CREATE TABLE probe (x)",
+        ):
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                conn.execute(sql)
+    assert ledger.rows("forecast_run") == before
+
+
+def test_f4_every_read_query_runs_on_a_query_only_connection(
+    ledger: Ledger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    ledger.record(run_id, ledger.h3, T, series)
+    seen: list[tuple[str, int]] = []
+    real_closing = closing
+
+    @contextmanager
+    def spying(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+        with real_closing(conn):
+            try:
+                yield conn
+            finally:
+                seen.append((current, conn.execute("PRAGMA query_only").fetchone()[0]))
+
+    monkeypatch.setattr(store_module, "closing", spying)
+    store = ledger.store
+    queries: dict[str, Any] = {
+        "claim": lambda: store.claim(ledger.h3),
+        "forward_claims": store.forward_claims,
+        "recording_claims": store.recording_claims,
+        "first_record_at": lambda: store.first_record_at(ledger.h3),
+        "counts_toward_m": lambda: store.counts_toward_m(ledger.h3),
+        "m_db": store.m_db,
+        "d_v": lambda: store.d_v(ledger.h3),
+        "final_sessions": store.final_sessions,
+        "n_hat": lambda: store.n_hat(ledger.h3),
+        "latest_run": store.latest_run,
+        "latest_run_before": lambda: store.latest_run_before(run_id + 1),
+        "has_record": lambda: store.has_record(ledger.h3, T),
+        "stored_records": lambda: store.stored_records(ledger.h3),
+        "snapshot": lambda: store.snapshot(series),
+        "expected_record_columns": lambda: store.expected_record_columns(
+            **_content(ledger, series)
+        ),
+    }
+    for current, query in queries.items():  # noqa: B007 - read by the spy
+        query()
+    assert {name for name, _ in seen} == set(queries)
+    assert {flag for _, flag in seen} == {1}
+    # A write still opens a writable connection.
+    seen.clear()
+    current = "end_run"
+    store.end_run(run_id, outcome="ok", candidate_t=T, records_written=1)
+    assert seen == [("end_run", 0)]

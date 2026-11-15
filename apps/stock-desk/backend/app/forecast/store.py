@@ -48,7 +48,10 @@ Connections are opened per operation with ``foreign_keys`` and
 refuse an ``INSERT OR REPLACE`` on any connection (ADR-0030 supplement 1);
 ``recursive_triggers`` is the second layer: it makes the delete a REPLACE would
 perform fire the append-only DELETE trigger (SQLite skips delete triggers on
-REPLACE otherwise). The store does not create the schema.
+REPLACE otherwise). The store does not create the schema. Every read-only
+query runs on a ``query_only`` connection (``_read``), so a write on it fails
+in SQLite itself; ``_connect`` -- the write-path connection -- is opened only
+by ``_write`` (ADR-0030 supplement 3 (revised) point 9).
 
 Read-only queries: ``first_record_at`` and "counts toward m" are the D-2 point
 6 definitions; ``m_db`` counts the forward claims with at least one record
@@ -146,6 +149,15 @@ class LedgerInconsistentError(RuntimeError):
 
 def system_clock() -> datetime:
     return datetime.now(UTC)
+
+
+def _open_connection(db_path: Path) -> sqlite3.Connection:
+    """A connection with the store's pragmas; ``_connect`` and ``_read`` are its only callers."""
+    conn = sqlite3.connect(db_path, isolation_level=None)
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA recursive_triggers = ON")
+    return conn
 
 
 @dataclass(frozen=True)
@@ -380,11 +392,8 @@ class ForecastStore:
     # --- plumbing ------------------------------------------------------------------
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, isolation_level=None)
-        conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA recursive_triggers = ON")
-        return conn
+        """A write-path connection: only :meth:`_write` opens one (AST)."""
+        return _open_connection(self._db_path)
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
@@ -402,7 +411,12 @@ class ForecastStore:
 
     @contextmanager
     def _read(self) -> Iterator[sqlite3.Connection]:
-        with closing(self._connect()) as conn:
+        """A read-only connection (``query_only``): SQLite refuses any write on it.
+
+        Every read-only query goes through here (supplement 3 (revised) point 9).
+        """
+        with closing(_open_connection(self._db_path)) as conn:
+            conn.execute("PRAGMA query_only = ON")
             yield conn
 
     def _now(self) -> datetime:
@@ -1080,7 +1094,7 @@ class ForecastStore:
 
     def stored_records(self, claim_id: str) -> list[dict[str, object]]:
         """Every ``forecast_record`` row of the claim as stored, by ``data_as_of``."""
-        with closing(self._connect()) as conn:
+        with self._read() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM forecast_record WHERE claim_id = ? ORDER BY data_as_of, rowid",
