@@ -6,6 +6,7 @@
 - 補充紀錄：2026-11-15 append 補充三（跨 commit 比對基準、執行環境取值時點、K-2 禁詞來源、無定案 bar 與 source_status；tech-architect 裁示，收緊與釐清，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第三批recorder交件-dev-lead.md`）。
 - 補充紀錄：2026-11-15 append 補充三（修訂版）（跨 commit 比對基準、取值時點、K-2 禁詞來源、取代鏈、原子寫入、例外歸類；tech-architect 裁示，收緊與釐清，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第三批recorder交件-dev-lead.md`、`work/reviews/2026-11-15-NM5第三批recorder審查-qa-reviewer.md`）。**補充三（修訂版）取代同日稍早落檔的補充三**：兩者衝突時以修訂版為準；初版依 append-only 原樣保留（tech-architect 回報 `work/reviews/2026-11-15-NM5recorder四題與f1f4裁示-tech-architect.md`）。
 - 補充紀錄：2026-11-15 append 補充四（第四批解讀確認、CG-2／CG-3 正式登記的執行方式與檢查點、剩餘順序；tech-architect 裁示，釐清與收緊，不改使用者面字面與已登記雜湊；第 4 點的執行方式須 CEO 同意，其餘 CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第四批解讀與CG2登記方式裁示-tech-architect.md`）。
+- 補充紀錄：2026-11-15 append 補充五（第五批解讀確認、失效條件 F-2 的計數視窗、D-8 第 4 點 WARNING、管線驗收的斷言範圍與空轉防護、harness 輸出不含 n̂；tech-architect 裁示，釐清與收緊，沒有放寬，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第五批交件-dev-lead.md`、`work/reviews/2026-11-15-NM5第五批五點解讀確認-quant.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -521,3 +522,62 @@
    - CG-2 登記不得早於 harness 通過。接線 PR 不得與 CG-2 PR 合併。
 
 - **S-14a（逐條可檢查）**：第 1 點各款各有 AST 或測試；第 2、3 點每個拒絕條件各一個測試；整筆回滾測試；M-1～M-9 列在 CG-2 PR 說明中；R-1～R-8 各有對應的 STOP 訊息測試；接線 PR 合併時，`work/` 中已有登記紀錄的 commit。
+
+---
+
+## 補充五：第五批解讀確認、F-2 計數視窗、D-8 第 4 點 WARNING、管線驗收的空轉防護（2026-11-15）
+
+- 決策者：tech-architect。來源：dev-lead 第五批交件「已知限制與解讀」五點；quant 第五批五點解讀確認第 1、3、4 點。另讀 `feat/nm5-forecast-storage`（518046f9）的 `tests/forecast_pipeline_harness.py`：`run_acceptance` 的輸出含 `report.render_status`，該段列出 n̂（第 5 點）。
+- 性質：釐清失效條件 F-2、D-7 第 4 點與 D-8 第 4 點的讀法；收緊 F-2 的計數，以及 D-4 第 5 點在 harness 輸出上的適用。補充本文，不改本文；沒有放寬；不改使用者面字面，也不改規則檔、定義物件與已登記雜湊。CEO 可推翻。
+
+1. **F-2 的計數視窗**：只適用 F-2 第一句；第二句的第 0 相位格點遺失率自 D_v 起累計，不受本點影響。報告標題寫「ADR-0030 失效條件 F-2」，與事先宣告的下架規則 F-2 區分。
+   - (a) 平日與日期：平日指週一至週五，不扣休市日，與 D-8 第 4 點 T2 使用同一個函式。日期一律以 Asia/Taipei 計。平日 D 要等 D 的 `late_cutoff_at` 已過，才進入視窗，所以當天不計入。
+   - (b) 起點：claim c 的起點 S_c ＝ max（c 的 `registered_at` 日期，第一筆 `forecast_run` 的 `started_at` 日期）。不以 D_v 為起點。
+   - (c) 視窗與滾動：
+     - S_c 以後每連續 20 個平日為一個視窗，逐平日滾動。
+     - 視窗的日曆範圍是它的第一個到最後一個平日，含其間的週末。
+     - 逐一評估 S_c 以來每一個完整的視窗，任一視窗成立，F-2 就成立；之後的視窗不成立，也不撤銷。
+   - (d) 分子：每個 claim 各自計算，等於下列兩項照字面相加，重複的部分不扣除。
+     - 視窗日曆範圍內的定案 session 中，該 claim 沒有 `late = 0` 紀錄的 session 數。定案 session 取至今全部快照中定案 session 的聯集，與 n̂ 用同一個查詢。這個集合包含最新快照中的 session，所以不寬於字面。
+     - 視窗日曆範圍內，有任一次執行 outcome 為 `inputs_not_ready` 的日數，以 `started_at` 的日期計。同一天多次只算一天；同一天另有 `ok`，也照樣計入。
+   - (e) 分母與門檻：分母 ＝ min（20，視窗日曆範圍內的定案 session 數）。分子大於分母的 30% 就成立。分母不會大於 20，所以不寬於「固定 20」的字面讀法；休市日多的視窗會比較嚴。
+   - (f) 視窗未滿：S_c 以來不足 20 個平日時，分子大於 6 就成立；否則標示「視窗未滿」。
+   - (g) 導出與輸出：
+     - 計數與是否成立，只由 `store.py` 的唯讀查詢導出。
+     - `report status` 每次輸出：最近一個完整視窗的起迄日、兩項分子、分母、是否成立，以及「自起點以來曾否成立」。
+     - 這些屬 D-4 第 5 點的執行狀態：可以依 claim 分列；不得與標籤或對照並列，也不得依標籤、基準或暫定對照分列。
+   - (h) 已知盲點（知悉，不處理）：主機整段停機時沒有新快照，停機期間的 session 要等下一次執行的快照出現，才進入分子；停機中執行 `report`，F-2 會偏低。停機的偵測由 devops-sre 的心跳負責（D-10）。
+   - 期限：在接線 PR 落地，列為 CG-4 的阻擋項。
+2. **D-8 第 4 點的 WARNING**
+   - 讀法：「首次成立時 recorder 記 WARNING」讀為「T1 或 T2 成立期間，recorder 每次執行各記一次」，因此涵蓋首次。recorder 不保存「已記過」的狀態，也不新增欄位或表。
+   - 內容：每個成立的 claim 記一行，只含固定的英文字面、`claim_id`，以及成立的是 T1、T2 或兩者。不含 n̂、c₁、d₁、D_v、任何計數或日期，也不含標籤。
+   - 判定方式：
+     - 經 `store.py` 的唯讀查詢判定，「今天」取 store 時鐘的台北日期，在 `forecast_run_end` 寫入之後進行。
+     - 判定不得改變 outcome、`records_written`、`error_class` 或任何紀錄。
+     - 判定拋出 `Exception` 時，改記一行固定字面的 WARNING，照常結束；不捕捉 `BaseException`。
+     - 沒有 D_v 時，T1、T2 都不成立，不記。
+   - 期限：在接線 PR 落地，列為 CG-4 的阻擋項。
+3. **D-7 第 4 點的斷言範圍與空轉防護**
+   - 讀法：「harness 斷言每一筆的模型標籤與對應基準逐筆相同」讀為「每一筆不是 `insufficient` 的紀錄都相同」。
+     - 理由：engine 的第 (0) 步排在規則之前（D-3 第 6 點），所以 insufficient 紀錄在字面上不可能等於 B6。這類紀錄依同點後句，以合成 fixture 驗證。
+     - D-7 第 1、6 點不變：harness 仍不得宣稱真實時序已驗證。
+   - 為免斷言空轉，harness 另加三項，任一不成立就判失敗：
+     - (a) P-0、P-1 各自的 h3、h5 claim，都至少有 1 筆非 insufficient 紀錄，而且其中至少 1 筆的暫定對照有結果（不是「無法對照」）。不成立時，失敗種類為 `vacuous_equality`。
+     - (b) 模型不是 insufficient、對應基準卻是 `unavailable` 時，判失敗，不跳過。
+     - (c) insufficient 紀錄的 missing code 只能是凍結包 §2.5 表內的四類；`missing` 非空 ⇔ `label = insufficient`。
+   - 三項都只輸出通過或失敗，以及失敗種類，不輸出筆數。
+   - 期限：在真實資料一鍵檔執行之前落地。缺少時，真實資料的 harness 不算通過，依補充四第 6 點也不得進行 CG-2 登記。
+4. **暫定對照的實現標籤**：依事先宣告 §2.1，用紀錄自己的 `K_h`、`EPS`、`sigma_d`，以 `app.outlook.volatility.log_return` 與 `app.outlook.baselines.threshold_label` 計算，不另寫（K-6）。不套用 `f2_variant`：C-8 是驗證層的下架規則，隨 D-8 凍結。
+5. **harness 輸出中的 n̂**
+   - D-4 第 5 點對 n̂ 的唯一例外，只限操作者報告（`report` CLI）。
+   - 管線驗收 harness 的輸出，包括只寫進暫存檔的完整輸出與 `render_summary`，都不得含 n̂、T1／T2 的判定列，或 n̂ 的固定標示。F-2 計數與各 outcome 的次數屬執行狀態，可以列。
+   - `render_summary` 不得列非 insufficient 的筆數、可對照的筆數，或任何與符合與否有關的計數。
+   - 期限：在第五批合併前落地。
+
+- **S-10a、S-13a（逐條可檢查）**：
+  - 第 1 點：
+    - 以合成帳的測試涵蓋：起點早於第一筆 `forecast_run` 時，那段期間不計入；同一天兩次 `inputs_not_ready` 只算一天；一個 session 未定案且一直沒有紀錄時計入 2；休市日多的視窗以 min（20，s）為分母；只有較早的視窗成立時，「曾否成立」仍為成立；視窗未滿的兩種情形；當天不計入。
+    - 平日函式與 T2 相同（AST 或 import）；F-2 計數只在 `store.py` 導出（grep）。
+  - 第 2 點：以下四種情形各有測試，outcome 與 `content_hash` 都不變，log 行符合固定格式：不成立時不記；只有 T1；T1 與 T2 同時成立；判定拋出例外時記固定字面的 WARNING。
+  - 第 3 點：(a)～(c) 各有一個會判失敗的反例 fixture，例如全部紀錄都是 insufficient 時判 `vacuous_equality`。
+  - 第 5 點：harness 的完整輸出與 `render_summary` 都不含「n̂」與 n̂ 的固定標示；`report status` 照常列出 n̂（測試）。
