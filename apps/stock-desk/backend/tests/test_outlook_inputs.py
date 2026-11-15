@@ -36,6 +36,7 @@ from app.outlook.inputs import (
     _cut_snapshot,
     capture_market_snapshot,
     late_cutoff_at,
+    non_final_rows,
     snapshot_view,
 )
 from app.services.index import LoadedBenchmark, load_market_benchmark
@@ -140,6 +141,32 @@ def test_no_final_bar_is_none() -> None:
 
 def test_an_empty_answer_has_no_snapshot() -> None:
     assert capture_market_snapshot(_answer(FakeIndexService([])), size=315) is None
+
+
+def test_non_final_rows_are_listed_also_without_a_snapshot() -> None:
+    day = weekdays(1)[0]
+    early = datetime(day.year, day.month, day.day, 10, tzinfo=TAIPEI)
+    answer = _answer(FakeIndexService([price_bar(day, Decimal("100"), early)]))
+    assert capture_market_snapshot(answer, size=315) is None
+    assert [(row.session_date, row.reason) for row in non_final_rows(answer)] == [
+        (day, "not_final")
+    ]
+    assert non_final_rows(_answer(FakeIndexService([]))) == ()
+
+
+def test_non_final_rows_equal_the_snapshot_dropped_rows() -> None:
+    bars = fixture_bars("FX-B")
+    t = bars[-1].session_date
+    following = t + timedelta(days=3 if t.weekday() == 4 else 1)
+    early = datetime(following.year, following.month, following.day, 14, 0, tzinfo=TAIPEI)
+    answer = _answer(
+        FakeIndexService([*price_bars(bars), price_bar(following, Decimal("1"), early)])
+    )
+    snapshot = capture_market_snapshot(answer, size=315)
+    assert snapshot is not None
+    assert non_final_rows(answer) == snapshot.dropped
+    with pytest.raises(SnapshotShapeError):
+        non_final_rows(LoadedBenchmark(series_symbol="^GSPC", bars=price_bars(bars[-2:])))
 
 
 def test_a_repeated_session_is_refused() -> None:

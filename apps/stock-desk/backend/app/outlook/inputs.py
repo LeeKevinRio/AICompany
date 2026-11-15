@@ -10,8 +10,10 @@ service's answer into the snapshot and holds the snapshot shape rules:
   (``app.data.session_calendar.is_final``, ADR-0028 CS-17), and cuts the
   snapshot at the latest final bar: T is that bar's session (D-3 point 1). It
   has no T, ``as_of`` or clock parameter. Non-final bars are left out and
-  listed in ``dropped``; whether a non-final latest bar means "re-fetch once,
-  then ``inputs_not_ready``" (D-3 point 2) is the recorder's decision;
+  listed in ``dropped``; :func:`non_final_rows` lists them also when no bar is
+  final. The recorder splits them by run time (ADR-0030 supplement 2 point 2):
+  "re-fetch once, then ``inputs_not_ready``" (D-3 point 2) or "left out, T
+  unchanged" (LA-G2-5);
 * :func:`_cut_snapshot` -- the one place a snapshot is cut (K-6): the bars on
   or before a session, the latest ``size`` of them. It takes the decision
   session as a parameter, so it stays private to ``app/outlook`` (risk RC-130:
@@ -194,13 +196,8 @@ def _cut_snapshot(
     return tuple(kept[-size:])
 
 
-def capture_market_snapshot(answer: IndexSeriesAnswer, *, size: int) -> MarketSnapshot | None:
-    """The snapshot of the index service's ``answer``; ``None`` when no bar is final.
-
-    T is the latest final bar's session. Every bar must be ``^TWII`` and the
-    sessions strictly ascending (refused, never reordered); non-final bars are
-    left out and listed in ``dropped``.
-    """
+def _classify(answer: IndexSeriesAnswer) -> tuple[list[SnapshotBar], list[DroppedRow]]:
+    """The answer's final bars and its non-final rows (the one finality split of the answer)."""
     if answer.series_symbol != SERIES_SYMBOL:
         raise SnapshotShapeError(f"the market snapshot reads {SERIES_SYMBOL} only")
     if any(bar.symbol != SERIES_SYMBOL for bar in answer.bars):
@@ -214,6 +211,28 @@ def capture_market_snapshot(answer: IndexSeriesAnswer, *, size: int) -> MarketSn
             final.append(bar)
         else:
             dropped.append(DroppedRow(session_date=bar.session_date, reason="not_final"))
+    return final, dropped
+
+
+def non_final_rows(answer: IndexSeriesAnswer) -> tuple[DroppedRow, ...]:
+    """The rows of ``answer`` that are not final -- also when no bar is final at all.
+
+    The recorder splits them by run time (ADR-0030 supplement 2 point 2): a
+    session whose publish cutoff has passed means "re-fetch once, then
+    ``inputs_not_ready``"; one whose cutoff is still ahead is left out of the
+    snapshot (LA-G2-5). The same checks as :func:`capture_market_snapshot`.
+    """
+    return tuple(_classify(answer)[1])
+
+
+def capture_market_snapshot(answer: IndexSeriesAnswer, *, size: int) -> MarketSnapshot | None:
+    """The snapshot of the index service's ``answer``; ``None`` when no bar is final.
+
+    T is the latest final bar's session. Every bar must be ``^TWII`` and the
+    sessions strictly ascending (refused, never reordered); non-final bars are
+    left out and listed in ``dropped``.
+    """
+    final, dropped = _classify(answer)
     if not final:
         return None
     return MarketSnapshot(
