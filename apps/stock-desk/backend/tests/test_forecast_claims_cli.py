@@ -15,11 +15,15 @@ horizon, a second replacement, a claim registered later); the registry is
 append-only (a second registration, ``INSERT OR REPLACE``, UPDATE, DELETE); the
 CG-2 banned phrase scan (NFKC, whitespace removed; FL-78 (m): seam
 ``definitions._read_rules_bytes``); production paths refused; the module runs
-as ``__main__`` and imports in either order with the store.
+as ``__main__`` (``--help``, which exits before any path check) and a fresh
+process refuses with the empty registries against stand-in paths (qa batch 4
+follow-up 3: no subprocess looks at the real ``<backend>/data/``); claims and
+the store import in either order.
 """
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import sqlite3
 import subprocess
@@ -520,18 +524,62 @@ def test_claims_and_store_import_in_either_order(module: str, tmp_path: Path) ->
     assert done.returncode == 0, done.stderr
 
 
-def test_the_module_runs_and_refuses_with_the_empty_production_registries(
+def test_the_module_runs_as_main_without_a_path_check(tmp_path: Path) -> None:
+    # qa batch 4 follow-up 3: ``--help`` runs the module as __main__ (import order,
+    # the plain main block) and exits in argparse, before any path is compared, so
+    # nothing under the real <backend>/data/ is looked at.
+    done = _python("-m", "app.forecast.claims", "--help", cwd=tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert "register" in done.stdout
+
+
+_FRESH_MAIN = (
+    "import sys\n"
+    "from pathlib import Path\n"
+    "from app.forecast import claims\n"
+    "backend = Path(sys.argv[1])\n"
+    "raise SystemExit(claims.main(sys.argv[2:], env={}, cwd=backend.parent, backend_dir=backend))\n"
+)
+
+
+def test_a_fresh_process_refuses_with_the_empty_production_registries(
     cli: Cli, tmp_path: Path
 ) -> None:
-    argv = cli.argv()
-    done = _python("-m", "app.forecast.claims", *argv, cwd=tmp_path)
+    # The registries are the real, empty ones (no publish in a fresh process). The
+    # production paths compared are the tmp_path stand-ins, never the real backend's.
+    done = _python("-c", _FRESH_MAIN, str(cli.backend), *cli.argv(), cwd=tmp_path)
     assert done.returncode == claims.EXIT_REFUSED, done.stderr
     assert "UnpublishedVersionError" in done.stderr
     assert cli.rows() == []
-    refused = _python(
-        "-m", "app.forecast.claims", *cli.argv(db=str(tmp_path / "stock-desk.db")), cwd=tmp_path
-    )
+    named = cli.argv(db=str(tmp_path / "stock-desk.db"))
+    refused = _python("-c", _FRESH_MAIN, str(cli.backend), *named, cwd=tmp_path)
     assert refused.returncode == claims.EXIT_PATH_REFUSED
+    assert not (tmp_path / "stock-desk.db").exists()
+
+
+def test_no_test_here_names_the_real_backend_data_folder() -> None:
+    # Every claims.main() call in this file passes a stand-in backend_dir (qa follow-up
+    # 3); the fresh-process script does the same (its text is checked here too).
+    source = Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    mains = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "main"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "claims"
+    ]
+    assert mains and all(any(k.arg == "backend_dir" for k in m.keywords) for m in mains)
+    assert "backend_dir=backend" in _FRESH_MAIN
+    module_runs = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and any(isinstance(a, ast.Constant) and a.value == "-m" for a in node.args)
+    ]
+    assert len(module_runs) == 1  # the --help run above
 
 
 def test_the_registration_date_comes_from_the_store_clock(cli: Cli) -> None:
