@@ -1248,6 +1248,50 @@ def test_expected_columns_refuse_what_the_write_refuses(ledger: Ledger) -> None:
     assert not issubclass(LedgerInconsistentError, ValueError)
 
 
+def _pure_content(ledger: Ledger, **overrides: Any) -> dict[str, Any]:
+    content = _content(ledger, "0" * 64, **overrides)
+    del content["claim_id"], content["input_series_sha256"]
+    return content
+
+
+def test_check_record_content_is_the_write_validation_without_a_ledger_read(
+    tmp_path: Path,
+) -> None:
+    # Supplement 4 point 1 (b): the recorder's pure validation step. It needs no
+    # database at all (the path does not exist and is not created).
+    absent = tmp_path / "absent.db"
+    ledger_like = ForecastStore(absent)
+    definition = fixture_definition()
+    content: dict[str, Any] = {
+        "data_as_of": T,
+        "label": "range",
+        "range_basis": None,
+        "missing": [],
+        "evidence": {"rules_fired": []},
+        "band_def": band(definition, 3),
+        "base_close": Decimal("17000.5"),
+        "baseline_predictions": dict(BASELINES),
+    }
+    assert ledger_like.check_record_content(**content) is None
+    for overrides, match in (
+        ({"label": "insufficient"}, "insufficient"),
+        ({"label": "maybe"}, "closed list"),
+        ({"baseline_predictions": {"B1": {}}}, "baselines missing"),
+        ({"base_close": 1.5}, "base_close"),
+    ):
+        with pytest.raises(ForecastStoreError, match=match):
+            ForecastStore.check_record_content(**{**content, **overrides})
+    assert not absent.exists()
+
+
+def test_check_record_content_agrees_with_the_expected_columns(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ForecastStore.check_record_content(**_pure_content(ledger))
+    ledger.store.expected_record_columns(**_content(ledger, series))
+    with pytest.raises(ForecastStoreError, match="insufficient"):
+        ForecastStore.check_record_content(**_pure_content(ledger, label="insufficient"))
+
+
 # --- supplement 3 (revised) point 9: read-only connections (f4) -------------------------------
 
 #: The store's writes: the only methods that may open a write transaction.
@@ -1297,7 +1341,14 @@ def test_f4_connect_is_opened_only_on_the_write_path() -> None:
     public = {name for name in vars(ForecastStore) if not name.startswith("_")}
     assert readers & WRITE_METHODS == set()
     assert {"stored_records", "snapshot", "expected_record_columns", "claim"} <= readers
-    assert public - WRITE_METHODS - readers <= {"now", "counts_toward_m", "recording_claims"}
+    # check_record_content is the pure content validation: no connection at all.
+    assert public - WRITE_METHODS - readers <= {
+        "now",
+        "counts_toward_m",
+        "recording_claims",
+        "check_record_content",
+    }
+    assert _users("_read", {"check_record_content": functions["check_record_content"]}) == set()
 
 
 def test_the_store_connection_scan_has_teeth() -> None:

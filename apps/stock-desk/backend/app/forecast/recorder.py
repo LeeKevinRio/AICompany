@@ -104,7 +104,6 @@ from app.forecast.store import (
     SCOPE_KIND,
     ClaimRow,
     ForecastStore,
-    ForecastStoreError,
     Label,
     RecordInput,
     RunOutcome,
@@ -496,17 +495,22 @@ def check_semantics(
 def _reproduces(store: ForecastStore, recording: RecordingClaim, row: Mapping[str, object]) -> bool:
     """Whether recomputing ``row`` from its stored snapshot gives the same bytes.
 
-    Failures are split by where they come from (supplement 3 (revised) point 8):
+    Failures are split by where they come from (supplement 3 (revised) point 8;
+    supplement 4 point 1 (b)):
 
+    * the program side -- any ``Exception`` from the two pure calls, the
+      current program's ``compute_outlook`` and :func:`_record_content` (which
+      also runs the store's content validation, so recomputed values that fail
+      it are here) -- is a record that does not reproduce: the caller ends the
+      run ``gate_closed`` with ``SemanticsChanged``. The ``try`` holds exactly
+      these two calls (AST) and catches ``Exception`` only, never
+      ``BaseException``;
     * the ledger side -- reading or parsing the stored record or its snapshot
       (``store.snapshot``, :func:`_market_snapshot`, the registry and snapshot
       reads of ``expected_record_columns``, which raise
-      ``LedgerInconsistentError`` or a ``sqlite3`` error) -- propagates, so the
-      run ends ``error`` with that exception's class;
-    * the program side -- the current program failing to recompute the
-      record, or its recomputed values failing the store's validation
-      (``ForecastStoreError``) -- is a record that does not reproduce: the
-      caller ends the run ``gate_closed`` with ``SemanticsChanged``.
+      ``LedgerInconsistentError``, ``ForecastStoreError`` or a ``sqlite3``
+      error) -- is outside the ``try`` and propagates, so the run ends
+      ``error`` with that exception's class.
     """
     stored = store.snapshot(str(row["input_series_sha256"]))
     market = _market_snapshot(stored)
@@ -519,17 +523,13 @@ def _reproduces(store: ForecastStore, recording: RecordingClaim, row: Mapping[st
         )
         content = _record_content(outcome)
     except Exception:
-        # The current program cannot compute what it once wrote (a pure step).
+        # The current program cannot compute, or validate, what it once wrote.
         return False
-    try:
-        expected = store.expected_record_columns(
-            claim_id=recording.claim.claim_id,
-            **content,
-            input_series_sha256=stored.content_sha256,
-        )
-    except ForecastStoreError:
-        # The current program's values fail the write validation.
-        return False
+    expected = store.expected_record_columns(
+        claim_id=recording.claim.claim_id,
+        **content,
+        input_series_sha256=stored.content_sha256,
+    )
     return expected["data_as_of"] == row["data_as_of"] and all(
         expected[name] == row[name] for name in RECOMPUTED_COLUMNS
     )
@@ -611,9 +611,14 @@ class _Content(TypedDict):
 
 
 def _record_content(outcome: OutlookOutcome) -> _Content:
-    """The content keyword arguments of ``write_record`` / ``expected_record_columns``."""
+    """The content keyword arguments of ``write_record`` / ``expected_record_columns``.
+
+    Checked by the store's write validation (``check_record_content``, no
+    ledger read): a content the store would refuse raises
+    ``ForecastStoreError`` here, before any write or ledger comparison.
+    """
     evaluation = outcome.evaluation
-    return {
+    content: _Content = {
         "data_as_of": outcome.data_as_of,
         "label": evaluation.label,
         "range_basis": evaluation.range_basis,
@@ -623,3 +628,5 @@ def _record_content(outcome: OutlookOutcome) -> _Content:
         "base_close": outcome.base_close,
         "baseline_predictions": outcome.baseline_predictions,
     }
+    ForecastStore.check_record_content(**content)
+    return content

@@ -1171,16 +1171,159 @@ def test_f3_a_program_side_failure_closes_the_gate_as_semantics_changed(
 
         monkeypatch.setattr(recorder_module, "compute_outlook", failing)
     else:
-        real = recorder_module._record_content
+        # The current program computes values the store's validation refuses
+        # (insufficient without a missing item): _record_content raises inside the try.
+        real = engine.compute_outlook
 
-        def invalid(outcome: Any) -> Any:
-            return {**real(outcome), "label": "insufficient", "missing": ()}
+        def invalid(*args: Any, **kwargs: Any) -> Any:
+            outcome = real(*args, **kwargs)
+            broken = replace(outcome.evaluation, label="insufficient", missing=())
+            return replace(outcome, evaluation=broken)
 
-        monkeypatch.setattr(recorder_module, "_record_content", invalid)
+        monkeypatch.setattr(recorder_module, "compute_outlook", invalid)
     result = desk.run(at(NEXT, 22, 10))
     assert (result.outcome, result.error_class) == ("gate_closed", "SemanticsChanged")
     assert _end(desk, result.run_id)["error_class"] == "SemanticsChanged"
     assert desk.count("forecast_record") == 2
+
+
+def test_b_a_ledger_side_refusal_after_the_pure_calls_is_an_error(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Supplement 4 point 1 (b): expected_record_columns (registry and snapshot reads)
+    # is outside the try, so even a ForecastStoreError from it is ledger-side.
+    _under_program_b(desk, monkeypatch)
+
+    def refused(**kwargs: Any) -> Any:
+        raise ForecastStoreError("input_series_sha256 must be 64 lower-case hex digits")
+
+    monkeypatch.setattr(desk.store, "expected_record_columns", refused)
+    result = desk.run(at(NEXT, 22, 10))
+    assert (result.outcome, result.error_class) == ("error", "ForecastStoreError")
+    assert desk.count("forecast_record") == 2
+
+
+def test_b_the_write_path_validates_the_content_before_writing(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = engine.compute_outlook
+
+    def invalid(*args: Any, **kwargs: Any) -> Any:
+        outcome = real(*args, **kwargs)
+        broken = replace(outcome.evaluation, label="insufficient", missing=())
+        return replace(outcome, evaluation=broken)
+
+    monkeypatch.setattr(recorder_module, "compute_outlook", invalid)
+    result = desk.run(EVENING)
+    assert (result.outcome, result.error_class) == ("error", "ForecastStoreError")
+    assert desk.count("forecast_input_series") == 0 and desk.count("forecast_record") == 0
+
+
+def _reproduces_try_violations(source: str) -> list[str]:
+    """Supplement 4 point 1 (b) on ``_reproduces``: one ``try``, exactly the two pure calls.
+
+    Its body holds exactly the calls ``compute_outlook`` and ``_record_content``
+    (no ledger read or parse inside it), its only handler catches ``Exception``
+    (not ``BaseException``, not bare), and it has no ``else`` / ``finally``.
+    """
+    tree = ast.parse(source)
+    functions = [
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_reproduces"
+    ]
+    if len(functions) != 1:
+        return [f"{len(functions)} _reproduces functions"]
+    tries = [n for n in ast.walk(functions[0]) if isinstance(n, ast.Try | ast.TryStar)]
+    if len(tries) != 1:
+        return [f"{len(tries)} try statements"]
+    (node,) = tries
+    found: list[str] = []
+    called = sorted(
+        ast.unparse(call.func)
+        for statement in node.body
+        for call in ast.walk(statement)
+        if isinstance(call, ast.Call)
+    )
+    if called != ["_record_content", "compute_outlook"]:
+        found.append(f"try calls {called}")
+    if len(node.body) != 2:
+        found.append(f"try body has {len(node.body)} statements")
+    for handler in node.handlers:
+        caught = None if handler.type is None else ast.unparse(handler.type)
+        if caught != "Exception":
+            found.append(f"except {caught}")
+    if len(node.handlers) != 1:
+        found.append(f"{len(node.handlers)} handlers")
+    if node.orelse or node.finalbody:
+        found.append("else or finally")
+    return found
+
+
+def test_b_the_recomputation_try_holds_exactly_the_two_pure_calls() -> None:
+    source = (APP_ROOT / "forecast" / "recorder.py").read_text(encoding="utf-8")
+    assert _reproduces_try_violations(source) == []
+
+
+def test_b_no_recorder_handler_catches_base_exception() -> None:
+    tree = ast.parse((APP_ROOT / "forecast" / "recorder.py").read_text(encoding="utf-8"))
+    caught = [
+        None if h.type is None else ast.unparse(h.type)
+        for h in ast.walk(tree)
+        if isinstance(h, ast.ExceptHandler)
+    ]
+    assert caught and None not in caught
+    assert not [c for c in caught if c is not None and "BaseException" in c]
+
+
+_GOOD_TRY = (
+    "def _reproduces(store, recording, row):\n"
+    "    stored = store.snapshot(row)\n"
+    "    try:\n"
+    "        outcome = compute_outlook(stored, ruleset=r)\n"
+    "        content = _record_content(outcome)\n"
+    "    except Exception:\n"
+    "        return False\n"
+    "    return store.expected_record_columns(**content)\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param("except Exception:", "except BaseException:", id="base-exception"),
+        pytest.param("except Exception:", "except:", id="bare"),
+        pytest.param("except Exception:", "except (Exception, KeyboardInterrupt):", id="tuple"),
+        pytest.param(
+            "    stored = store.snapshot(row)\n    try:\n",
+            "    try:\n        stored = store.snapshot(row)\n",
+            id="ledger-read-inside",
+        ),
+        pytest.param(
+            "        content = _record_content(outcome)\n",
+            "        content = _record_content(outcome)\n        store.expected_record_columns()\n",
+            id="ledger-derivation-inside",
+        ),
+        pytest.param(
+            "compute_outlook(stored, ruleset=r)",
+            "compute_outlook(_market_snapshot(stored), ruleset=r)",
+            id="parse-inside",
+        ),
+        pytest.param(
+            "        return False\n",
+            "        return False\n    finally:\n        pass\n",
+            id="finally",
+        ),
+        pytest.param(
+            "    return store.expected_record_columns(**content)\n",
+            "    try:\n        return store.expected_record_columns(**content)\n"
+            "    except ValueError:\n        return False\n",
+            id="second-try",
+        ),
+    ],
+)
+def test_the_recomputation_try_scan_has_teeth(old: str, new: str) -> None:
+    assert _reproduces_try_violations(_GOOD_TRY) == []
+    assert _GOOD_TRY.count(old) == 1
+    assert _reproduces_try_violations(_GOOD_TRY.replace(old, new)) != []
 
 
 def test_f3_both_kinds_leave_the_next_run_to_recompute(

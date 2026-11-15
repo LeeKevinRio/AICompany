@@ -138,6 +138,10 @@ BUSY_TIMEOUT_MS: Final = 5000
 
 _CROCKFORD: Final = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
+#: The well-formed snapshot reference ``check_record_content`` validates with: the
+#: content checks do not depend on which snapshot a record will reference.
+_CONTENT_ONLY_SNAPSHOT: Final = "0" * 64
+
 
 class ForecastStoreError(ValueError):
     """A write was refused by the store's validation; nothing was written."""
@@ -830,9 +834,10 @@ class ForecastStore:
         compares these with the stored rows.
 
         A content that fails validation raises ``ForecastStoreError`` (the
-        caller's values); a registry or snapshot that cannot be read or parsed
-        raises ``LedgerInconsistentError`` (the ledger's rows; supplement 3
-        (revised) point 8).
+        recorder validates the content first, with :meth:`check_record_content`,
+        so there it can only be the stored snapshot reference); a registry or
+        snapshot that cannot be read or parsed raises ``LedgerInconsistentError``
+        (the ledger's rows; supplement 3 (revised) point 8).
         """
         content = self._record_content(
             data_as_of=data_as_of,
@@ -863,6 +868,39 @@ class ForecastStore:
                 f"stored bars_json cannot be read ({type(exc).__name__})"
             ) from None
         return _record_columns(claim, content, max_fetched_at)
+
+    @classmethod
+    def check_record_content(
+        cls,
+        *,
+        data_as_of: date,
+        label: Label,
+        range_basis: str | None,
+        missing: Sequence[MissingItem],
+        evidence: Mapping[str, object],
+        band_def: Mapping[str, object],
+        base_close: Decimal | int | str,
+        baseline_predictions: Mapping[str, object],
+    ) -> None:
+        """The write validation of a record's content alone: no ledger read, no snapshot.
+
+        Raises ``ForecastStoreError`` exactly when :meth:`write_record` would
+        refuse this content before reading the ledger (the same
+        ``_record_content`` checks). The recorder runs it on what the current
+        program computed, so a recomputation whose values fail validation is a
+        program-side failure (ADR-0030 supplement 3 (revised) point 8).
+        """
+        cls._record_content(
+            data_as_of=data_as_of,
+            label=label,
+            range_basis=range_basis,
+            missing=missing,
+            evidence=evidence,
+            band_def=band_def,
+            base_close=base_close,
+            baseline_predictions=baseline_predictions,
+            input_series_sha256=_CONTENT_ONLY_SNAPSHOT,
+        )
 
     @classmethod
     def _record_content(
