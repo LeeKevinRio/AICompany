@@ -7,6 +7,7 @@
 - 補充紀錄：2026-11-15 append 補充三（修訂版）（跨 commit 比對基準、取值時點、K-2 禁詞來源、取代鏈、原子寫入、例外歸類；tech-architect 裁示，收緊與釐清，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第三批recorder交件-dev-lead.md`、`work/reviews/2026-11-15-NM5第三批recorder審查-qa-reviewer.md`）。**補充三（修訂版）取代同日稍早落檔的補充三**：兩者衝突時以修訂版為準；初版依 append-only 原樣保留（tech-architect 回報 `work/reviews/2026-11-15-NM5recorder四題與f1f4裁示-tech-architect.md`）。
 - 補充紀錄：2026-11-15 append 補充四（第四批解讀確認、CG-2／CG-3 正式登記的執行方式與檢查點、剩餘順序；tech-architect 裁示，釐清與收緊，不改使用者面字面與已登記雜湊；第 4 點的執行方式須 CEO 同意，其餘 CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第四批解讀與CG2登記方式裁示-tech-architect.md`）。
 - 補充紀錄：2026-11-15 append 補充五（第五批解讀確認、失效條件 F-2 的計數視窗、D-8 第 4 點 WARNING、管線驗收的斷言範圍與空轉防護、harness 輸出不含 n̂；tech-architect 裁示，釐清與收緊，沒有放寬，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第五批交件-dev-lead.md`、`work/reviews/2026-11-15-NM5第五批五點解讀確認-quant.md`）。
+- 補充紀錄：2026-11-15 append 補充五附記（第 3 點 (c) missing code 白名單的唯一定義；tech-architect 裁示，釐清不放寬；來源 `work/reviews/2026-11-15-missing-code白名單裁示-tech-architect.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -581,3 +582,12 @@
   - 第 2 點：以下四種情形各有測試，outcome 與 `content_hash` 都不變，log 行符合固定格式：不成立時不記；只有 T1；T1 與 T2 同時成立；判定拋出例外時記固定字面的 WARNING。
   - 第 3 點：(a)～(c) 各有一個會判失敗的反例 fixture，例如全部紀錄都是 insufficient 時判 `vacuous_equality`。
   - 第 5 點：harness 的完整輸出與 `render_summary` 都不含「n̂」與 n̂ 的固定標示；`report status` 照常列出 n̂（測試）。
+
+---
+
+## 補充五附記：第 3 點 (c) 的 missing code 白名單（2026-11-15）
+
+- 決策者：tech-architect。條文由 coordinator 依 TA 報告整理；第 2 行為 TA 指定的解讀原文。性質：釐清補充五第 3 點 (c)，不改本文、不放寬。
+- 四類＝§2.5 四列、五個 code；唯一定義為 `app.outlook.engine.MISSING_CODES`。
+- `MISSING_CODES` 放 `engine.py`、不放 `outlook/missing.py`（`MissingItem.code` 也承載 §2.5 以外的 code，例如 `E-ADJ-COVERAGE`）。harness 引用它，不在 `tests/` 另列成員。
+- 它使 `code_digest` 改變，必須在 CG-2 PR 合併前落地；對補充三（修訂版）比對基準、補充四 M-2～M-5 與 CG-2 登記沒有影響。
