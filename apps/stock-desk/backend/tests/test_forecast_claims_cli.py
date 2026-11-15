@@ -353,15 +353,15 @@ def test_the_registered_row_cannot_be_rewritten(cli: Cli, sql: str) -> None:
 
 #: qa batch 4 follow-up 4: the six zero-width characters the scan removes.
 ZERO_WIDTH_FORMS = [
-    pytest.param("保​證", id="U+200B"),
-    pytest.param("必‌漲", id="U+200C"),
-    pytest.param("必‍賺", id="U+200D"),
-    pytest.param("穩⁠賠", id="U+2060"),
-    pytest.param("包﻿賺", id="U+FEFF"),
-    pytest.param("零­風險", id="U+00AD"),
-    pytest.param("一​定­會", id="two-kinds"),
-    pytest.param("無 ​風險", id="space-and-zero-width"),
-    pytest.param("必 跌", id="no-break-space"),
+    pytest.param("保\u200b證", id="U+200B"),
+    pytest.param("必\u200c漲", id="U+200C"),
+    pytest.param("必\u200d賺", id="U+200D"),
+    pytest.param("穩\u2060賠", id="U+2060"),
+    pytest.param("包\ufeff賺", id="U+FEFF"),
+    pytest.param("零\u00ad風險", id="U+00AD"),
+    pytest.param("一\u200b定\u00ad會", id="two-kinds"),
+    pytest.param("無 \u200b風險", id="space-and-zero-width"),
+    pytest.param("必\u00a0跌", id="no-break-space"),
 ]
 
 
@@ -387,7 +387,7 @@ def test_fl78m_a_rule_set_with_a_banned_phrase_cannot_be_registered(
     assert cli.rows() == []
 
 
-@pytest.mark.parametrize("form", ["保 證", "必　漲", "零 風險"])
+@pytest.mark.parametrize("form", ["保 證", "必　漲", "零\u00a0風險"])
 def test_a_spaced_phrase_in_the_rules_is_a_scan_hit(
     cli: Cli, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], form: str
 ) -> None:
@@ -424,12 +424,30 @@ def test_a_zero_width_split_phrase_in_the_definition_is_a_scan_hit(form: str) ->
     assert len(scan.hits) == 1 and scan.hits[0].startswith("definition: ")
 
 
+def test_zero_width_is_exactly_six_code_points_written_as_escapes() -> None:
+    # qa batch 5 follow-up 2: the set is pinned by code point, and the source spells it with
+    # escapes -- no invisible character is left in definitions.py for an editor to drop.
+    assert sorted(ord(char) for char in definitions.ZERO_WIDTH) == [
+        0x00AD,  # soft hyphen
+        0x200B,  # zero width space
+        0x200C,  # zero width non-joiner
+        0x200D,  # zero width joiner
+        0x2060,  # word joiner
+        0xFEFF,  # zero width no-break space (BOM)
+    ]
+    source = Path(definitions.__file__).read_text(encoding="utf-8")
+    assert not [char for char in definitions.ZERO_WIDTH if char in source]
+    assert '{"\\u200b", "\\u200c", "\\u200d", "\\u2060", "\\ufeff", "\\u00ad"}' in source
+
+
 def test_squeeze_removes_whitespace_and_exactly_the_zero_width_characters() -> None:
-    assert definitions.ZERO_WIDTH == frozenset({"​", "‌", "‍", "⁠", "﻿", "­"})
+    assert definitions.ZERO_WIDTH == frozenset(
+        {"\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"}
+    )
     every = "".join(sorted(definitions.ZERO_WIDTH))
-    assert definitions.squeeze(f"保{every} 　 \t證") == "保證"
+    assert definitions.squeeze(f"保{every} 　\u00a0\t證") == "保證"
     # NFKC still applies (full-width letters), other characters stay.
-    assert definitions.squeeze("ＡＢ​c-d") == "ABc-d"
+    assert definitions.squeeze("ＡＢ\u200bc-d") == "ABc-d"
 
 
 @pytest.mark.parametrize("horizon", [3, 5])

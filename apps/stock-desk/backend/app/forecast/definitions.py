@@ -256,7 +256,9 @@ class PhraseScan:
 #: Invisible characters ``str.split()`` keeps (qa batch 4 follow-up 4): zero width
 #: space, zero width non-joiner, zero width joiner, word joiner, zero width
 #: no-break space (BOM) and soft hyphen. NFKC leaves every one of them in place.
-ZERO_WIDTH: Final[frozenset[str]] = frozenset({"​", "‌", "‍", "⁠", "﻿", "­"})
+ZERO_WIDTH: Final[frozenset[str]] = frozenset(
+    {"\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"}
+)
 
 
 def squeeze(text: str) -> str:
