@@ -6,9 +6,10 @@ loader or ``model_validate`` with a validation context:
 
 1. every model is ``extra="forbid"``; the rule set ``version`` is semver; YAML is
    parsed with ``yaml.safe_load``;
-2. evaluable subset: every ``field`` and ``ref`` of the condition tree (nested
-   ``all``/``any`` included) must be in :data:`OUTLOOK_RULE_FIELDS`, the one
-   source of outlook rule fields (not the advice card's field list);
+2. evaluable subset: every ``field`` and ``ref`` of the condition tree and of
+   the ``invalidation`` tree (nested ``all``/``any`` included) must be in
+   :data:`OUTLOOK_RULE_FIELDS`, the one source of outlook rule fields (not the
+   advice card's field list);
 3. banned phrases: the loader takes them as the keyword ``banned_phrases`` (no
    default) and passes them through the validation context to the rule set's
    after validator, which rejects any string value containing one;
@@ -17,8 +18,21 @@ loader or ``model_validate`` with a validation context:
    ``model_copy(update=...)`` and the deprecated ``copy(update/include/exclude=...)``
    raise ``TypeError`` (:mod:`app.dirdef.guard`).
 
-:data:`OUTLOOK_RULE_FIELDS` is empty until quant registers the fields at the G-3
-freeze, so every rule set that names a field is rejected (fail-closed).
+Two more guards (tech-architect type ruling 2026-11-14, Q1 and Q2):
+
+* ``invalidation`` is a condition tree of the same type as ``condition`` -- no
+  second expression grammar exists in ``app/`` -- and it reads exactly the set
+  of fields its ``condition`` reads. That it is *the negation* of the condition
+  is not judged at load time; tests prove it on a grid of boundary values;
+* the rule set carries a required ``aggregation`` block (``theta``,
+  ``min_completeness``; no default, no extra key). Both are floats (an int is
+  taken as the same float, a bool or a string is refused), finite, ``theta > 0``
+  and ``0 < min_completeness <= 1``. They are inside ``rules_logic_sha256``;
+  ``theta: 2`` and ``theta: 2.0`` hash the same.
+
+:data:`OUTLOOK_RULE_FIELDS` is the field set of the frozen market h3 / h5
+specification (freeze pack G3); the field formulas live in
+``app/outlook/engine.py``.
 
 Step 3 enumerates string values with :func:`app.dirdef.strings.string_values`,
 the one enumeration in ``app/`` (shared with ``app/forecast/definitions.py``;
@@ -52,8 +66,21 @@ from app.dirdef.guard import GuardedModel
 from app.dirdef.hashing import canonical_sha256
 from app.dirdef.strings import string_values
 
-#: Fields an outlook rule may read. Empty until the G-3 freeze (fail-closed).
-OUTLOOK_RULE_FIELDS: Final[frozenset[str]] = frozenset()
+#: Fields an outlook rule may read (freeze pack G3; formulas in ``app/outlook/engine.py``).
+#: ``logret_past_3`` / ``logret_past_5`` are read only by the placeholder rule sets.
+OUTLOOK_RULE_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "close",
+        "ma20",
+        "ma60",
+        "z_past_20",
+        "z_past_3",
+        "z_past_5",
+        "vol_ratio_20_120",
+        "logret_past_3",
+        "logret_past_5",
+    }
+)
 
 #: Rule fields outside ``rules_logic_sha256`` (D-10 point 1). quant may add
 #: literal keys at the freeze; nothing is registered yet, so no stored hash moves.
@@ -143,7 +170,23 @@ class OutlookRule(GuardedModel):
     condition: OutlookCondition
     explanation: str = Field(min_length=1)
     counterargument: str = Field(min_length=1)
-    invalidation: str = Field(min_length=1)
+    #: The condition tree under which this rule's reason no longer holds (TA Q1).
+    invalidation: OutlookCondition
+
+
+#: A finite float that is not a bool or a string; an int is taken as the same float.
+AggregationNumber = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+
+
+class OutlookAggregation(GuardedModel):
+    """ADR-0025 D-2.3 aggregation parameters of one rule set (TA G1 ruling, Q2)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: theta_h: ``|W| < theta`` is ``range``.
+    theta: AggregationNumber = Field(gt=0)
+    #: Evaluable rules / all rules below this is ``insufficient``.
+    min_completeness: AggregationNumber = Field(gt=0, le=1)
 
 
 class OutlookRuleSet(GuardedModel):
@@ -152,6 +195,7 @@ class OutlookRuleSet(GuardedModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
+    aggregation: OutlookAggregation
     rules: tuple[OutlookRule, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -163,12 +207,18 @@ class OutlookRuleSet(GuardedModel):
                 raise ValueError(f"duplicate rule id {rule.id!r}")
             seen.add(rule.id)
         for rule in self.rules:
-            for path in condition_fields(rule.condition):
-                if path not in OUTLOOK_RULE_FIELDS:
-                    raise ValueError(
-                        f"rule {rule.id!r} reads {path!r}, which is not in OUTLOOK_RULE_FIELDS"
-                    )
+            for tree in (rule.condition, rule.invalidation):
+                for path in condition_fields(tree):
+                    if path not in OUTLOOK_RULE_FIELDS:
+                        raise ValueError(
+                            f"rule {rule.id!r} reads {path!r}, which is not in OUTLOOK_RULE_FIELDS"
+                        )
         _scan_banned_phrases(self, phrases)
+        for rule in self.rules:
+            if set(condition_fields(rule.invalidation)) != set(condition_fields(rule.condition)):
+                raise ValueError(
+                    f"rule {rule.id!r}: the invalidation must read exactly the condition's fields"
+                )
         return self
 
 

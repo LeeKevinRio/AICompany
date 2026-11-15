@@ -43,6 +43,7 @@ from app.dirdef.rules import (
     OUTLOOK_RULE_FIELDS,
     RULE_TEXT_FIELDS,
     BannedPhraseRuleSetError,
+    OutlookAggregation,
     OutlookAllOf,
     OutlookAnyOf,
     OutlookComparison,
@@ -55,6 +56,7 @@ from app.dirdef.rules import (
 )
 from app.dirdef.strings import string_values
 from tests.dirdef_helpers import (
+    AGGREGATION,
     RULE_FIELDS_SEAM,
     SUBSTITUTE_FIELDS,
     rule_data,
@@ -151,7 +153,7 @@ def test_the_rule_set_validator_receives_the_loader_context(
 # names, stopped by the banned-phrase scan; ``type`` keys are a pattern or a
 # closed list, which the model itself refuses before the scan runs.
 
-SCAN_KEYS = frozenset({"name", "explanation", "counterargument", "invalidation", "field", "ref"})
+SCAN_KEYS = frozenset({"name", "explanation", "counterargument", "field", "ref"})
 TYPE_KEYS = frozenset({"version", "id", "direction", "op"})
 
 
@@ -231,7 +233,11 @@ def test_the_table_covers_every_level_of_the_condition_tree() -> None:
         "rules[0].condition.all[1].any[0].ref",
         "rules[0].explanation",
         "rules[0].counterargument",
-        "rules[0].invalidation",
+        "rules[0].invalidation.any[0].field",
+        "rules[0].invalidation.any[0].op",
+        "rules[0].invalidation.any[1].field",
+        "rules[0].invalidation.any[1].op",
+        "rules[0].invalidation.any[1].ref",
     }
     assert set(POSITIONS) == expected
     assert {path: _stopped_by(path) for path in POSITIONS}  # every position classified
@@ -326,13 +332,15 @@ def test_model_validate_without_usable_phrases_is_refused(
 
 def test_the_constructor_is_refused(fields: Callable[[frozenset[str]], None]) -> None:
     rule = OutlookRule.model_validate(rule_data())
+    aggregation = OutlookAggregation.model_validate(AGGREGATION)
     with pytest.raises(ValidationError, match="without banned phrases"):
-        OutlookRuleSet(version="1.0.0", rules=(rule,))
+        OutlookRuleSet(version="1.0.0", aggregation=aggregation, rules=(rule,))
 
 
 GUARDED: list[tuple[type[BaseModel], dict[str, Any]]] = [
     (OutlookRuleSet, ruleset_data()),
     (OutlookRule, rule_data()),
+    (OutlookAggregation, dict(AGGREGATION)),
     (OutlookComparison, {"field": "index.ret_5d", "op": "gt", "value": 0.0}),
     (OutlookAllOf, {"all": [{"field": "index.ret_5d", "op": "gt", "value": 0.0}]}),
     (OutlookAnyOf, {"any": [{"field": "index.ret_5d", "op": "gt", "value": 0.0}]}),
@@ -386,11 +394,24 @@ def test_the_deprecated_copy_cannot_swap_in_unscanned_rules(
 # --- FL-78 (j): evaluable subset -------------------------------------------------------
 
 
-def test_the_production_field_list_is_empty() -> None:
-    assert OUTLOOK_RULE_FIELDS == frozenset()
+def test_the_production_field_list_is_the_frozen_g3_set() -> None:
+    # Freeze pack G3: nine fields, all derived from its section 2.3 table.
+    assert OUTLOOK_RULE_FIELDS == frozenset(
+        {
+            "close",
+            "ma20",
+            "ma60",
+            "z_past_20",
+            "z_past_3",
+            "z_past_5",
+            "vol_ratio_20_120",
+            "logret_past_3",
+            "logret_past_5",
+        }
+    )
 
 
-def test_with_the_empty_field_list_every_rule_set_is_refused() -> None:
+def test_with_the_production_field_list_a_fixture_field_is_refused() -> None:
     with pytest.raises(RuleSetLoadError, match="OUTLOOK_RULE_FIELDS"):
         _load(ruleset_data())
 
@@ -509,10 +530,11 @@ def test_the_rule_logic_hash_follows_the_canonical_form(
     ruleset = _ruleset()
     dumped = ruleset.model_dump(mode="json")
     payload = {
+        "aggregation": dumped["aggregation"],
         "rules": [
             {k: v for k, v in rule.items() if k not in {"explanation", "counterargument"}}
             for rule in dumped["rules"]
-        ]
+        ],
     }
     text = json.dumps(
         payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
@@ -528,8 +550,18 @@ RULE_LOGIC_CHANGES: dict[str, Any] = {
     "name": "renamed",
     "direction": "bearish",
     "weight": 0.6,
-    "condition": {"field": "index.ret_5d", "op": "lt", "value": 0.0},
-    "invalidation": "another test",
+    "condition": {
+        "all": [
+            {"field": "index.ret_5d", "op": "lt", "value": 0.0},
+            {"field": "index.ma20_gap", "op": "gt", "ref": "breadth.adv_ratio"},
+        ]
+    },
+    "invalidation": {
+        "any": [
+            {"field": "index.ret_5d", "op": "lt", "value": 0.0},
+            {"field": "index.ma20_gap", "op": "lte", "ref": "breadth.adv_ratio"},
+        ]
+    },
 }
 #: Every field of a comparison leaf, changed in the fixture's first leaf.
 COMPARISON_CHANGES: dict[str, Any] = {
@@ -545,8 +577,24 @@ def test_every_rule_and_condition_field_has_a_hash_cell() -> None:
     assert set(RULE_TEXT_CHANGES) == RULE_TEXT_FIELDS
     assert set(RULE_LOGIC_CHANGES) == set(OutlookRule.model_fields) - RULE_TEXT_FIELDS
     assert set(COMPARISON_CHANGES) == set(OutlookComparison.model_fields)
-    # Rule set level: version (outside, see the bump cell) and rules (the cells below).
-    assert set(OutlookRuleSet.model_fields) == {"version", "rules"}
+    # Rule set level: version (outside, see the bump cell), aggregation and rules.
+    assert set(OutlookRuleSet.model_fields) == {"version", "aggregation", "rules"}
+    assert set(AGGREGATION_CHANGES) == set(OutlookAggregation.model_fields)
+
+
+#: Every aggregation field: a different value moves the logic hash (TA Q2: inside it).
+AGGREGATION_CHANGES: dict[str, Any] = {"theta": 3.0, "min_completeness": 0.5}
+
+
+@pytest.mark.parametrize("name", sorted(AGGREGATION_CHANGES))
+def test_an_aggregation_change_moves_the_rule_logic_hash(
+    fields: Callable[[frozenset[str]], None], name: str
+) -> None:
+    changed = OutlookRuleSet.model_validate(
+        ruleset_data(aggregation={**AGGREGATION, name: AGGREGATION_CHANGES[name]}),
+        context=CONTEXT,
+    )
+    assert rules_logic_sha256(changed) != rules_logic_sha256(_ruleset())
 
 
 @pytest.mark.parametrize("name", sorted(RULE_TEXT_CHANGES))
@@ -573,10 +621,14 @@ def test_a_condition_leaf_change_moves_the_rule_logic_hash(
     if name == "ref":
         leaf.pop("value")
     leaf[name] = COMPARISON_CHANGES[name]
-    condition = copy.deepcopy(rule_data()["condition"])
+    base_condition = rule_data()["condition"]
+    condition = copy.deepcopy(base_condition)
     condition["all"][0] = leaf
-    changed = _ruleset(condition=condition)
-    assert rules_logic_sha256(changed) != rules_logic_sha256(_ruleset())
+    # The invalidation must read the condition's fields (TA Q1 guard (b)), so both
+    # sides use their own condition as the invalidation; only the leaf differs.
+    changed = _ruleset(condition=condition, invalidation=condition)
+    base = _ruleset(condition=base_condition, invalidation=base_condition)
+    assert rules_logic_sha256(changed) != rules_logic_sha256(base)
 
 
 def test_a_version_bump_keeps_the_rule_logic_hash(

@@ -93,14 +93,32 @@ def rule_data(**overrides: Any) -> dict[str, Any]:
         },
         "explanation": "the index rose over five sessions",
         "counterargument": "short rises often fade",
-        "invalidation": "index.ret_5d below zero",
+        # The negation of the condition, as a tree over the same fields (TA Q1).
+        "invalidation": {
+            "any": [
+                {"field": "index.ret_5d", "op": "lte", "value": 0.0},
+                {"field": "index.ma20_gap", "op": "lte", "ref": "breadth.adv_ratio"},
+            ]
+        },
     }
     rule.update(overrides)
     return rule
 
 
-def ruleset_data(*rules: dict[str, Any], version: str = "1.0.0") -> dict[str, Any]:
-    return {"version": version, "rules": list(rules) or [rule_data()]}
+#: A valid ``aggregation`` block (fixture values, not the frozen theta).
+AGGREGATION: Final[Mapping[str, Any]] = {"theta": 1.0, "min_completeness": 1.0}
+
+
+def ruleset_data(
+    *rules: dict[str, Any],
+    version: str = "1.0.0",
+    aggregation: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "version": version,
+        "aggregation": dict(AGGREGATION if aggregation is None else aggregation),
+        "rules": list(rules) or [rule_data()],
+    }
 
 
 def ruleset_bytes(data: Mapping[str, Any]) -> bytes:
