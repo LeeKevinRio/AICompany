@@ -9,8 +9,10 @@ never UPDATEs, DELETEs or REPLACEs (D-2 point 6). Every write:
 * takes every timestamp from the store clock -- ``started_at``,
   ``captured_at``, ``registered_at``, ``created_at``, ``ended_at`` are never
   parameters (S-2) -- and derives ``late`` and ``late_cutoff_at`` itself (D-3
-  point 3, S-3). The clock is injectable for tests (``clock=``); it must
-  return timezone-aware datetimes.
+  point 3, S-3; the cutoff rule is ``app.outlook.inputs.late_cutoff_at``, the
+  one definition the computation's ``E-PIT-UNVERIFIED`` check also uses). The
+  clock is injectable for tests (``clock=``); it must return timezone-aware
+  datetimes.
 
 Record write validation (D-2 point 7; D-3 points 1, 2, 4, 6):
 
@@ -57,13 +59,12 @@ import sqlite3
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Final, Literal, get_args
-from zoneinfo import ZoneInfo
 
-from app.data.freshness import TW_POLICY, next_weekday
+from app.data.freshness import next_weekday
 from app.data.session_calendar import is_final
 from app.dirdef.definition import (
     DirectionDefinition,
@@ -93,6 +94,7 @@ from app.forecast.schema import (
     SCHEMA_VERSION,
     require_complete_schema,
 )
+from app.outlook.inputs import late_cutoff_at as late_cutoff_at  # re-exported (tests)
 from app.outlook.missing import MissingItem
 
 Clock = Callable[[], datetime]
@@ -184,12 +186,6 @@ def _claim_row(row: Sequence[object]) -> ClaimRow:
         replaces_claim_id=None if row[9] is None else str(row[9]),
         registered_at=datetime.fromisoformat(str(row[10])),
     )
-
-
-def late_cutoff_at(data_as_of: date) -> datetime:
-    """T's next calendar day at 00:00:00 Asia/Taipei (D-3 point 3), in UTC."""
-    local = datetime.combine(data_as_of + timedelta(days=1), time(0), ZoneInfo(TW_POLICY.timezone))
-    return local.astimezone(UTC)
 
 
 def valid_until_session_estimate(data_as_of: date, horizon: int) -> date:
