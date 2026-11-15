@@ -8,6 +8,7 @@
 - 補充紀錄：2026-11-15 append 補充四（第四批解讀確認、CG-2／CG-3 正式登記的執行方式與檢查點、剩餘順序；tech-architect 裁示，釐清與收緊，不改使用者面字面與已登記雜湊；第 4 點的執行方式須 CEO 同意，其餘 CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第四批解讀與CG2登記方式裁示-tech-architect.md`）。
 - 補充紀錄：2026-11-15 append 補充五（第五批解讀確認、失效條件 F-2 的計數視窗、D-8 第 4 點 WARNING、管線驗收的斷言範圍與空轉防護、harness 輸出不含 n̂；tech-architect 裁示，釐清與收緊，沒有放寬，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第五批交件-dev-lead.md`、`work/reviews/2026-11-15-NM5第五批五點解讀確認-quant.md`）。
 - 補充紀錄：2026-11-15 append 補充五附記（第 3 點 (c) missing code 白名單的唯一定義；tech-architect 裁示，釐清不放寬；來源 `work/reviews/2026-11-15-missing-code白名單裁示-tech-architect.md`）。
+- 補充紀錄：2026-11-15 append 補充六（D-7 真實資料那一次：取數方式、注入時間戳、完整輸出不落檔、回貼白名單、失敗後的診斷路徑、通過證據與 CG-2 的綁定、`uv.lock` 換行；tech-architect 裁示，釐清與收緊，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/` 程式；第 1 點 (b) 與第 4 點 (d) 的讀法待風控確認，確認前一鍵檔不得在 CEO 本機執行；其餘 CEO 可推翻；來源 `work/reviews/2026-11-15-真實資料管線驗收一鍵檔設計-devops-sre.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -591,3 +592,97 @@
 - 四類＝§2.5 四列、五個 code；唯一定義為 `app.outlook.engine.MISSING_CODES`。
 - `MISSING_CODES` 放 `engine.py`、不放 `outlook/missing.py`（`MissingItem.code` 也承載 §2.5 以外的 code，例如 `E-ADJ-COVERAGE`）。harness 引用它，不在 `tests/` 另列成員。
 - 它使 `code_digest` 改變，必須在 CG-2 PR 合併前落地；對補充三（修訂版）比對基準、補充四 M-2～M-5 與 CG-2 登記沒有影響。
+
+---
+
+## 補充六：D-7 真實資料那一次的取數、時間戳、回貼內容、診斷路徑與通過證據（2026-11-15）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-15-真實資料管線驗收一鍵檔設計-devops-sre.md` T-1～T-7；CEO #149（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md`）。另讀 head `9f45cb2e` 的 `tests/forecast_pipeline_harness.py`、`tests/dirdef_helpers.py`、`app/forecast/canonical.py`、`app/forecast/recorder.py`、`app/data/cache.py`、`app/dirdef/registry.py`。
+- 性質：釐清 D-7 第 2、5、6 點、K-11、補充四第 5 點 M-1 與第 6 點、補充五第 3、5 點的讀法；收緊管線驗收輸出的可見範圍與「harness 通過」的效力。補充本文，不改本文；不改使用者面字面、規則檔、定義物件與已登記雜湊；不改 `app/` 任何程式。第 1 點 (b) 與第 4 點 (d) 的讀法送風控確認（Q-1、Q-2），確認前一鍵檔不得在 CEO 本機執行；其餘 CEO 可推翻。
+
+1. **取數**
+   - (a) 真實資料那一次的取數由 `scripts/` 內的外層包裝執行：
+     - 以位元組複製主 DB 的 `stock-desk.db` 與存在的 `-wal`、`-shm`，複製前後逐檔比對 sha256；
+     - 只對複本開 `sqlite3` URI `mode=ro` 連線並設 `query_only`，只 SELECT `price_bars_cache` 中 `symbol = '^TWII'`、`market = 'TW'` 的 `trade_date, open, high, low, close, volume, currency, source`；
+     - 轉成 `PriceBar` 後立即刪除複本，再以 `bars` 參數交給 `run_acceptance`。harness 本體不變。
+   - (b) 讀法：D-7 第 2 點與 K-11 的「遇到正式主 DB 路徑就拒絕」，對象是 harness 的 ledger 與任何 SQLite 連線的目標。為取得 D-7 第 6 點「目前快取中的值」而以 `open(..., "rb")` 讀主 DB 位元組做複製與雜湊，不在拒絕範圍內。主 DB 不得被任何 SQLite 連線開啟，含唯讀連線與 backup API。（Q-1）
+   - (c) 包裝不得 import `app.services`、`app.data.cache`、`app.data.service`、`app.data.providers`；不得有網路呼叫；不得寫入主 DB、複本或任何 `price_bars_cache`。
+   - (d) 列到 `PriceBar` 的對應，除 `as_of` 外與 `PriceBarCache` 讀取方法的結果逐欄相同。任一列無法解析就停止，不略過。
+   - (e) 以下任一成立就停止，只印固定句，不印任何值或根數：沒有列；任一列無法解析；任一列 `source` 以 `demo` 開頭；任一列 `source` 不是 `yfinance`（F-5 的訊號，由 coordinator 升級 tech-architect）；執行日前的 session 數少於 N_SNAPSHOT 加 `WINDOW_SESSIONS`，兩者都取自程式常數或導出函式。
+
+2. **時間戳**
+   - 每根 bar 的 `as_of` 取該 session 當日 20:00 Asia/Taipei，與 `synthetic_series` 的預設相同；快照的 `fetched_at` 依補充二第 3 點等於 `as_of`。不讀快取的 `as_of`、`fetched_at`。answer 的 `reason` 為 `synthetic_timestamps`。
+   - 因此，快取中曾在 15:00 前取得、其後未被覆寫的 bar，在 harness 中視為定案。這屬 D-7 第 6 點的限制。任何文件、回貼或報告不得宣稱這一次驗證了真實時序下的 PIT、定案或 `late`。
+
+3. **完整輸出與暫存帳**
+   - 補充五第 5 點的「只寫進暫存檔的完整輸出」讀為允許，不是要求。真實資料那一次，`AcceptanceResult.output` 不寫入任何檔案、主控台或 log。包裝對 `AcceptanceResult` 只讀 `passed`，另外呼叫 `render_summary`，不存取其他屬性。
+   - 暫存帳在 `finally` 刪除，含 `-wal`、`-shm`、`-journal`；下次啟動先掃除殘留，只掃包裝自己建立、名稱符合格式的子資料夾。全程停用 logging；例外只印固定句，不印例外文字與 traceback。
+   - 回貼為 `cleanup=FAILED` 時，操作說明須告知 CEO 不得開啟該資料夾；CG-2 登記前須再執行一次，取得 `cleanup=ok`。
+
+4. **回貼內容**
+   - (a) 回貼檔與主控台只輸出白名單行，逐行 fullmatch 固定樣式，其餘丟棄並計入 `summary_lines_dropped`。白名單恰好是：
+     - D-7 第 5 點的兩行固定標示；
+     - 版本行、`script_sha256_lf`、`harness_sha256_lf`、`git_head`、`git_clean=yes`、`core_autocrlf`、`eol_check=ok`、`code_digest`、`lockfile_sha256`、`definition_sha256`、`definition_logic_sha256`；
+     - `db_location=default`、`port_8000_listening=no`、三行 `copy_check`、`refusal_guard=ok`、`cache_depth=sufficient`、`bars_sources`、`bars_sha256`；
+     - 每個規則集一組：`render_summary` 的通過或失敗行、執行次數行、失敗種類行、暫存帳 sha256 行、輸出 sha256 行；
+     - `acceptance_result`、`cleanup`、`summary_lines_dropped`、`done_at_utc`。
+   - (b) 不輸出：
+     - `Failure.where`，包括 `vacuous_equality` 的規則集與 horizon；
+     - 例外文字、路徑、根數，以及任何筆數或比例。
+     - `render_summary` 的「視窗定案 session 數」行明列為已知不輸出，不計入 `summary_lines_dropped`。
+   - (c) `bars_sha256` 在呼叫 `run_acceptance` 之前，以 `app.forecast.canonical.content_sha256` 對注入後的整條序列計算，不另寫序列化（K-6）。兩個規則集共用一個值，只輸出一次。`bars_sources` 是封閉集，依第 1 點 (e) 恆為 `yfinance`。兩者都是輸入識別，與規則及 harness 判定無關。
+   - (d) 讀法：CEO #149 所稱不得給 CEO 看、也不得經 coordinator 轉述的「結果」，指模型與基準的標籤、暫定對照（含實現標籤與符合與否），以及與它們相關的任何筆數或比例。管線是否通過、失敗種類、各 `outcome` 的執行次數、雜湊與環境檢查，屬 D-4 第 5 點的執行狀態；補充四第 6 點與補充五第 3 點須以它們判定 harness 是否通過，所以可以由 CEO 回貼、經 coordinator 轉交。依此讀法，回貼不構成 D-1 第 2 點「看過暫定對照」，補充四 R-8 填 0 不受影響。（Q-2）
+
+5. **失敗後的診斷**
+   - (a) 回貼與任何轉述只到失敗種類為止。
+   - (b) 第一步：dev-lead 在隔離 worktree 以合成 fixture 重現該失敗種類，修正後加回歸測試，CEO 在新 head 重跑一鍵檔。
+   - (c) 第二步，限合成重現不了時：dev-lead 或 qa-automation 在隔離 worktree 的 `tmp_path`，自行從公開來源取得 `^TWII`，依第 1 點 (d) 與第 2 點的同一規則注入後執行 harness，並以 `bars_sha256` 確認輸入與 CEO 那一次相同。完整輸出與暫存帳只留在該 `tmp_path`，不 commit，不交給 quant、風控、coordinator 或 CEO。
+   - (d) dev-lead 與 qa 對 coordinator 的回報（coordinator 逐字轉存）只寫失敗種類、程式層面的原因、修正 commit 與回歸測試名稱。不得含模型、基準或實現標籤，不得含符合與否、T 或任何 session 日期、`claim_id`、任何筆數或比例，也不得含完整輸出的任一行。
+   - (e) 兩步都無法定位時，升級 tech-architect。未另修本 ADR 並經風控審查前，不得放行 `where`，不得把完整輸出或暫存帳帶離 CEO 本機，也不得另設會輸出標籤的診斷模式。
+
+6. **通過證據與 CG-2 的綁定**
+   - (a) 「harness 通過」成立，指最後一次執行的回貼同時具備：
+     - `acceptance_result=PASS`，兩個規則集都通過，失敗種類都是「無」；
+     - `refusal_guard=ok`、三行 `copy_check=SAME`、`eol_check=ok`、`git_clean=yes`、`summary_lines_dropped=0`。
+     - `cleanup` 不影響通過，依第 3 點處理。補充四第 5 點 M-1 的「D-7 harness 已執行」讀為本款成立。
+   - (b) coordinator 當日以 commit 在 `work/` 記錄回貼原文。CG-2 PR 合併前，由 devops-sre 或 dev-lead 執行、qa 判讀，核對下列各項：
+     - `git_head` 可由 `origin/product/stock-desk` 到達；
+     - 回貼的 `code_digest` 等於在 `git_head` 以 `canonical.code_digest` 算出的值；
+     - `lockfile_sha256` 等於 `git cat-file blob <git_head>:apps/stock-desk/backend/uv.lock` 的 sha256；
+     - `harness_sha256_lf`、`script_sha256_lf` 等於兩檔在 `git_head` 的 blob 經 LF 正規化後的 sha256。
+   - (c) 回貼的 `definition_logic_sha256` 必須等於 M-4 登記的 `dirdef-v1.0` 的同名雜湊。`definition_sha256` 可以不同，因為測試替身的 C-8 欄位是佔位值；但差異只能落在 `DEFINITION_NON_LOGIC_FIELDS`，CG-2 PR 以測試證明。不成立就須重跑。
+   - (d) 自 `git_head` 起到 CG-2 PR 合併時的 head 為止，只允許下列差異，其餘任何差異都使通過失效，須在新 head 重跑：
+     - `app/dirdef/registry.py` 中 `PUBLISHED_DIRECTION_DEFINITIONS`、`PUBLISHED_RULESETS` 的賦值，以及登記所需的 import 與 `dirdef-v1.0` 物件常數；或 `app/dirdef/` 下只含該物件常數的新檔；
+     - `app/outlook/rules/h3.yaml`、`h5.yaml`；
+     - `app/forecast/claims.py` 新增的頂層定義與 CLI 分支；在 `git_head` 已存在、且由 harness 遞移呼叫的頂層函式（至少 `register`、`production_path_refusal`）必須 AST 相同；
+     - `app/` 以外的登記一鍵檔、文件與測試。但 `tests/forecast_pipeline_harness.py`、`tests/dirdef_helpers.py`、`tests/outlook_helpers.py`、`scripts/pipeline_acceptance_real.py` 與 `uv.lock` 必須零差異。
+
+7. **換行與 lockfile**
+   - `runtime_info` 的 `lockfile_sha256` 維持對原始位元組取雜湊，不改走 `normalised_source`。理由有三：`runtime_json` 含平台與 Python 建置資訊，跨機器本來就不同；改了會變動 `code_digest`；也與補充四 R-2「原始位元組對 blob」的比法不一致。
+   - 根治方式：在 `apps/stock-desk/backend/.gitattributes` 加 `uv.lock text eol=lf`，不改 repo 根目錄的 `.gitattributes`，main 維持零產品耦合。PR 附上 `git ls-files --eol` 輸出，`uv.lock` 須為 `i/lf w/lf`。補充四 M-7 的屬性位置在 CG-2 PR 決定，同樣不得讓 main 綁定產品路徑。
+   - 一鍵檔比對釘住檔案的工作樹原始位元組 sha256 與 blob sha256，並以 `git ls-files --eol` 作為第二證據。不一致時只停止，不改 git 設定，也不改檔。補救由 coordinator 提供，限於 `git checkout HEAD -- <path>`，不要求 CEO 修改 `core.autocrlf`。
+
+8. **風控確認前的限制**
+   - Q-1（第 1 點 (b)）與 Q-2（第 4 點 (d)）由風控確認。確認前，一鍵檔 PR 可以開發與合併，但不得在 CEO 本機執行。
+   - 風控判定 Q-2 偏離 CEO #149 時，由 coordinator 向 CEO 確認。
+
+- **S-13b（逐條可檢查）**：
+  - 第 1 點：
+    - e2e 測試以合成的假主 DB 驗證：主 DB 路徑只被 `open(..., "rb")`，從未被 `sqlite3.connect`；所有 connect 的目標都在 {複本, 兩個 ledger} 之內。
+    - 包裝的 import 集合不含 (c) 所列模組（AST，以及執行期的 `sys.modules`）。
+    - socket 被替換為拋例外的替身時，流程照常完成。
+    - 列對應與 `PriceBarCache` 讀取結果逐欄相同（`as_of` 除外；`tmp_path` 合成快取）。
+    - (e) 每個停止條件各有一個測試。
+    - 複本在第一次呼叫 `run_acceptance` 之前已刪除。
+    - `app/` 不可達 `scripts/` 與 harness（import graph）。
+  - 第 2 點：注入後每根 bar 的 `as_of` 等於該日 20:00 Asia/Taipei；包裝的 SELECT 不含 `as_of`、`fetched_at`（AST）。
+  - 第 3 點：包裝對 `AcceptanceResult` 只存取 `passed`，另外呼叫 `render_summary`（AST）；結束後工作資料夾只剩回貼檔；殘留掃除不動格式不符的資料夾（測試）。
+  - 第 4 點：
+    - 白名單每一樣式各有一個測試；無關的行被丟棄並計數。
+    - 「視窗定案 session 數」不輸出，也不計入丟棄數。
+    - 回貼不含 `T=`、`claim_id`、完整輸出的任一行，也不含禁詞清單中的字詞。
+    - 以兩組不同標籤分佈的序列執行時，回貼除雜湊、`bars_sha256` 與執行次數外逐行相同。
+    - `bars_sha256` 等於測試獨立算出的 `content_sha256`，而且兩個規則集共用同一個值（測試）。
+  - 第 5 點：qa 審查清單加一行，逐條核對診斷回報不含 (d) 所列內容。
+  - 第 6 點：CG-2 PR 說明列出 (b)～(d) 的核對結果；(d) 附上差異檔清單與 AST 比對輸出。
+  - 第 7 點：PR 附 `git ls-files --eol` 輸出；`check_pinned_eol` 在臨時 repo 中，CRLF 工作樹判停止，LF 判 ok（測試）。
