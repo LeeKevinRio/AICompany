@@ -42,6 +42,13 @@ FREEZE_PACK_SHA256 = {
     5: "0a385de3e2f4118bc1e7c2c5dd1a667ce0a9067399ccd1b6e7c4dbab19d5707c",
 }
 
+#: ``rules_logic_sha256`` reference values (``name`` inside the hash; TA SP-A ruling
+#: 2026-11-15). They must not move when the rule models are tightened (TA question 4).
+LOGIC_SHA256 = {
+    3: "ddd3c51a1cb9b30a3e957a5a98888ca48916deb35f66027f2f49e7b824f34484",
+    5: "e5310b8e6ce14525e81616eedd4368d45a682cb8a4647129ea5617a41cedf1bb",
+}
+
 RULE_IDS = (
     "trend_up",
     "trend_down",
@@ -152,6 +159,31 @@ def test_h5_is_h3_with_only_the_horizon_changed() -> None:
         .replace("換算到 3 日", "換算到 5 日")
     )
     assert _bytes(5).decode("utf-8") == expected
+
+
+@pytest.mark.parametrize("horizon", [3, 5])
+def test_the_logic_hash_is_the_reference_value(horizon: int) -> None:
+    assert rules_logic_sha256(_load(horizon)) == LOGIC_SHA256[horizon]
+
+
+def _leaves(node: dict[str, Any]) -> list[dict[str, Any]]:
+    children = node.get("all", node.get("any"))
+    if children is None:
+        return [node]
+    return [leaf for child in children for leaf in _leaves(child)]
+
+
+@pytest.mark.parametrize("horizon", [3, 5])
+def test_the_files_hold_no_bool_int_or_string_number(horizon: int) -> None:
+    # TA question 4: the strict float tightening only refuses what lax mode coerced,
+    # and the landed files hold none of it, so their bytes and hashes cannot move.
+    raw = yaml.safe_load(_bytes(horizon))
+    numbers: list[object] = [rule["weight"] for rule in raw["rules"]]
+    for rule in raw["rules"]:
+        for tree in (rule["condition"], rule["invalidation"]):
+            numbers += [leaf["value"] for leaf in _leaves(tree) if "value" in leaf]
+    assert len(numbers) > 10
+    assert all(type(number) is float for number in numbers)
 
 
 def test_the_two_rule_sets_differ_in_logic() -> None:

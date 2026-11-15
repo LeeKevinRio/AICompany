@@ -30,6 +30,12 @@ Two more guards (tech-architect type ruling 2026-11-14, Q1 and Q2):
   and ``0 < min_completeness <= 1``. They are inside ``rules_logic_sha256``;
   ``theta: 2`` and ``theta: 2.0`` hash the same.
 
+A rule's ``weight`` and a comparison's ``value`` use the same strict float type
+(tech-architect 2026-11-15, question 4): ``true`` / ``false``, a string such as
+``"1"`` and ``.inf`` / ``.nan`` are refused instead of being coerced. The landed
+h3 / h5 files hold no such value, so their bytes and both ``rules_logic_sha256``
+reference values are unchanged by this tightening (tests pin them).
+
 :data:`OUTLOOK_RULE_FIELDS` is the field set of the frozen market h3 / h5
 specification (freeze pack G3); the field formulas live in
 ``app/outlook/engine.py``.
@@ -105,6 +111,12 @@ class BannedPhraseError(ValueError):
     """Raised inside rule set validation when a string value holds a banned phrase."""
 
 
+#: A finite float that is not a bool or a string; an int is taken as the same float.
+#: The one strict float type of rule set numbers: the aggregation parameters and
+#: each rule's ``weight`` and comparison ``value`` (tech-architect 2026-11-15 Q4).
+AggregationNumber = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+
+
 class OutlookComparison(GuardedModel):
     """One leaf test: ``field <op> (value | ref)``."""
 
@@ -112,7 +124,7 @@ class OutlookComparison(GuardedModel):
 
     field: str = Field(min_length=1)
     op: ComparisonOp
-    value: float | None = None
+    value: AggregationNumber | None = None
     ref: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
@@ -166,16 +178,12 @@ class OutlookRule(GuardedModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     name: str = Field(min_length=1)
     direction: Direction
-    weight: float = Field(gt=0.0, le=1.0)
+    weight: AggregationNumber = Field(gt=0.0, le=1.0)
     condition: OutlookCondition
     explanation: str = Field(min_length=1)
     counterargument: str = Field(min_length=1)
     #: The condition tree under which this rule's reason no longer holds (TA Q1).
     invalidation: OutlookCondition
-
-
-#: A finite float that is not a bool or a string; an int is taken as the same float.
-AggregationNumber = Annotated[float, Field(strict=True, allow_inf_nan=False)]
 
 
 class OutlookAggregation(GuardedModel):

@@ -268,3 +268,90 @@ def test_min_completeness_in_the_half_open_unit_interval_loads(
     fields: Callable[[frozenset[str]], None], scalar: str
 ) -> None:
     assert 0 < _load_bytes(_yaml("2", scalar)).aggregation.min_completeness <= 1
+
+
+# --- TA 2026-11-15 question 4: weight and value are strict floats too -------------------
+
+
+def _rule_yaml(weight: str = "1.0", value: str = "0.0") -> bytes:
+    """A one-rule file with the YAML scalars ``weight`` and ``value`` spliced in as text."""
+    text = (
+        'version: "1.0.0"\naggregation:\n  theta: 2.0\n  min_completeness: 1.0\n'
+        "rules:\n  - id: index_momentum\n    name: index momentum\n    direction: bullish\n"
+        f"    weight: {weight}\n"
+        f"    condition: {{field: index.ret_5d, op: gt, value: {value}}}\n"
+        "    explanation: the index rose\n    counterargument: rises fade\n"
+        "    invalidation: {field: index.ret_5d, op: lte, value: 0.0}\n"
+    )
+    return text.encode("utf-8")
+
+
+def _strictness(metadata: list[Any]) -> tuple[list[object], list[object]]:
+    strict = [m.strict for m in metadata if getattr(m, "strict", None) is not None]
+    finite = [m.allow_inf_nan for m in metadata if getattr(m, "allow_inf_nan", None) is not None]
+    return strict, finite
+
+
+def test_the_three_number_fields_share_one_strict_float_type() -> None:
+    weight = rules.OutlookRule.model_fields["weight"]
+    value = rules.OutlookComparison.model_fields["value"]
+    theta = rules.OutlookAggregation.model_fields["theta"]
+    for field in (weight, theta):
+        assert field.annotation is float
+        assert _strictness(field.metadata) == ([True], [False])
+    assert value.annotation == rules.AggregationNumber | None
+
+
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        pytest.param("true", id="true"),
+        pytest.param("false", id="false"),
+        pytest.param('"1"', id="string-1"),
+        pytest.param('"1.0"', id="string-1.0"),
+        pytest.param(".inf", id="inf"),
+        pytest.param(".nan", id="nan"),
+        pytest.param("null", id="null"),
+    ],
+)
+def test_a_bad_weight_is_refused(fields: Callable[[frozenset[str]], None], scalar: str) -> None:
+    with pytest.raises(RuleSetLoadError, match="weight"):
+        _load_bytes(_rule_yaml(weight=scalar))
+
+
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        pytest.param("true", id="true"),
+        pytest.param("false", id="false"),
+        pytest.param('"1"', id="string-1"),
+        pytest.param(".inf", id="inf"),
+        pytest.param("-.inf", id="minus-inf"),
+        pytest.param(".nan", id="nan"),
+    ],
+)
+def test_a_bad_comparison_value_is_refused(
+    fields: Callable[[frozenset[str]], None], scalar: str
+) -> None:
+    with pytest.raises(RuleSetLoadError, match="value"):
+        _load_bytes(_rule_yaml(value=scalar))
+
+
+def test_an_int_weight_and_value_are_the_same_floats(
+    fields: Callable[[frozenset[str]], None],
+) -> None:
+    as_int = _load_bytes(_rule_yaml(weight="1", value="0"))
+    as_float = _load_bytes(_rule_yaml(weight="1.0", value="0.0"))
+    rule = as_int.rules[0]
+    assert isinstance(rule.weight, float) and rule.weight == 1.0
+    comparison = rule.condition
+    assert isinstance(comparison, rules.OutlookComparison)
+    assert isinstance(comparison.value, float) and comparison.value == 0.0
+    assert rules_logic_sha256(as_int) == rules_logic_sha256(as_float)
+
+
+def test_the_float_spelling_of_one_still_loads(
+    fields: Callable[[frozenset[str]], None],
+) -> None:
+    # Lax mode turned ``weight: true`` into 1.0; that is refused above, 1.0 itself loads.
+    assert _load_bytes(_rule_yaml(weight="1.0")).rules[0].weight == 1.0
