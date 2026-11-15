@@ -2,6 +2,10 @@
 
 ``get_definition(definition_version)`` and ``get_ruleset(rules_version)``
 return the registered object or raise; there is no default and no fallback.
+``get_ruleset_entry(rules_version)`` returns the registry entry (horizon and
+``rules_sha256``) of a version ``get_ruleset`` accepts, for the recorder's CG-2
+run-time check (ADR-0030 D-6: a recording claim's hashes equal what this module
+returns).
 The registries are empty while the G-3 freeze is pending, so in production both
 always raise. ``claims.py``, the recorder, on-demand, the D-14 gate, the replay
 runner and the store's write validation get their definitions and rule sets
@@ -12,8 +16,11 @@ Rule files (ADR-0025 D-2 point 3): ``app/outlook/rules/h3.yaml`` and
 ``app/outlook/`` package directory; the getters take no path and this module
 reads no environment variable. The bytes go to the ``app.dirdef`` loader with
 the registered ``rules_sha256`` and ``banned_phrases=BANNED_PHRASES`` imported
-from ``app.advice.loader`` (the single source of banned phrases; this module is
-the only loader call site in ``app/``).
+from ``app.advice.banned_phrases`` (the single source of banned phrases, a leaf
+module that imports nothing, so this import reaches no other ``app.advice`` or
+``app.api`` module -- ADR-0030 supplement 3 point 3; ``app.advice.loader``
+re-exports the same object; this module is the only loader call site in
+``app/``).
 
 Before a definition is returned it is checked, in order (B2D-1d): its
 ``definition_version`` equals the registry key, ``definition_logic_sha256`` and
@@ -28,24 +35,44 @@ The definition scan enumerates string values with
 uses, the one enumeration in ``app/`` -- and a hit raises
 :class:`BannedPhraseInDefinitionError`.
 
+For the claim registration CLI (``app.forecast.claims``; ADR-0030 D-6 CG-2):
+:func:`get_rules_bytes` returns the registered rule file bytes (re-read and
+checked against ``rules_sha256``), and :func:`registration_phrase_scan` runs
+the pre-registration banned phrase check -- every string value of the rule set
+and the definition, NFKC-normalised with whitespace and zero-width characters
+removed -- with the same ``BANNED_PHRASES``.
+
+For ``report verify`` (ADR-0030 D-5 point 3): :func:`registered_ruleset` and
+:func:`registered_definition` rebuild a claim's rule set and definition from
+the bytes and the JSON stored in its registry row -- through the same loader
+call and the same hash and banned phrase checks, without reading the file on
+disk or the published registries, and without caching.
+
 Test seams (named in the tests): the two registry names below, the
 :func:`_read_rules_bytes` reader, and the two cache dicts.
 """
 
 from __future__ import annotations
 
+import hashlib
+import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, get_args
 
-from app.advice.loader import BANNED_PHRASES
+from app.advice.banned_phrases import BANNED_PHRASES
 from app.dirdef.definition import (
     DirectionDefinition,
     Horizon,
     definition_logic_sha256,
     definition_sha256,
 )
-from app.dirdef.registry import PUBLISHED_DIRECTION_DEFINITIONS, PUBLISHED_RULESETS
-from app.dirdef.rules import OutlookRuleSet, RuleSetLoadError, load_ruleset
+from app.dirdef.registry import (
+    PUBLISHED_DIRECTION_DEFINITIONS,
+    PUBLISHED_RULESETS,
+    PublishedRuleset,
+)
+from app.dirdef.rules import OutlookRuleSet, RuleSetLoadError, load_ruleset, rules_logic_sha256
 from app.dirdef.strings import string_values
 
 #: ``app/outlook/rules/``, resolved against the ``app/outlook/`` package directory.
@@ -134,9 +161,152 @@ def get_ruleset(rules_version: str) -> OutlookRuleSet:
         raise PublishedVersionRejectedError(
             f"rule file of horizon {entry.horizon} cannot be read ({type(exc).__name__})"
         ) from exc
-    try:
-        ruleset = load_ruleset(data, rules_sha256=entry.rules_sha256, banned_phrases=BANNED_PHRASES)
-    except RuleSetLoadError as exc:
-        raise PublishedVersionRejectedError(f"rule set rejected: {exc}") from exc
+    ruleset = _load(data, rules_sha256=entry.rules_sha256)
     _RULESET_CACHE[rules_version] = ruleset
     return ruleset
+
+
+def _load(data: bytes, *, rules_sha256: str) -> OutlookRuleSet:
+    """The one loader call in ``app/``: hash check, parse, validate, banned phrases."""
+    try:
+        return load_ruleset(data, rules_sha256=rules_sha256, banned_phrases=BANNED_PHRASES)
+    except RuleSetLoadError as exc:
+        raise PublishedVersionRejectedError(f"rule set rejected: {exc}") from exc
+
+
+def registered_ruleset(
+    rules_bytes: bytes, *, rules_sha256: str, logic_sha256: str
+) -> OutlookRuleSet:
+    """A claim's rule set rebuilt from its *registered* bytes (ADR-0030 D-5 point 3).
+
+    For ``report verify``: the bytes stored in ``forecast_claim_registry``, not
+    the file on disk and not the published registry. They go through the same
+    loader (hash check against the registered ``rules_sha256``, the banned
+    phrases) and the result's logic hash must equal the registered one; any
+    failure raises :class:`PublishedVersionRejectedError`. Nothing is cached.
+    """
+    if not isinstance(rules_bytes, bytes):
+        raise PublishedVersionRejectedError("registered rules_bytes are not bytes")
+    ruleset = _load(rules_bytes, rules_sha256=rules_sha256)
+    if rules_logic_sha256(ruleset) != logic_sha256:
+        raise PublishedVersionRejectedError(
+            "registered rule bytes do not match the registered rules_logic_sha256"
+        )
+    return ruleset
+
+
+def registered_definition(
+    definition_json: str, *, full_sha256: str, logic_sha256: str
+) -> DirectionDefinition:
+    """A claim's definition rebuilt from its *registered* JSON (ADR-0030 D-5 point 3).
+
+    Both hashes must equal the registered ones and no string value may hold a
+    banned phrase (the checks :func:`get_definition` runs); any failure raises
+    :class:`PublishedVersionRejectedError`. Nothing is cached.
+    """
+    try:
+        definition = DirectionDefinition.model_validate_json(definition_json)
+    except ValueError as exc:
+        raise PublishedVersionRejectedError(
+            f"registered definition_json cannot be read ({type(exc).__name__})"
+        ) from None
+    if definition_logic_sha256(definition) != logic_sha256:
+        raise PublishedVersionRejectedError(
+            "registered definition_json does not match its definition_logic_sha256"
+        )
+    if definition_sha256(definition) != full_sha256:
+        raise PublishedVersionRejectedError(
+            "registered definition_json does not match its definition_sha256"
+        )
+    _scan_definition(definition)
+    return definition
+
+
+def get_rules_bytes(rules_version: str) -> bytes:
+    """The rule file bytes of a version :func:`get_ruleset` accepts, as registered.
+
+    For the claim registration (``forecast_claim_registry.rules_bytes``). The
+    file is read again and its sha256 must still equal the registered
+    ``rules_sha256``, so the bytes stored are the bytes that were checked.
+    """
+    get_ruleset(rules_version)
+    entry = get_ruleset_entry(rules_version)
+    try:
+        data = _read_rules_bytes(entry.horizon)
+    except OSError as exc:
+        raise PublishedVersionRejectedError(
+            f"rule file of horizon {entry.horizon} cannot be read ({type(exc).__name__})"
+        ) from exc
+    if hashlib.sha256(data).hexdigest() != entry.rules_sha256:
+        raise PublishedVersionRejectedError("rule file no longer matches its rules_sha256")
+    return data
+
+
+@dataclass(frozen=True)
+class PhraseScan:
+    """The CG-2 pre-registration banned phrase check (ADR-0030 D-6) of one claim."""
+
+    rules_strings: int
+    definition_strings: int
+    phrases: int
+    #: ``"<rules|definition>: <phrase>"`` for each string holding a phrase.
+    hits: tuple[str, ...]
+
+
+#: Invisible characters ``str.split()`` keeps (qa batch 4 follow-up 4): zero width
+#: space, zero width non-joiner, zero width joiner, word joiner, zero width
+#: no-break space (BOM) and soft hyphen. NFKC leaves every one of them in place.
+ZERO_WIDTH: Final[frozenset[str]] = frozenset(
+    {"\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"}
+)
+
+
+def squeeze(text: str) -> str:
+    """NFKC-normalised ``text`` with every whitespace and :data:`ZERO_WIDTH` character removed.
+
+    So a phrase split by a space, a full-width space, a no-break space or a
+    zero-width character is still found. Only the comparison form changes: the
+    scanned rule bytes and definition objects, and their hashes, are untouched.
+    """
+    normalised = unicodedata.normalize("NFKC", text)
+    return "".join(char for char in "".join(normalised.split()) if char not in ZERO_WIDTH)
+
+
+def registration_phrase_scan(
+    ruleset: OutlookRuleSet, definition: DirectionDefinition
+) -> PhraseScan:
+    """Every string value of the rule set and the definition against every phrase.
+
+    ADR-0030 D-6 CG-2: strings that may be rendered later are NFKC-normalised
+    with whitespace and zero-width characters removed before the comparison
+    (:func:`squeeze`; so a spaced, zero-width-split or compatibility form of a
+    phrase is a hit). Every string value is scanned -- a superset of
+    what can be rendered. No phrases to scan with is a rejection.
+    """
+    if not BANNED_PHRASES:
+        raise PublishedVersionRejectedError("no banned phrases to scan with: rejected")
+    phrases = [squeeze(phrase) for phrase in BANNED_PHRASES]
+    rules = string_values(ruleset)
+    texts = string_values(definition)
+    hits = tuple(
+        f"{where}: {phrase}"
+        for where, values in (("rules", rules), ("definition", texts))
+        for value in values
+        for phrase in phrases
+        if phrase in squeeze(value)
+    )
+    return PhraseScan(
+        rules_strings=len(rules),
+        definition_strings=len(texts),
+        phrases=len(phrases),
+        hits=hits,
+    )
+
+
+def get_ruleset_entry(rules_version: str) -> PublishedRuleset:
+    """The registry entry of ``rules_version`` once :func:`get_ruleset` accepts it; else raises."""
+    get_ruleset(rules_version)
+    entry = PUBLISHED_RULESETS.get(rules_version)
+    if entry is None:
+        raise UnpublishedVersionError("rules_version is not published")
+    return entry

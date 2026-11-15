@@ -1,0 +1,1507 @@
+"""The ledger store (ADR-0030 D-2, D-3, D-8, D-9).
+
+Append-only writes, write validation and the read-only queries.
+
+Every database is a ``tmp_path`` file; the clock is injected (``FakeClock``).
+"""
+
+from __future__ import annotations
+
+import ast
+import inspect
+import json
+import re
+import sqlite3
+import struct
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from app.dirdef.definition import DirectionDefinition, definition_logic_sha256, definition_sha256
+from app.dirdef.hashing import canonical_json
+from app.forecast import store as store_module
+from app.forecast.canonical import canonical_timestamp, content_sha256, record_content_hash
+from app.forecast.definitions import UnpublishedVersionError
+from app.forecast.errors import LabeledThresholdSnapshotIncompleteError
+from app.forecast.schema import SchemaIncompleteError
+from app.forecast.store import (
+    ForecastStore,
+    ForecastStoreError,
+    LedgerInconsistentError,
+    late_cutoff_at,
+    new_ulid,
+    valid_until_session_estimate,
+)
+from app.outlook.missing import MissingItem
+from app.outlook.volatility import SigmaEstimate, sigma_d
+from tests.forecast_ledger_helpers import (
+    BASELINES,
+    FakeClock,
+    band,
+    bar,
+    file_ledger,
+    fixture_definition,
+    publish_definition,
+    taipei,
+    weekdays,
+)
+
+T = date(2026, 11, 13)  # a Friday
+DAYS = weekdays(date(2026, 10, 1), 30)
+RULES_H3 = b"version: 1.0.0\nrules: []\n"
+RULES_H5 = b"version: 1.0.0\nrules: [h5]\n"
+LOGIC = "1" * 64
+CODE = "2" * 64
+
+
+def _missing(day: date, code: str = "E-BARS-SHORT", available: str = "12") -> MissingItem:
+    return MissingItem(
+        code=code,
+        item="index_bars" if code == "E-BARS-SHORT" else "sigma_d",
+        required="315",
+        available=available,
+        source=None,
+        source_status=None,
+        attempted_at=None,
+        latest_available=None,
+        as_of=day,
+        detail={},
+    )
+
+
+class Ledger:
+    """A store on a fresh ``tmp_path`` ledger, with the two core claims registered."""
+
+    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.path = file_ledger(tmp_path)
+        self.clock = FakeClock(taipei(2026, 10, 1, 9))
+        self.store = ForecastStore(self.path, clock=self.clock)
+        self.definition = fixture_definition()
+        publish_definition(monkeypatch, self.definition)
+        self.h3 = self.register(3, RULES_H3)
+        self.clock.advance(seconds=1)
+        self.h5 = self.register(5, RULES_H5)
+
+    def register(self, horizon: Any, rules: bytes, **overrides: Any) -> str:
+        kwargs: dict[str, Any] = {
+            "horizon": horizon,
+            "rules_version": "1.0.0",
+            "rules_bytes": rules,
+            "rules_logic_sha256": LOGIC,
+            "definition": self.definition,
+            "frozen_commit": "abc123",
+            "prereg_doc_path": "docs/prereg-v0.32.md",
+            "prereg_doc_blob": b"prereg",
+            "review_refs": "work/reviews/x.md",
+            "replaces_claim_id": None,
+            "replace_reason": None,
+            "provisional_results_seen": False,
+        }
+        kwargs.update(overrides)
+        return self.store.register_claim(**kwargs)
+
+    def snapshot(
+        self, last: date, *, count: int = 3, catch_up: bool = True, **overrides: Any
+    ) -> str:
+        days = [d for d in weekdays(last - timedelta(days=count * 2 + 4), count * 3) if d <= last]
+        kwargs: dict[str, Any] = {
+            "bars": [bar(d) for d in days[-count:]],
+            "source": "yfinance",
+            "source_status": "backup",
+            "staleness_minutes": None,
+            "reason": None,
+            "dropped_rows": [],
+            "raw_timestamp_available": False,
+        }
+        kwargs.update(overrides)
+        if catch_up:
+            # A snapshot is captured no earlier than its bars were fetched (point in
+            # time), so the clock moves up to the latest bar stamp if it is behind it.
+            latest = max(max(b["fetched_at"], b["as_of"]) for b in kwargs["bars"])
+            self.clock.now = max(self.clock.now, latest)
+        return self.store.put_input_series(**kwargs)
+
+    def run(self) -> int:
+        return self.store.begin_run(code_commit="abc123", code_digest=CODE, runtime={"py": "3.13"})
+
+    def record(self, run_id: int, claim: str, day: date, series: str, **overrides: Any) -> str:
+        kwargs: dict[str, Any] = {
+            "run_id": run_id,
+            "claim_id": claim,
+            "data_as_of": day,
+            "label": "range",
+            "range_basis": None,
+            "missing": [],
+            "evidence": {"rules_fired": []},
+            "band_def": band(self.definition, 3 if claim == self.h3 else 5),
+            "base_close": Decimal("17000.5"),
+            "baseline_predictions": dict(BASELINES),
+            "input_series_sha256": series,
+        }
+        kwargs.update(overrides)
+        return self.store.write_record(**kwargs)
+
+    def insufficient(self, run_id: int, claim: str, day: date, series: str) -> str:
+        # Short bars, hence too few returns for sigma_d (E-VOL-SHORT): sigma_d is null.
+        horizon = 3 if claim == self.h3 else 5
+        short_band: dict[str, object] = {
+            "K_h": self.definition.k_for(horizon),
+            "EPS": self.definition.EPS,
+            "sigma_d": None,
+            "valid_returns": 11,
+            "up_pct": None,
+            "down_pct": None,
+        }
+        return self.record(
+            run_id,
+            claim,
+            day,
+            series,
+            label="insufficient",
+            missing=[_missing(day), _missing(day, "E-VOL-SHORT", "11")],
+            band_def=short_band,
+        )
+
+    def rows(self, table: str) -> list[dict[str, Any]]:
+        conn = sqlite3.connect(self.path)
+        conn.row_factory = sqlite3.Row
+        try:
+            return [dict(r) for r in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+        finally:
+            conn.close()
+
+
+@pytest.fixture
+def ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Ledger:
+    return Ledger(tmp_path, monkeypatch)
+
+
+def _at(day: date, hour: int, minute: int = 0) -> datetime:
+    return taipei(day.year, day.month, day.day, hour, minute)
+
+
+# --- S-2, S-3: no timestamp, late or id parameters --------------------------------------
+
+STAMP_PARAMS = {"started_at", "created_at", "captured_at", "registered_at", "ended_at"}
+DERIVED_PARAMS = {
+    "late",
+    "late_cutoff_at",
+    "forecast_id",
+    "content_hash",
+    "validation_status",
+    "inputs_max_fetched_at",
+    "claim_id_override",
+    "registered",
+}
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "begin_run",
+        "end_run",
+        "put_input_series",
+        "register_claim",
+        "write_record",
+        "write_run_records",
+    ],
+)
+def test_write_functions_take_no_timestamp_or_derived_column(method: str) -> None:
+    params = set(inspect.signature(getattr(ForecastStore, method)).parameters)
+    assert params.isdisjoint(STAMP_PARAMS | DERIVED_PARAMS)
+
+
+@pytest.mark.parametrize("batch_type", [store_module.SnapshotInput, store_module.RecordInput])
+def test_the_batch_inputs_carry_no_timestamp_or_derived_column(batch_type: type) -> None:
+    # Supplement 3 (revised) point 7: the batch write has the one-row forms' S-2 rule.
+    fields = set(inspect.signature(batch_type).parameters)
+    assert fields and fields.isdisjoint(STAMP_PARAMS | DERIVED_PARAMS | {"run_id"})
+    assert "input_series_sha256" not in fields
+
+
+def _executed_sql(source: str) -> str:
+    """Every string constant inside the first argument of an ``.execute(...)`` call."""
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"execute", "executemany", "executescript"}
+            and node.args
+        ):
+            found.extend(
+                sub.value
+                for sub in ast.walk(node.args[0])
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+            )
+    return " ".join(found).upper()
+
+
+def test_the_store_never_updates_deletes_or_replaces() -> None:
+    sql = _executed_sql(Path(store_module.__file__).read_text(encoding="utf-8"))
+    assert "INSERT INTO" in sql
+    for word in ("UPDATE", "DELETE", "REPLACE", "DROP", "ALTER", "CREATE"):
+        assert re.search(rf"\b{word}\b", sql) is None, word
+
+
+def test_the_sql_scan_has_teeth() -> None:
+    assert re.search(r"\bREPLACE\b", _executed_sql('c.execute(f"INSERT OR REPLACE INTO t {x}")'))
+    assert re.search(r"\bREPLACE\b", _executed_sql('c.execute("SELECT replace_reason")')) is None
+    assert "UPDATE" not in _executed_sql('"""UPDATE in a docstring"""')
+
+
+# --- runs ----------------------------------------------------------------------------------
+
+
+def test_a_run_is_stamped_by_the_store_clock(ledger: Ledger) -> None:
+    ledger.clock.now = taipei(2026, 11, 13, 22, 10)
+    run_id = ledger.run()
+    (stored,) = ledger.rows("forecast_run")
+    assert stored["run_id"] == run_id
+    assert stored["started_at"] == "2026-11-13T14:10:00.000000+00:00"
+    assert stored["trigger"] == "scheduled"
+    assert stored["schema_version"] == 1
+    assert json.loads(stored["runtime_json"]) == {"py": "3.13"}
+    latest = ledger.store.latest_run()
+    assert latest is not None and latest.outcome is None and latest.code_digest == CODE
+
+
+def test_ending_a_run(ledger: Ledger) -> None:
+    run_id = ledger.run()
+    ledger.clock.advance(minutes=2)
+    ledger.store.end_run(run_id, outcome="no_new_session", candidate_t=T, records_written=0)
+    (end,) = ledger.rows("forecast_run_end")
+    assert end["outcome"] == "no_new_session"
+    assert end["candidate_t"] == "2026-11-13"
+    assert end["error_class"] is None
+    assert end["ended_at"] == canonical_timestamp(ledger.clock.now)
+    latest = ledger.store.latest_run()
+    assert latest is not None and latest.outcome == "no_new_session"
+    with pytest.raises(ForecastStoreError, match="already ended"):
+        ledger.store.end_run(run_id, outcome="ok", candidate_t=T, records_written=0)
+
+
+def test_the_error_class_comes_from_exception_class_name(ledger: Ledger) -> None:
+    class Bad(Exception):
+        pass
+
+    Bad.__name__ = "bad name!"
+    first, second = ledger.run(), ledger.run()
+    ledger.store.end_run(
+        first, outcome="error", candidate_t=None, records_written=0, error=KeyError()
+    )
+    ledger.store.end_run(second, outcome="error", candidate_t=None, records_written=0, error=Bad())
+    assert [e["error_class"] for e in ledger.rows("forecast_run_end")] == [
+        "KeyError",
+        "invalid_exception_class",
+    ]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"outcome": "late", "candidate_t": None, "records_written": 0},
+        {"outcome": "ok", "candidate_t": None, "records_written": True},
+        {"outcome": "ok", "candidate_t": datetime(2026, 11, 13, tzinfo=UTC), "records_written": 0},
+    ],
+)
+def test_bad_end_values_are_refused(ledger: Ledger, kwargs: dict[str, Any]) -> None:
+    run_id = ledger.run()
+    with pytest.raises(ForecastStoreError):
+        ledger.store.end_run(run_id, **kwargs)
+
+
+def test_an_unknown_run_cannot_end(ledger: Ledger) -> None:
+    with pytest.raises(ForecastStoreError, match="not a started run"):
+        ledger.store.end_run(99, outcome="ok", candidate_t=None, records_written=0)
+
+
+def test_a_table_check_still_applies_behind_the_store(ledger: Ledger) -> None:
+    run_id = ledger.run()
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        ledger.store.end_run(run_id, outcome="error", candidate_t=None, records_written=0)
+    assert ledger.rows("forecast_run_end") == []
+
+
+def test_bad_run_inputs_are_refused(ledger: Ledger) -> None:
+    with pytest.raises(ForecastStoreError):
+        ledger.store.begin_run(code_commit="", code_digest=CODE, runtime={})
+    with pytest.raises(ForecastStoreError):
+        ledger.store.begin_run(code_commit="x", code_digest="Z" * 64, runtime={})
+    with pytest.raises(ForecastStoreError):
+        ledger.store.begin_run(code_commit="x", code_digest=CODE, runtime=[])  # type: ignore[arg-type]
+    with pytest.raises(ForecastStoreError):
+        ledger.store.begin_run(code_commit="x", code_digest=CODE, runtime={"x": float("nan")})
+    assert ledger.store.latest_run() is None
+
+
+# --- snapshots ------------------------------------------------------------------------------
+
+
+def test_a_snapshot_is_stored_once_per_content(ledger: Ledger) -> None:
+    first = ledger.snapshot(T)
+    captured = canonical_timestamp(ledger.clock.now)
+    ledger.clock.advance(hours=1)
+    again = ledger.snapshot(T, source_status="fresh")
+    (stored,) = ledger.rows("forecast_input_series")
+    assert first == again == stored["content_sha256"]
+    assert stored["captured_at"] == captured
+    assert stored["source_status"] == "backup"
+    assert stored["raw_timestamp_available"] == 0
+    bars = json.loads(stored["bars_json"])
+    assert content_sha256(bars) == first
+    assert bars[-1]["session_date"] == T.isoformat()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"source": ""},
+        {"source_status": " "},
+        {"reason": ""},
+        {"staleness_minutes": 1.5},
+        {"staleness_minutes": True},
+        {"raw_timestamp_available": 0},
+        {"bars": []},
+        {"dropped_rows": [{"x": float("inf")}]},
+    ],
+)
+def test_bad_snapshot_inputs_are_refused(ledger: Ledger, overrides: dict[str, Any]) -> None:
+    with pytest.raises(ValueError):
+        ledger.snapshot(T, **overrides)
+    assert ledger.rows("forecast_input_series") == []
+
+
+# --- claims ---------------------------------------------------------------------------------
+
+
+def test_registration_derives_the_id_and_the_hashes(ledger: Ledger) -> None:
+    rows = ledger.rows("forecast_claim_registry")
+    assert [r["claim_id"] for r in rows] == [
+        "market|h3|1.0.0|dirdef-v1.0|forward",
+        "market|h5|1.0.0|dirdef-v1.0|forward",
+    ]
+    first = rows[0]
+    assert first["scope_key"] == "TAIEX" and first["kind"] == "forward"
+    assert first["rules_bytes"] == RULES_H3
+    assert first["definition_sha256"] == definition_sha256(ledger.definition)
+    assert first["definition_logic_sha256"] == definition_logic_sha256(ledger.definition)
+    # Read back in JSON mode: the strict model takes JSON arrays for its tuples there.
+    stored = DirectionDefinition.model_validate_json(first["definition_json"])
+    assert definition_sha256(stored) == first["definition_sha256"]
+    assert first["registered_at"] == "2026-10-01T01:00:00.000000+00:00"
+    assert first["provisional_results_seen"] == 0
+
+
+def test_registration_order_must_follow_the_clock(ledger: Ledger) -> None:
+    with pytest.raises(ForecastStoreError, match="later than every registration"):
+        ledger.register(3, b"other")  # the clock has not moved since the h5 registration
+    ledger.clock.advance(seconds=-5)
+    with pytest.raises(ForecastStoreError, match="later than every registration"):
+        ledger.register(3, b"other")
+
+
+def test_a_replacement_needs_a_reason_and_the_same_horizon(ledger: Ledger) -> None:
+    ledger.clock.advance(seconds=1)
+    with pytest.raises(ForecastStoreError, match="replace_reason"):
+        ledger.register(3, b"v2", rules_version="1.1.0", replaces_claim_id=ledger.h3)
+    with pytest.raises(ForecastStoreError, match="scope and horizon"):
+        ledger.register(
+            3, b"v2", rules_version="1.1.0", replaces_claim_id=ledger.h5, replace_reason="x"
+        )
+    with pytest.raises(ForecastStoreError, match="not a registered forward claim"):
+        ledger.register(
+            3, b"v2", rules_version="1.1.0", replaces_claim_id="market|h3|x", replace_reason="x"
+        )
+    new = ledger.register(
+        3,
+        b"v2",
+        rules_version="1.1.0",
+        replaces_claim_id=ledger.h3,
+        replace_reason="rules text changed",
+        provisional_results_seen=True,
+    )
+    recording = ledger.store.recording_claims()
+    assert recording[("market", 3)].claim_id == new
+    assert recording[("market", 3)].replaces_claim_id == ledger.h3
+    assert recording[("market", 5)].claim_id == ledger.h5
+    assert [c.claim_id for c in ledger.store.forward_claims()] == [ledger.h3, ledger.h5, new]
+
+
+# --- supplement 3 (revised) point 6: the replacement chain (f1) -------------------------------
+
+
+def _chain(ledger: Ledger, *links: tuple[str, int, str | None]) -> list[store_module.ClaimRow]:
+    """Claim rows (id, horizon, replaces) in registration order, modelled on a registered row."""
+    model = ledger.store.forward_claims()[0]
+    return [
+        replace(model, claim_id=claim_id, horizon=horizon, replaces_claim_id=replaces)
+        for claim_id, horizon, replaces in links
+    ]
+
+
+def test_f1_a_linear_chain_has_no_violation(ledger: Ledger) -> None:
+    rows = _chain(ledger, ("a", 3, None), ("b", 5, None), ("c", 3, "a"), ("d", 3, "c"))
+    assert store_module.replacement_violations(rows) == []
+
+
+@pytest.mark.parametrize(
+    ("links", "message"),
+    [
+        pytest.param(
+            [("h3-old", 3, None), ("h5-new", 5, "h3-old")], "keeps the scope", id="cross-horizon"
+        ),
+        pytest.param(
+            [("a", 3, None), ("b", 3, "a"), ("c", 3, "a")], "replaced more than once", id="twice"
+        ),
+        pytest.param(
+            [("a", 3, "c"), ("c", 3, "a")], "registered before it", id="names-a-later-claim"
+        ),
+        pytest.param([("a", 3, "a")], "registered before it", id="names-itself"),
+        pytest.param([("a", 3, "ghost")], "registered before it", id="names-nothing"),
+    ],
+)
+def test_f1_the_three_counter_examples_break_the_rule(
+    ledger: Ledger, links: list[tuple[str, int, str | None]], message: str
+) -> None:
+    found = store_module.replacement_violations(_chain(ledger, *links))
+    assert found != [] and any(message in item for item in found)
+
+
+def test_f1_another_scope_key_is_another_chain(ledger: Ledger) -> None:
+    rows = _chain(ledger, ("a", 3, None), ("b", 3, "a"))
+    rows[1] = replace(rows[1], scope_key="OTHER")
+    assert any("keeps the scope" in item for item in store_module.replacement_violations(rows))
+
+
+def _replace_h3(ledger: Ledger, version: str, replaces: str) -> str:
+    ledger.clock.advance(seconds=1)
+    return ledger.register(
+        3, version.encode(), rules_version=version, replaces_claim_id=replaces, replace_reason="x"
+    )
+
+
+def test_f1_the_registration_refuses_a_second_replacement_of_one_claim(ledger: Ledger) -> None:
+    first = _replace_h3(ledger, "1.1.0", ledger.h3)
+    before = ledger.rows("forecast_claim_registry")
+    with pytest.raises(ForecastStoreError, match="replaced more than once"):
+        _replace_h3(ledger, "1.2.0", ledger.h3)
+    assert ledger.rows("forecast_claim_registry") == before
+    # The chain goes on from the claim that replaced it.
+    assert _replace_h3(ledger, "1.2.0", first) != first
+
+
+def test_f1_the_registration_refuses_a_claim_registered_later(ledger: Ledger) -> None:
+    # At registration time a "later" claim does not exist yet: naming the id of a
+    # claim registered afterwards is refused, and so is naming the claim itself.
+    later_id = "market|h3|1.1.0|dirdef-v1.0|forward"
+    before = ledger.rows("forecast_claim_registry")
+    for version, target in (("1.2.0", later_id), ("1.1.0", later_id)):
+        with pytest.raises(ForecastStoreError, match="not a registered forward claim"):
+            _replace_h3(ledger, version, target)
+    assert ledger.rows("forecast_claim_registry") == before
+
+
+def test_f1_the_registration_refuses_a_cross_horizon_replacement(ledger: Ledger) -> None:
+    before = ledger.rows("forecast_claim_registry")
+    ledger.clock.advance(seconds=1)
+    with pytest.raises(ForecastStoreError, match="keeps the scope and horizon"):
+        ledger.register(
+            5, b"v2", rules_version="1.1.0", replaces_claim_id=ledger.h3, replace_reason="x"
+        )
+    assert ledger.rows("forecast_claim_registry") == before
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"horizon": 4},
+        {"rules_version": "a|b"},
+        {"rules_bytes": b""},
+        {"rules_logic_sha256": "x"},
+        {"frozen_commit": ""},
+        {"prereg_doc_path": " "},
+        {"prereg_doc_blob": "text"},
+        {"review_refs": ""},
+        {"provisional_results_seen": 1},
+        {"definition": {"definition_version": "dirdef-v1.0"}},
+        {"replaces_claim_id": None, "replace_reason": "dangling"},
+    ],
+)
+def test_bad_registrations_are_refused(ledger: Ledger, overrides: dict[str, Any]) -> None:
+    ledger.clock.advance(seconds=1)
+    with pytest.raises(ForecastStoreError):
+        kwargs: dict[str, Any] = {"horizon": 3, "rules": b"other", "rules_version": "2.0.0"}
+        kwargs.update(overrides)
+        ledger.register(**kwargs)
+    assert len(ledger.rows("forecast_claim_registry")) == 2
+
+
+def test_an_unregistered_claim_is_none(ledger: Ledger) -> None:
+    assert ledger.store.claim("market|h3|nope|dirdef-v1.0|forward") is None
+
+
+# --- records --------------------------------------------------------------------------------
+
+
+def test_a_record_is_written_with_store_derived_columns(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    forecast_id = ledger.record(run_id, ledger.h3, T, series)
+    (stored,) = ledger.rows("forecast_record")
+    assert stored["forecast_id"] == forecast_id
+    assert stored["scope_kind"] == "market" and stored["scope_key"] == "TAIEX"
+    assert stored["horizon"] == 3
+    assert stored["rules_sha256"] == ledger.rows("forecast_claim_registry")[0]["rules_sha256"]
+    assert stored["created_at"] == "2026-11-13T14:10:00.000000+00:00"
+    assert stored["late"] == 0
+    assert stored["late_cutoff_at"] == "2026-11-13T16:00:00.000000+00:00"
+    assert stored["valid_until_session_estimate"] == "2026-11-18"  # Fri + 3 weekdays
+    assert stored["validation_status"] == "unverified"
+    assert stored["inputs_max_fetched_at"] == "2026-11-13T12:00:00.000000+00:00"
+    assert stored["base_close"] == "17000.5"
+    assert stored["missing_json"] == "[]"
+    assert set(json.loads(stored["baseline_predictions_json"])) == {"B1", "B2", "B6", "B8"}
+    assert stored["content_hash"] == record_content_hash(stored)
+
+
+def test_the_content_hash_ignores_the_run_columns(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    ledger.clock.now = _at(T, 23, 30)
+    ledger.record(ledger.run(), ledger.h5, T, series)
+    first, second = ledger.rows("forecast_record")
+    assert first["content_hash"] != second["content_hash"]  # claim and horizon differ
+    same = dict(second, claim_id=first["claim_id"], horizon=3)
+    same.update({k: first[k] for k in ("rules_sha256", "valid_until_session_estimate", "band_def")})
+    assert record_content_hash(same) == first["content_hash"]
+
+
+@pytest.mark.parametrize(
+    ("clock", "late"),
+    [
+        (datetime(2026, 11, 13, 23, 59, 59, 999999), 0),
+        (datetime(2026, 11, 14, 0, 0, 0), 1),
+        (datetime(2026, 11, 14, 0, 0, 0, 1), 1),
+        (datetime(2026, 11, 13, 15, 30), 0),
+    ],
+    ids=["23:59:59.999999", "00:00:00", "00:00:00.000001", "15:30"],
+)
+def test_late_is_decided_by_the_store_clock(ledger: Ledger, clock: datetime, late: int) -> None:
+    # T's bar is fetched at 15:10, so even the 15:30 record is later than its capture.
+    series = ledger.snapshot(T, bars=[bar(date(2026, 11, 12)), bar(T, fetched=_at(T, 15, 10))])
+    ledger.clock.now = clock.replace(tzinfo=ledger.clock.now.tzinfo)
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    (stored,) = ledger.rows("forecast_record")
+    assert stored["late"] == late
+    assert stored["late_cutoff_at"] == "2026-11-13T16:00:00.000000+00:00"
+
+
+def test_the_clock_zone_does_not_matter(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = datetime(2026, 11, 13, 15, 59, 59, 999999, tzinfo=UTC)
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    ledger.clock.now = datetime(2026, 11, 13, 16, 0, tzinfo=UTC)
+    ledger.record(ledger.run(), ledger.h5, T, series)
+    assert [r["late"] for r in ledger.rows("forecast_record")] == [0, 1]
+
+
+def test_the_default_clock_is_aware_utc() -> None:
+    now = store_module.system_clock()
+    assert now.utcoffset() == timedelta(0)
+
+
+def test_a_naive_clock_is_refused(ledger: Ledger) -> None:
+    ledger.clock.now = datetime(2026, 11, 13, 22, 10)
+    with pytest.raises(ForecastStoreError, match="timezone-aware"):
+        ledger.run()
+
+
+def test_one_record_per_claim_and_day(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    ledger.clock.now = _at(T, 23, 10)
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        ledger.record(ledger.run(), ledger.h3, T, series, label="bearish")
+    assert [r["label"] for r in ledger.rows("forecast_record")] == ["range"]
+    ledger.record(ledger.run(), ledger.h5, T, series)  # the other claim on the same day
+    assert len(ledger.rows("forecast_record")) == 2
+
+
+def test_an_insufficient_record(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.insufficient(ledger.run(), ledger.h3, T, series)
+    (stored,) = ledger.rows("forecast_record")
+    assert stored["label"] == "insufficient"
+    items = [MissingItem.model_validate(item) for item in json.loads(stored["missing_json"])]
+    assert items == [_missing(T), _missing(T, "E-VOL-SHORT", "11")]
+    assert json.loads(stored["band_def"])["sigma_d"] is None
+
+
+def _rejected(ledger: Ledger, **overrides: Any) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    with pytest.raises((ForecastStoreError, LabeledThresholdSnapshotIncompleteError)):
+        ledger.record(run_id, ledger.h3, T, series, **overrides)
+    assert ledger.rows("forecast_record") == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"label": "neutral"},
+        {"label": "insufficient"},  # with no missing item
+        {"missing": [_missing(T)]},  # labelled, with a missing item
+        {"missing": ["E-BARS-SHORT"]},
+        {"missing": "E-BARS-SHORT"},
+        {"band_def": {"K_h": 0.43}},
+        {"band_def": [("K_h", 0.43)]},
+        {"band_def": {**{"K_h": 0.43, "EPS": 1e-12, "sigma_d": 0.01}, "extra": 1}},
+        {"baseline_predictions": {"B1": "range", "B2": "range", "B6": "range"}},
+        {"baseline_predictions": []},
+        {"evidence": []},
+        {"evidence": {"x": float("nan")}},
+        {"base_close": 17000.5},
+        {"range_basis": ""},
+        {"data_as_of": datetime(2026, 11, 13, tzinfo=UTC)},
+        {"input_series_sha256": "x"},
+    ],
+)
+def test_bad_record_inputs_are_refused(ledger: Ledger, overrides: dict[str, Any]) -> None:
+    _rejected(ledger, **overrides)
+
+
+def test_an_insufficient_record_has_no_bounds(ledger: Ledger) -> None:
+    _rejected(ledger, label="insufficient", missing=[_missing(T)])  # band has up/down pct
+
+
+# --- insufficient records and sigma_d (ADR-0030 freeze pack Q3) ---------------------------
+
+#: A window of daily log returns whose sample std is well above the fixture's SIGMA_FLOOR.
+VOLATILE = [0.004 * ((i % 7) - 3) + 0.0001 * (i % 3) for i in range(60)]
+
+
+def _insufficient_band(
+    definition: DirectionDefinition, estimate: SigmaEstimate, horizon: int = 3
+) -> dict[str, object]:
+    """``band_def`` of an insufficient record, from a ``volatility.sigma_d`` result."""
+    return {
+        "K_h": definition.k_for(horizon),
+        "EPS": definition.EPS,
+        "sigma_d": estimate.value,
+        "valid_returns": estimate.valid_returns,
+        "up_pct": None,
+        "down_pct": None,
+    }
+
+
+def test_q3_i_an_insufficient_record_keeps_an_available_sigma(ledger: Ledger) -> None:
+    # (i) E-BARS-SHORT, sigma_d available: written, sigma_d is the number; recomputed
+    # from the same returns, band_def is the same to the bit.
+    estimate = sigma_d(VOLATILE, definition=ledger.definition)
+    assert estimate.value is not None and estimate.missing_code is None
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(
+        ledger.run(),
+        ledger.h3,
+        T,
+        series,
+        label="insufficient",
+        missing=[_missing(T)],
+        band_def=_insufficient_band(ledger.definition, estimate),
+    )
+    (stored,) = ledger.rows("forecast_record")
+    stored_band = json.loads(stored["band_def"])
+    assert isinstance(stored_band["sigma_d"], float)
+    again = _insufficient_band(ledger.definition, sigma_d(VOLATILE, definition=ledger.definition))
+    assert stored["band_def"] == canonical_json(again)
+    for key in ("K_h", "EPS", "sigma_d"):
+        assert struct.pack("<d", stored_band[key]) == struct.pack("<d", again[key])
+    assert stored_band["valid_returns"] == again["valid_returns"] == 60
+
+
+@pytest.mark.parametrize(
+    ("returns", "code"),
+    [([0.001] * 60, "E-VOL-DEGENERATE"), ([0.01, -0.01] * 5, "E-VOL-SHORT")],
+    ids=["degenerate", "short"],
+)
+def test_q3_ii_a_sigma_without_value_is_null(
+    ledger: Ledger, returns: list[float | None], code: str
+) -> None:
+    # (ii) sigma_d returned no value: null, with its E-VOL-* item; written.
+    estimate = sigma_d(returns, definition=ledger.definition)
+    assert estimate.value is None and estimate.missing_code == code
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(
+        ledger.run(),
+        ledger.h3,
+        T,
+        series,
+        label="insufficient",
+        missing=[_missing(T, code, str(estimate.raw_std))],
+        band_def=_insufficient_band(ledger.definition, estimate),
+    )
+    (stored,) = ledger.rows("forecast_record")
+    assert json.loads(stored["band_def"])["sigma_d"] is None
+    assert json.loads(stored["band_def"])["valid_returns"] == estimate.valid_returns
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "violation"),
+    [
+        ("sigma_d", 0.0005, "sigma_d_below_floor"),
+        ("sigma_d", 0.0, "sigma_d_not_positive_finite"),
+        ("K_h", 0.5, "k_h_mismatch"),
+        ("valid_returns", 3, "valid_returns_below_min"),
+    ],
+)
+def test_q3_iii_a_non_null_sigma_goes_through_band(
+    ledger: Ledger, key: str, value: object, violation: str
+) -> None:
+    # (iii) insufficient with a sigma_d below the floor (or another violation): refused.
+    snapshot = _insufficient_band(
+        ledger.definition, sigma_d(VOLATILE, definition=ledger.definition)
+    )
+    snapshot[key] = value
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    with pytest.raises(ForecastStoreError, match=violation):
+        ledger.record(
+            run_id,
+            ledger.h3,
+            T,
+            series,
+            label="insufficient",
+            missing=[_missing(T)],
+            band_def=snapshot,
+        )
+    assert ledger.rows("forecast_record") == []
+
+
+@pytest.mark.parametrize(
+    ("sigma", "codes"),
+    [
+        (None, ["E-BARS-SHORT"]),
+        (0.01, ["E-BARS-SHORT", "E-VOL-DEGENERATE"]),
+        (0.01, ["E-VOL-SHORT"]),
+    ],
+    ids=["iv-null-without-e-vol", "value-with-e-vol-degenerate", "value-with-e-vol-short"],
+)
+def test_q3_iv_sigma_is_null_exactly_with_an_e_vol_item(
+    ledger: Ledger, sigma: float | None, codes: list[str]
+) -> None:
+    # (iv) null sigma_d without an E-VOL-* item, and the converse: refused.
+    snapshot = _insufficient_band(
+        ledger.definition, sigma_d(VOLATILE, definition=ledger.definition)
+    )
+    snapshot["sigma_d"] = sigma
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    with pytest.raises(ForecastStoreError, match="null exactly when missing holds an E-VOL"):
+        ledger.record(
+            run_id,
+            ledger.h3,
+            T,
+            series,
+            label="insufficient",
+            missing=[_missing(T, code) for code in codes],
+            band_def=snapshot,
+        )
+    assert ledger.rows("forecast_record") == []
+
+
+def test_a_broken_missing_item_is_revalidated(ledger: Ledger) -> None:
+    broken = MissingItem.model_construct(**{**_missing(T).model_dump(), "source": "yfinance"})
+    _rejected(ledger, label="insufficient", missing=[broken])
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "violation"),
+    [
+        ("sigma_d", None, "sigma_d_missing"),
+        ("sigma_d", 0.0, "sigma_d_not_positive_finite"),
+        ("K_h", 0.5, "k_h_mismatch"),
+        ("valid_returns", 3, "valid_returns_below_min"),
+    ],
+)
+def test_a_labelled_record_goes_through_band(
+    ledger: Ledger, key: str, value: object, violation: str
+) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    bad = band(ledger.definition)
+    bad[key] = value
+    with pytest.raises(LabeledThresholdSnapshotIncompleteError) as caught:
+        ledger.record(ledger.run(), ledger.h3, T, series, band_def=bad)
+    assert violation in caught.value.violations
+    assert caught.value.source == "record"
+    assert ledger.rows("forecast_record") == []
+
+
+def test_a_labelled_record_needs_the_published_definition(
+    ledger: Ledger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    other = fixture_definition().model_validate(
+        {**ledger.definition.model_dump(), "description": "edited"}
+    )
+    publish_definition(monkeypatch, other)
+    with pytest.raises(ForecastStoreError, match="differs from the claim"):
+        ledger.record(run_id, ledger.h3, T, series)
+    from app.forecast import definitions
+
+    monkeypatch.setattr(definitions, "PUBLISHED_DIRECTION_DEFINITIONS", {})
+    monkeypatch.setattr(definitions, "_DEFINITION_CACHE", {})
+    with pytest.raises(UnpublishedVersionError):
+        ledger.record(run_id, ledger.h3, T, series)
+    ledger.insufficient(run_id, ledger.h3, T, series)  # no band judgement for insufficient
+    assert len(ledger.rows("forecast_record")) == 1
+
+
+def test_t_must_be_the_snapshots_latest_session(ledger: Ledger) -> None:
+    series = ledger.snapshot(date(2026, 11, 12))
+    ledger.clock.now = _at(T, 22, 10)
+    with pytest.raises(ForecastStoreError, match="latest session"):
+        ledger.record(ledger.run(), ledger.h3, T, series)
+
+
+def test_every_snapshot_bar_must_be_final(ledger: Ledger) -> None:
+    early = bar(T, fetched=_at(T, 14, 59))
+    bars = [bar(date(2026, 11, 12)), early]
+    series = ledger.snapshot(T, bars=bars)
+    ledger.clock.now = _at(T, 22, 10)
+    with pytest.raises(ForecastStoreError, match="not final"):
+        ledger.record(ledger.run(), ledger.h3, T, series)
+    assert ledger.store.final_sessions() == [date(2026, 11, 12)]
+
+
+def test_the_snapshot_must_not_postdate_the_record(ledger: Ledger) -> None:
+    ledger.clock.now = _at(T, 22, 10)
+    series = ledger.snapshot(T)
+    run_id = ledger.run()
+    ledger.clock.now = _at(T, 22, 9)  # the clock stepped back
+    with pytest.raises(ForecastStoreError, match="captured after"):
+        ledger.record(run_id, ledger.h3, T, series)
+
+
+@pytest.mark.parametrize("stamp", ["fetched_at", "as_of"])
+@pytest.mark.parametrize("record_hour", [22, 23])
+def test_a_bar_stamped_after_the_capture_is_refused(
+    ledger: Ledger, stamp: str, record_hour: int
+) -> None:
+    # M1 (point in time): one bar's fetched_at / as_of is an hour after the store
+    # clock that stamps captured_at. At 23:30 the record itself is later than the
+    # bar, so only the captured_at comparison can catch it.
+    ledger.clock.now = _at(T, 22, 10)
+    future = bar(T)
+    future[stamp] = _at(T, 23, 10)
+    series = ledger.snapshot(T, bars=[bar(date(2026, 11, 12)), future], catch_up=False)
+    (stored,) = ledger.rows("forecast_input_series")
+    assert stored["captured_at"] == "2026-11-13T14:10:00.000000+00:00"
+    ledger.clock.now = _at(T, record_hour, 30)
+    run_id = ledger.run()
+    with pytest.raises(ForecastStoreError, match="stamped after its captured_at"):
+        ledger.record(run_id, ledger.h3, T, series)
+    assert ledger.rows("forecast_record") == []
+
+
+def test_a_bar_stamped_exactly_at_the_capture_is_accepted(ledger: Ledger) -> None:
+    ledger.clock.now = _at(T, 20, 0)
+    bars = [bar(date(2026, 11, 12)), bar(T, fetched=_at(T, 20, 0))]
+    series = ledger.snapshot(T, bars=bars, catch_up=False)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    (stored,) = ledger.rows("forecast_record")
+    (snapshot,) = ledger.rows("forecast_input_series")
+    assert stored["inputs_max_fetched_at"] == snapshot["captured_at"]
+    assert stored["inputs_max_fetched_at"] == "2026-11-13T12:00:00.000000+00:00"
+
+
+def test_unknown_references_are_refused(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    with pytest.raises(ForecastStoreError, match="not a stored snapshot"):
+        ledger.record(run_id, ledger.h3, T, "9" * 64)
+    with pytest.raises(ForecastStoreError, match="not a registered forward claim"):
+        ledger.record(run_id, "market|h3|x|dirdef-v1.0|forward", T, series)
+    with pytest.raises(ForecastStoreError, match="not a started run"):
+        ledger.record(99, ledger.h3, T, series)
+    with pytest.raises(ForecastStoreError, match="run_id must be an int"):
+        ledger.record(True, ledger.h3, T, series)
+    ledger.store.end_run(run_id, outcome="ok", candidate_t=T, records_written=0)
+    with pytest.raises(ForecastStoreError, match="already ended"):
+        ledger.record(run_id, ledger.h3, T, series)
+
+
+def test_writes_are_refused_on_an_incomplete_schema(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    conn = sqlite3.connect(ledger.path)
+    conn.execute("DROP TRIGGER forecast_record_no_update")
+    conn.close()
+    with pytest.raises(SchemaIncompleteError):
+        ledger.record(run_id, ledger.h3, T, series)
+    with pytest.raises(SchemaIncompleteError):
+        ledger.run()
+    assert ledger.rows("forecast_record") == []
+    assert len(ledger.rows("forecast_run")) == 1
+
+
+def test_the_store_creates_no_schema(tmp_path: Path) -> None:
+    path = tmp_path / "empty.db"
+    store = ForecastStore(path, clock=FakeClock(_at(T, 22, 10)))
+    with pytest.raises(SchemaIncompleteError):
+        store.begin_run(code_commit="x", code_digest=CODE, runtime={})
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0
+    conn.close()
+
+
+def test_a_replace_through_the_store_connection_is_refused(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    (stored,) = ledger.rows("forecast_record")
+    replaced = dict(stored, label="bearish")
+    names = ", ".join(replaced)
+    marks = ", ".join("?" for _ in replaced)
+    conn = ledger.store._connect()
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute(
+                f"INSERT OR REPLACE INTO forecast_record ({names}) VALUES ({marks})",
+                tuple(replaced.values()),
+            )
+    finally:
+        conn.close()
+    assert [r["label"] for r in ledger.rows("forecast_record")] == ["range"]
+
+
+# --- queries --------------------------------------------------------------------------------
+
+
+def test_first_record_at_and_m_db(ledger: Ledger) -> None:
+    assert ledger.store.first_record_at(ledger.h3) is None
+    assert ledger.store.counts_toward_m(ledger.h3) is False
+    assert ledger.store.m_db() == 0
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 0, 30) + timedelta(days=1)  # late
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    first = ledger.clock.now
+    later = ledger.snapshot(date(2026, 11, 16))
+    ledger.clock.now = _at(date(2026, 11, 16), 22, 10)
+    ledger.record(ledger.run(), ledger.h3, date(2026, 11, 16), later)
+    assert ledger.store.first_record_at(ledger.h3) == first.astimezone(UTC)
+    assert ledger.store.counts_toward_m(ledger.h3) is True
+    assert ledger.store.m_db() == 1
+    ledger.record(ledger.run(), ledger.h5, date(2026, 11, 16), later)
+    assert ledger.store.m_db() == 2
+
+
+def test_m_db_counts_a_replaced_claim_with_records(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    ledger.clock.advance(seconds=1)
+    ledger.register(
+        3, b"v2", rules_version="1.1.0", replaces_claim_id=ledger.h3, replace_reason="x"
+    )
+    assert ledger.store.m_db() == 1  # the new claim has no record yet; the old one still counts
+
+
+def test_d_v_skips_late_records(ledger: Ledger) -> None:
+    first, second = date(2026, 11, 12), T
+    s1 = ledger.snapshot(first)
+    ledger.clock.now = _at(first, 23) + timedelta(hours=2)  # 01:00 the next day: late
+    ledger.record(ledger.run(), ledger.h3, first, s1)
+    assert ledger.store.d_v(ledger.h3) is None
+    assert ledger.store.n_hat(ledger.h3) == 0
+    s2 = ledger.snapshot(second)
+    ledger.clock.now = _at(second, 22, 10)
+    ledger.record(ledger.run(), ledger.h3, second, s2)
+    assert ledger.store.d_v(ledger.h3) == second
+
+
+def _on_time(ledger: Ledger, claim: str, index: int, *, late: bool = False) -> None:
+    day = DAYS[index]
+    series = ledger.snapshot(day, count=index + 1, bars=[bar(d) for d in DAYS[: index + 1]])
+    ledger.clock.now = _at(day, 22, 10) + (timedelta(hours=3) if late else timedelta(0))
+    ledger.insufficient(ledger.run(), claim, day, series)
+
+
+def test_n_hat_counts_grid_points_whose_h_th_session_has_appeared(ledger: Ledger) -> None:
+    for index in (0, 3, 6):
+        _on_time(ledger, ledger.h3, index)
+    assert ledger.store.final_sessions() == DAYS[:7]
+    # Grid D_v, +3, +6. Index 6 has no third session after it yet.
+    assert ledger.store.n_hat(ledger.h3) == 2
+    _on_time(ledger, ledger.h3, 7)  # off the grid: never counted
+    _on_time(ledger, ledger.h3, 9, late=True)  # on the grid, but late
+    assert ledger.store.final_sessions() == DAYS[:10]
+    assert ledger.store.n_hat(ledger.h3) == 3
+    ledger.snapshot(DAYS[12], bars=[bar(d) for d in DAYS[:13]])
+    assert ledger.store.n_hat(ledger.h3) == 3  # 9 is late; 12 has no record
+    assert ledger.store.n_hat(ledger.h5) == 0
+
+
+def test_the_phase0_grid_is_the_n_hat_grid_and_counts_its_lost_points(ledger: Ledger) -> None:
+    assert ledger.store.phase0_grid(ledger.h3).points == ()  # no D_v yet
+    for index in (0, 3, 6, 7):
+        _on_time(ledger, ledger.h3, index)
+    _on_time(ledger, ledger.h3, 9, late=True)
+    ledger.snapshot(DAYS[12], bars=[bar(d) for d in DAYS[:13]])
+    grid = ledger.store.phase0_grid(ledger.h3)
+    assert grid.sessions == tuple(DAYS[:13]) and grid.first == 0
+    assert grid.points == (DAYS[0], DAYS[3], DAYS[6], DAYS[9], DAYS[12])
+    assert grid.on_time == frozenset({DAYS[0], DAYS[3], DAYS[6], DAYS[7]})
+    assert grid.lost == 2  # 9 is late, 12 has no record; 7 is off the grid
+    assert grid.n_hat == ledger.store.n_hat(ledger.h3) == 3
+    assert ledger.store.on_time_sessions(ledger.h3) == grid.on_time
+
+
+def test_review_trigger_t2_starts_90_days_before_d_1(ledger: Ledger) -> None:
+    store = ledger.store
+    before = store.review_trigger(ledger.h3, today=DAYS[0])
+    assert (before.d_v, before.d_1, before.t1, before.t2, before.triggered) == (
+        None,
+        None,
+        False,
+        False,
+        False,
+    )
+    assert before.c1 == 30 and before.horizon == 3 and before.n_hat == 0
+    _on_time(ledger, ledger.h3, 0)
+    d_1 = store_module._weekdays_after(DAYS[0], 30 * 3)
+    assert d_1.weekday() < 5 and (d_1 - DAYS[0]).days > 90
+    early = store.review_trigger(ledger.h3, today=d_1 - timedelta(days=91))
+    due = store.review_trigger(ledger.h3, today=d_1 - timedelta(days=90))
+    assert (early.d_v, early.d_1, early.t2) == (DAYS[0], d_1, False)
+    assert (due.t2, due.triggered, due.t1) == (True, True, False)
+    with pytest.raises(ForecastStoreError, match="today must be a date"):
+        store.review_trigger(ledger.h3, today=_at(DAYS[0], 9))
+
+
+def test_review_trigger_t1_is_half_of_the_first_checkpoint(
+    ledger: Ledger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _on_time(ledger, ledger.h3, 0)
+    sessions = tuple(weekdays(DAYS[0], 60))
+    for n_hat, t1 in ((14, False), (15, True)):
+        on_time = frozenset(sessions[: 3 * n_hat : 3])
+        grid = store_module.Phase0Grid(horizon=3, sessions=sessions, first=0, on_time=on_time)
+        assert grid.n_hat == n_hat
+        monkeypatch.setattr(ledger.store, "phase0_grid", lambda claim_id, g=grid: g)
+        trigger = ledger.store.review_trigger(ledger.h3, today=DAYS[0])
+        assert (trigger.n_hat, trigger.t1, trigger.t2) == (n_hat, t1, False)
+
+
+def test_registered_material_is_the_stored_bytes_and_definition(ledger: Ledger) -> None:
+    material = ledger.store.registered_material(ledger.h5)
+    assert material.rules_bytes == RULES_H5
+    assert material.claim == ledger.store.claim(ledger.h5)
+    assert DirectionDefinition.model_validate_json(material.definition_json) == ledger.definition
+    with pytest.raises(ForecastStoreError, match="not registered"):
+        ledger.store.registered_material("market|h3|x|dirdef-v1.0|forward")
+
+
+def test_runs_and_snapshot_digests_list_in_order(ledger: Ledger) -> None:
+    assert ledger.store.runs() == [] and ledger.store.snapshot_digests() == []
+    first, second = ledger.run(), ledger.run()
+    ledger.store.end_run(first, outcome="gate_closed", candidate_t=None, records_written=0)
+    runs = ledger.store.runs()
+    assert [(r.run_id, r.outcome) for r in runs] == [(first, "gate_closed"), (second, None)]
+    a = ledger.snapshot(DAYS[3])
+    b = ledger.snapshot(DAYS[5])
+    assert ledger.store.snapshot_digests() == [a, b]
+    assert ledger.store.ledger_schema_status().complete
+
+
+def test_n_hat_needs_a_registered_claim(ledger: Ledger) -> None:
+    with pytest.raises(ForecastStoreError):
+        ledger.store.n_hat("market|h3|x|dirdef-v1.0|forward")
+
+
+def test_n_hat_refuses_a_d_v_outside_the_snapshots(ledger: Ledger) -> None:
+    _on_time(ledger, ledger.h3, 0)
+    conn = sqlite3.connect(ledger.path)
+    stored = conn.execute("SELECT bars_json FROM forecast_input_series").fetchone()[0]
+    conn.close()
+    assert json.loads(stored)[-1]["session_date"] == DAYS[0].isoformat()
+    ledger.store.final_sessions = lambda: DAYS[1:5]  # type: ignore[method-assign]
+    with pytest.raises(LedgerInconsistentError):
+        ledger.store.n_hat(ledger.h3)
+
+
+# --- pure helpers ---------------------------------------------------------------------------
+
+
+def test_the_cutoff_is_t_plus_one_midnight_taipei() -> None:
+    assert late_cutoff_at(T) == datetime(2026, 11, 13, 16, 0, tzinfo=UTC)
+    assert late_cutoff_at(date(2026, 12, 31)) == datetime(2026, 12, 31, 16, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("day", "horizon", "expected"),
+    [
+        (T, 3, date(2026, 11, 18)),
+        (T, 5, date(2026, 11, 20)),
+        (date(2026, 11, 10), 3, date(2026, 11, 13)),
+    ],
+)
+def test_valid_until_counts_weekdays(day: date, horizon: int, expected: date) -> None:
+    assert valid_until_session_estimate(day, horizon) == expected
+
+
+def test_ulids_encode_the_millisecond_and_are_crockford() -> None:
+    at = datetime(2026, 11, 13, 14, 10, tzinfo=UTC)
+    zero = new_ulid(at, lambda n: bytes(n))
+    assert len(zero) == 26 and zero.endswith("0" * 16)
+    millis = int(at.timestamp() * 1000)
+    decoded = 0
+    for char in zero[:10]:
+        decoded = decoded * 32 + "0123456789ABCDEFGHJKMNPQRSTVWXYZ".index(char)
+    assert decoded == millis
+    assert new_ulid(at) != new_ulid(at)
+    with pytest.raises(ValueError):
+        new_ulid(datetime(1969, 12, 31, tzinfo=UTC))
+
+
+# --- reads for the recorder (NM-5 third batch) ------------------------------------------
+
+
+def test_now_is_the_store_clock_in_utc(ledger: Ledger) -> None:
+    ledger.clock.now = _at(T, 22, 10)
+    assert ledger.store.now() == datetime(2026, 11, 13, 14, 10, tzinfo=UTC)
+    ledger.clock.now = datetime(2026, 11, 13, 22, 10)  # naive
+    with pytest.raises(ForecastStoreError, match="timezone-aware"):
+        ledger.store.now()
+
+
+def test_claim_rows_carry_both_logic_hashes(ledger: Ledger) -> None:
+    claim = ledger.store.claim(ledger.h3)
+    assert claim is not None
+    assert claim.rules_logic_sha256 == LOGIC
+    assert claim.definition_logic_sha256 == definition_logic_sha256(ledger.definition)
+
+
+def test_latest_run_before_filters_by_outcome(ledger: Ledger) -> None:
+    first = ledger.run()
+    ledger.store.end_run(first, outcome="ok", candidate_t=T, records_written=0)
+    second = ledger.run()
+    ledger.store.end_run(second, outcome="gate_closed", candidate_t=None, records_written=0)
+    third = ledger.run()  # interrupted: no end row
+    fourth = ledger.run()
+    store = ledger.store
+    assert store.latest_run_before(first) is None
+    before = store.latest_run_before(fourth)
+    assert before is not None and before.run_id == third and before.outcome is None
+    passed = store.latest_run_before(fourth, outcomes=("ok", "no_new_session"))
+    assert passed is not None and passed.run_id == first and passed.outcome == "ok"
+    closed = store.latest_run_before(fourth, outcomes=("gate_closed",))
+    assert closed is not None and closed.run_id == second
+    assert store.latest_run_before(first, outcomes=("ok",)) is None
+
+
+@pytest.mark.parametrize(
+    ("run_id", "outcomes"),
+    [(True, None), ("1", None), (1, ()), (1, ("finished",))],
+)
+def test_latest_run_before_refuses_bad_arguments(
+    ledger: Ledger, run_id: Any, outcomes: Any
+) -> None:
+    with pytest.raises(ForecastStoreError):
+        ledger.store.latest_run_before(run_id, outcomes=outcomes)
+
+
+def test_has_record_and_stored_records(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    assert not ledger.store.has_record(ledger.h3, T)
+    assert ledger.store.stored_records(ledger.h3) == []
+    ledger.record(run_id, ledger.h3, T, series)
+    assert ledger.store.has_record(ledger.h3, T)
+    assert not ledger.store.has_record(ledger.h5, T)
+    assert ledger.store.stored_records(ledger.h3) == ledger.rows("forecast_record")
+    with pytest.raises(ForecastStoreError, match="date"):
+        ledger.store.has_record(ledger.h3, _at(T, 22))
+
+
+def test_a_stored_snapshot_reads_back_as_stored(ledger: Ledger) -> None:
+    series = ledger.snapshot(T, staleness_minutes=7, reason="cached")
+    stored = ledger.store.snapshot(series)
+    (row,) = ledger.rows("forecast_input_series")
+    assert stored.content_sha256 == series == row["content_sha256"]
+    assert canonical_json(list(stored.bars)) == row["bars_json"]
+    assert content_sha256(stored.bars) == series
+    assert (stored.source, stored.source_status) == ("yfinance", "backup")
+    assert (stored.staleness_minutes, stored.reason) == (7, "cached")
+    assert stored.raw_timestamp_available is False
+    assert canonical_timestamp(stored.captured_at) == row["captured_at"]
+    with pytest.raises(ForecastStoreError, match="not a stored snapshot"):
+        ledger.store.snapshot("f" * 64)
+
+
+def test_a_snapshot_whose_bars_are_not_objects_is_inconsistent(ledger: Ledger) -> None:
+    conn = sqlite3.connect(ledger.path, isolation_level=None)
+    try:
+        conn.execute(
+            "INSERT INTO forecast_input_series (content_sha256, series_kind, source,"
+            " source_status, raw_timestamp_available, bars_json, captured_at)"
+            " VALUES (?, 'index_bars', 'yfinance', 'backup', 0, '[1]', ?)",
+            ("e" * 64, canonical_timestamp(_at(T, 22))),
+        )
+    finally:
+        conn.close()
+    with pytest.raises(LedgerInconsistentError):
+        ledger.store.snapshot("e" * 64)
+
+
+def _content(ledger: Ledger, series: str, **overrides: Any) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "claim_id": ledger.h3,
+        "data_as_of": T,
+        "label": "range",
+        "range_basis": None,
+        "missing": [],
+        "evidence": {"rules_fired": []},
+        "band_def": band(ledger.definition, 3),
+        "base_close": Decimal("17000.5"),
+        "baseline_predictions": dict(BASELINES),
+        "input_series_sha256": series,
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_expected_columns_are_the_stored_content_columns(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    (stored,) = ledger.rows("forecast_record")
+    expected = ledger.store.expected_record_columns(**_content(ledger, series))
+    outside = {"forecast_id", "run_id", "created_at", "late"}
+    assert set(expected) == set(stored) - outside
+    assert expected == {key: value for key, value in stored.items() if key not in outside}
+    other = ledger.store.expected_record_columns(**_content(ledger, series, label="bullish"))
+    assert other["content_hash"] != stored["content_hash"]
+
+
+def test_expected_columns_refuse_what_the_write_refuses(ledger: Ledger) -> None:
+    # Supplement 3 (revised) point 8: the caller's content is a ForecastStoreError,
+    # what the ledger cannot give is a LedgerInconsistentError.
+    series = ledger.snapshot(T)
+    store = ledger.store
+    with pytest.raises(LedgerInconsistentError, match="claim_id"):
+        store.expected_record_columns(**_content(ledger, series, claim_id="nope"))
+    with pytest.raises(LedgerInconsistentError, match="not a stored snapshot"):
+        store.expected_record_columns(**_content(ledger, "f" * 64))
+    with pytest.raises(ForecastStoreError, match="insufficient"):
+        store.expected_record_columns(**_content(ledger, series, label="insufficient"))
+    assert not issubclass(LedgerInconsistentError, ValueError)
+
+
+def _pure_content(ledger: Ledger, **overrides: Any) -> dict[str, Any]:
+    content = _content(ledger, "0" * 64, **overrides)
+    del content["claim_id"], content["input_series_sha256"]
+    return content
+
+
+def test_check_record_content_is_the_write_validation_without_a_ledger_read(
+    tmp_path: Path,
+) -> None:
+    # Supplement 4 point 1 (b): the recorder's pure validation step. It needs no
+    # database at all (the path does not exist and is not created).
+    absent = tmp_path / "absent.db"
+    ledger_like = ForecastStore(absent)
+    definition = fixture_definition()
+    content: dict[str, Any] = {
+        "data_as_of": T,
+        "label": "range",
+        "range_basis": None,
+        "missing": [],
+        "evidence": {"rules_fired": []},
+        "band_def": band(definition, 3),
+        "base_close": Decimal("17000.5"),
+        "baseline_predictions": dict(BASELINES),
+    }
+    assert ledger_like.check_record_content(**content) is None
+    for overrides, match in (
+        ({"label": "insufficient"}, "insufficient"),
+        ({"label": "maybe"}, "closed list"),
+        ({"baseline_predictions": {"B1": {}}}, "baselines missing"),
+        ({"base_close": 1.5}, "base_close"),
+    ):
+        with pytest.raises(ForecastStoreError, match=match):
+            ForecastStore.check_record_content(**{**content, **overrides})
+    assert not absent.exists()
+
+
+def test_check_record_content_agrees_with_the_expected_columns(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ForecastStore.check_record_content(**_pure_content(ledger))
+    ledger.store.expected_record_columns(**_content(ledger, series))
+    with pytest.raises(ForecastStoreError, match="insufficient"):
+        ForecastStore.check_record_content(**_pure_content(ledger, label="insufficient"))
+
+
+# --- supplement 3 (revised) point 9: read-only connections (f4) -------------------------------
+
+#: The store's writes: the only methods that may open a write transaction.
+WRITE_METHODS = frozenset(
+    {
+        "begin_run",
+        "end_run",
+        "put_input_series",
+        "write_run_records",
+        "register_claim",
+        "write_record",
+    }
+)
+
+
+def _store_functions() -> dict[str, ast.FunctionDef]:
+    tree = ast.parse(Path(store_module.__file__).read_text(encoding="utf-8"))
+    found: dict[str, ast.FunctionDef] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            found[node.name] = node
+    return found
+
+
+def _users(name: str, functions: dict[str, ast.FunctionDef]) -> set[str]:
+    """The functions that call ``name`` (``self.name(...)``, ``x.name(...)`` or ``name(...)``)."""
+    return {
+        fname
+        for fname, node in functions.items()
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and (
+            (isinstance(call.func, ast.Attribute) and call.func.attr == name)
+            or (isinstance(call.func, ast.Name) and call.func.id == name)
+        )
+    }
+
+
+def test_f4_connect_is_opened_only_on_the_write_path() -> None:
+    functions = _store_functions()
+    assert _users("_connect", functions) == {"_write"}
+    assert _users("_open_connection", functions) == {"_connect", "_read"}
+    assert _users("connect", functions) == {"_open_connection"}  # sqlite3.connect
+    assert _users("_write", functions) <= WRITE_METHODS
+    # Every other public method reads, if at all, through _read only.
+    readers = _users("_read", functions)
+    public = {name for name in vars(ForecastStore) if not name.startswith("_")}
+    assert readers & WRITE_METHODS == set()
+    assert {"stored_records", "snapshot", "expected_record_columns", "claim"} <= readers
+    # check_record_content is the pure content validation: no connection at all;
+    # n_hat, phase0_grid and review_trigger compose the read queries above.
+    assert public - WRITE_METHODS - readers <= {
+        "now",
+        "counts_toward_m",
+        "recording_claims",
+        "check_record_content",
+        "n_hat",
+        "phase0_grid",
+        "review_trigger",
+    }
+    assert _users("_read", {"check_record_content": functions["check_record_content"]}) == set()
+
+
+def test_the_store_connection_scan_has_teeth() -> None:
+    tree = ast.parse(
+        "class S:\n    def stored(self):\n        with closing(self._connect()) as c:\n"
+        "            pass\n"
+    )
+    functions = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert _users("_connect", functions) == {"stored"}
+
+
+def test_f4_a_write_on_a_read_connection_fails(ledger: Ledger) -> None:
+    before = ledger.rows("forecast_run")
+    with ledger.store._read() as conn:
+        assert conn.execute("PRAGMA query_only").fetchone()[0] == 1
+        for sql in (
+            'INSERT INTO forecast_run (started_at, "trigger", code_commit, code_digest,'
+            " runtime_json, schema_version) VALUES ('x', 'scheduled', 'c', 'd', '{}', 1)",
+            "CREATE TABLE probe (x)",
+        ):
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                conn.execute(sql)
+    assert ledger.rows("forecast_run") == before
+
+
+def test_f4_every_read_query_runs_on_a_query_only_connection(
+    ledger: Ledger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    ledger.record(run_id, ledger.h3, T, series)
+    seen: list[tuple[str, int]] = []
+    real_closing = closing
+
+    @contextmanager
+    def spying(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+        with real_closing(conn):
+            try:
+                yield conn
+            finally:
+                seen.append((current, conn.execute("PRAGMA query_only").fetchone()[0]))
+
+    monkeypatch.setattr(store_module, "closing", spying)
+    store = ledger.store
+    queries: dict[str, Any] = {
+        "claim": lambda: store.claim(ledger.h3),
+        "forward_claims": store.forward_claims,
+        "recording_claims": store.recording_claims,
+        "first_record_at": lambda: store.first_record_at(ledger.h3),
+        "counts_toward_m": lambda: store.counts_toward_m(ledger.h3),
+        "m_db": store.m_db,
+        "d_v": lambda: store.d_v(ledger.h3),
+        "final_sessions": store.final_sessions,
+        "n_hat": lambda: store.n_hat(ledger.h3),
+        "on_time_sessions": lambda: store.on_time_sessions(ledger.h3),
+        "phase0_grid": lambda: store.phase0_grid(ledger.h3),
+        "review_trigger": lambda: store.review_trigger(ledger.h3, today=T),
+        "registered_material": lambda: store.registered_material(ledger.h3),
+        "runs": store.runs,
+        "snapshot_digests": store.snapshot_digests,
+        "ledger_schema_status": store.ledger_schema_status,
+        "latest_run": store.latest_run,
+        "latest_run_before": lambda: store.latest_run_before(run_id + 1),
+        "has_record": lambda: store.has_record(ledger.h3, T),
+        "stored_records": lambda: store.stored_records(ledger.h3),
+        "snapshot": lambda: store.snapshot(series),
+        "expected_record_columns": lambda: store.expected_record_columns(
+            **_content(ledger, series)
+        ),
+    }
+    for current, query in queries.items():  # noqa: B007 - read by the spy
+        query()
+    assert {name for name, _ in seen} == set(queries)
+    assert {flag for _, flag in seen} == {1}
+    # A write still opens a writable connection.
+    seen.clear()
+    current = "end_run"
+    store.end_run(run_id, outcome="ok", candidate_t=T, records_written=1)
+    assert seen == [("end_run", 0)]

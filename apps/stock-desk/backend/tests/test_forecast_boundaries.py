@@ -32,12 +32,13 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 import sys
 from pathlib import Path
 
 import pytest
 
-from app.advice.loader import BANNED_PHRASES
+from app.advice.banned_phrases import BANNED_PHRASES
 from tests.import_graph import (
     APP_ROOT,
     imported_modules,
@@ -238,13 +239,22 @@ def test_the_scanned_packages_hold_exactly_the_b1_and_b2_modules() -> None:
         "dirdef/strings.py",
         "forecast/__init__.py",
         "forecast/band.py",
+        "forecast/canonical.py",
         "forecast/claims.py",
         "forecast/definitions.py",
         "forecast/errors.py",
+        "forecast/recorder.py",
+        "forecast/report.py",
+        "forecast/schema.py",
+        "forecast/scoring.py",
+        "forecast/store.py",
         "ops_alert/__init__.py",
         "ops_alert/model.py",
         "outlook/__init__.py",
+        "outlook/baselines.py",
         "outlook/basket.py",
+        "outlook/engine.py",
+        "outlook/inputs.py",
         "outlook/missing.py",
         "outlook/volatility.py",
     ]
@@ -766,6 +776,9 @@ def test_the_object_setattr_scan_has_teeth() -> None:
 
 
 LOADER_MODULE = "app.advice.loader"
+#: The one definition of the phrases (ADR-0030 supplement 3 point 3): a leaf module.
+PHRASES_MODULE = "app.advice.banned_phrases"
+PHRASE_MODULES = (PHRASES_MODULE, LOADER_MODULE)
 
 
 def _forecast_outlook_dirdef_sources() -> dict[str, str]:
@@ -778,7 +791,8 @@ def _forecast_outlook_dirdef_sources() -> dict[str, str]:
 
 def _banned_phrase_importers(sources: dict[str, str]) -> dict[str, list[str]]:
     """Every way a file reaches ``BANNED_PHRASES``: the name imported (with its resolved
-    module), the loader module imported, or ``x.BANNED_PHRASES`` read as an attribute."""
+    module), the leaf or the loader module imported, or ``x.BANNED_PHRASES`` read as an
+    attribute."""
     found: dict[str, list[str]] = {}
     for path, text in sources.items():
         module, is_package = _path_module(path)
@@ -788,20 +802,21 @@ def _banned_phrase_importers(sources: dict[str, str]) -> dict[str, list[str]]:
                 for alias in node.names:
                     if alias.name == "BANNED_PHRASES":
                         found.setdefault(path, []).append(base)
-                    elif f"{base}.{alias.name}" == LOADER_MODULE:
-                        found.setdefault(path, []).append(f"module {LOADER_MODULE}")
+                    elif f"{base}.{alias.name}" in PHRASE_MODULES:
+                        found.setdefault(path, []).append(f"module {base}.{alias.name}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name == LOADER_MODULE:
-                        found.setdefault(path, []).append(f"module {LOADER_MODULE}")
+                    if alias.name in PHRASE_MODULES:
+                        found.setdefault(path, []).append(f"module {alias.name}")
             elif isinstance(node, ast.Attribute) and node.attr == "BANNED_PHRASES":
                 found.setdefault(path, []).append("attribute BANNED_PHRASES")
     return found
 
 
-def test_only_definitions_imports_the_banned_phrases_from_the_advice_loader() -> None:
+def test_only_definitions_imports_the_banned_phrases_from_the_leaf_module() -> None:
+    # FL-78 (i), source moved by ADR-0030 supplement 3 point 3.
     assert _banned_phrase_importers(_forecast_outlook_dirdef_sources()) == {
-        "forecast/definitions.py": [LOADER_MODULE]
+        "forecast/definitions.py": [PHRASES_MODULE]
     }
 
 
@@ -824,11 +839,93 @@ def test_only_definitions_imports_the_banned_phrases_from_the_advice_loader() ->
         pytest.param(
             "from app.advice.loader import BANNED_PHRASES as P\n", [LOADER_MODULE], id="alias"
         ),
+        pytest.param(
+            "from app.advice import banned_phrases\nX = banned_phrases.BANNED_PHRASES\n",
+            [f"module {PHRASES_MODULE}", "attribute BANNED_PHRASES"],
+            id="leaf-module-then-attribute",
+        ),
+        pytest.param(
+            "from ..advice.banned_phrases import BANNED_PHRASES\n",
+            [PHRASES_MODULE],
+            id="leaf-relative",
+        ),
     ],
 )
 def test_the_banned_phrase_import_scan_has_teeth(source: str, expected: list[str]) -> None:
     found = _banned_phrase_importers({"outlook/probe.py": source})
     assert sorted(found["outlook/probe.py"]) == sorted(expected)
+
+
+def _phrase_definitions(sources: dict[str, str]) -> set[str]:
+    """Files that bind ``BANNED_PHRASES`` by assignment (a definition, not an import)."""
+    found: set[str] = set()
+    for path, text in sources.items():
+        for node in ast.walk(ast.parse(text)):
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+            elif isinstance(node, ast.AnnAssign | ast.AugAssign):
+                targets = [node.target]
+            if any(isinstance(t, ast.Name) and t.id == "BANNED_PHRASES" for t in targets):
+                found.add(path)
+    return found
+
+
+def test_the_banned_phrases_are_defined_once_in_the_leaf_module() -> None:
+    assert _phrase_definitions(_app_sources()) == {"advice/banned_phrases.py"}
+
+
+def test_the_phrase_definition_scan_has_teeth() -> None:
+    sources = {"a.py": "BANNED_PHRASES = ('x',)\n", "b.py": "BANNED_PHRASES: tuple = ()\n"}
+    assert _phrase_definitions(sources) == {"a.py", "b.py"}
+
+
+def test_the_leaf_module_imports_nothing() -> None:
+    source = (APP_ROOT / "advice" / "banned_phrases.py").read_text(encoding="utf-8")
+    assert [
+        ast.unparse(n)
+        for n in ast.walk(ast.parse(source))
+        if isinstance(n, ast.Import | ast.ImportFrom)
+    ] == []
+    names = {getattr(n, "id", None) for n in ast.walk(ast.parse(source))}
+    assert "__import__" not in names
+
+
+def test_the_advice_package_file_imports_nothing() -> None:
+    source = (APP_ROOT / "advice" / "__init__.py").read_text(encoding="utf-8")
+    assert _imports_of_source(source) == set()
+
+
+def test_the_loader_re_exports_the_leaf_object() -> None:
+    from app.advice import banned_phrases, loader
+
+    assert loader.BANNED_PHRASES is banned_phrases.BANNED_PHRASES
+    tree = ast.parse((APP_ROOT / "advice" / "loader.py").read_text(encoding="utf-8"))
+    imports = [
+        (node.module, alias.name, alias.asname)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name == "BANNED_PHRASES"
+    ]
+    assert imports == [(PHRASES_MODULE, "BANNED_PHRASES", "BANNED_PHRASES")]
+
+
+def test_the_phrases_keep_their_values_and_order() -> None:
+    from app.advice.banned_phrases import BANNED_PHRASES as LEAF
+
+    assert LEAF == (
+        "保證",
+        "必漲",
+        "必賺",
+        "必跌",
+        "穩賺",
+        "穩賠",
+        "一定會",
+        "包賺",
+        "零風險",
+        "無風險",
+    )
 
 
 def test_the_loader_is_called_only_from_definitions_with_the_imported_phrases() -> None:
@@ -865,6 +962,13 @@ def test_no_copy_of_a_banned_phrase_in_dirdef_or_outlook(root: Path) -> None:
     } == {}
 
 
+def test_no_copy_of_a_banned_phrase_outside_the_leaf_module() -> None:
+    # FL-78 (i) "no copy", pointed at the new single source (supplement 3 point 3).
+    assert {p for p, t in _app_sources().items() if _constants_with_banned_phrases(t)} == {
+        "advice/banned_phrases.py"
+    }
+
+
 def test_the_banned_copy_scan_has_teeth() -> None:
     assert _constants_with_banned_phrases(f"X = 'a{BANNED_PHRASES[0]}b'") != []
 
@@ -877,7 +981,8 @@ def test_the_rules_directory_holds_only_the_two_rule_files() -> None:
         else set()
     )
     assert found <= {"h3.yaml", "h5.yaml"}
-    assert found == set()  # B2: no rule file before the G-3 freeze
+    # NM-5: the two frozen market rule files are landed (not registered; CG-2 does that).
+    assert found == {"h3.yaml", "h5.yaml"}
 
 
 # --- definitions.py, claims.py, forecast/__init__.py --------------------------------------
@@ -904,13 +1009,70 @@ def test_the_forecast_package_file_imports_nothing() -> None:
     assert _imports_of_source(source) == set()
 
 
-def test_claims_is_pure_for_now() -> None:
-    path = FORECAST_ROOT / "claims.py"
-    source = path.read_text(encoding="utf-8")
-    assert _dirdef_import_violations(source, _module_name(path)) == []
-    names = {getattr(n, "id", None) for n in ast.walk(ast.parse(source))}
-    assert "__name__" not in names  # no ``if __name__ == "__main__"`` CLI block yet
-    assert _io_violations(source) == []
+#: The pure functions of claims.py (ADR-0027 D-10): no IO in their bodies.
+CLAIMS_PURE_FUNCTIONS = ("claim_id", "count_m", "m_eff")
+
+
+def test_claims_pure_functions_stay_pure() -> None:
+    tree = ast.parse((FORECAST_ROOT / "claims.py").read_text(encoding="utf-8"))
+    bodies = {
+        node.name: ast.unparse(node)
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in CLAIMS_PURE_FUNCTIONS
+    }
+    assert set(bodies) == set(CLAIMS_PURE_FUNCTIONS)
+    assert {name: v for name, body in bodies.items() if (v := _io_violations(body))} == {}
+
+
+def test_claims_imports_the_stdlib_dirdef_and_three_forecast_modules_only() -> None:
+    # ADR-0030 D-1 point 3: the registration CLI lives in claims.py and writes through
+    # the store; it reads definitions for the rule set, its bytes and the definition.
+    tree = ast.parse((FORECAST_ROOT / "claims.py").read_text(encoding="utf-8"))
+    app_imports: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            assert all(_is_stdlib(a.name) for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            assert node.level == 0
+            if _top_level(module) == "app":
+                app_imports |= {f"{module}.{a.name}" for a in node.names}
+            else:
+                assert _is_stdlib(module) or module == "__future__", module
+    assert app_imports == {
+        "app.dirdef.definition.DEFINITION_VERSION_PATTERN",
+        "app.dirdef.definition.DirectionDefinition",
+        "app.dirdef.definition.Horizon",
+        "app.dirdef.rules.rules_logic_sha256",
+        "app.forecast.definitions",
+        "app.forecast.store",
+        "app.forecast.canonical.APP_ROOT",
+        "app.forecast.canonical.canonical_timestamp",
+    }
+
+
+def test_claims_writes_only_through_the_store_and_has_a_plain_main_block() -> None:
+    source = (FORECAST_ROOT / "claims.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "register_claim" in calls
+    assert not calls & {"execute", "executemany", "executescript", "connect"}
+    sql_like = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and re.search(r"\b(INSERT|UPDATE|DELETE|REPLACE)\b\s", node.value)
+    ]
+    assert sql_like == []
+    mains = [n for n in tree.body if isinstance(n, ast.If)]
+    assert [ast.unparse(n) for n in mains] == [
+        "if __name__ == '__main__':\n    raise SystemExit(main())"
+    ]
 
 
 # --- outlook: volatility, basket (FL-55, FL-56, FL-78 (e)) ---------------------------------

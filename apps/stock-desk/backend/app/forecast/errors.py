@@ -18,7 +18,9 @@ Attribute sources:
 * ``ValidationSnapshotPartialSetError``, ``GapAuditRunInconsistencyError``,
   ``NoCandidateSessionError``, ``WriteGateClosedError``,
   ``ReplayExecutionRefusedError``, ``ReplayAbortedError`` and the exception class
-  name rule -- ADR-0027 D-1 ``errors.py`` row, N-115 sentence (landed 38572c1).
+  name rule -- ADR-0027 D-1 ``errors.py`` row, N-115 sentence (landed 38572c1);
+  the gate list of ``WriteGateClosedError`` is the ADR-0030 D-6 CG list (D-10);
+* ``SemanticsChanged`` -- ADR-0030 D-5 point 6 (``error_class = SemanticsChanged``).
 
 The threshold violation list (``ThresholdViolation``,
 ``THRESHOLD_VIOLATION_ORDER``) is defined here and nowhere else in ``app/``;
@@ -105,8 +107,9 @@ GAP_AUDIT_RUN_OUTCOMES: Final[tuple[GapAuditRunOutcome, ...]] = ("ok", "partial"
 GapAuditRunRole = Literal["decisive", "basis"]
 GAP_AUDIT_RUN_ROLES: Final[tuple[GapAuditRunRole, ...]] = ("decisive", "basis")
 
-WriteGate = Literal["G-3", "G-4", "dirdef_fields"]
-WRITE_GATE_ORDER: Final[tuple[WriteGate, ...]] = ("G-3", "G-4", "dirdef_fields")
+#: ADR-0030 D-6 write gates (D-10: the ADR-0027 G gates are replaced by CG).
+WriteGate = Literal["CG-1", "CG-2", "CG-3", "CG-4"]
+WRITE_GATE_ORDER: Final[tuple[WriteGate, ...]] = ("CG-1", "CG-2", "CG-3", "CG-4")
 
 ReplayRefusalReason = Literal["schedule_window", "gate_not_passed", "already_committed"]
 REPLAY_REFUSAL_REASONS: Final[tuple[ReplayRefusalReason, ...]] = (
@@ -565,7 +568,7 @@ class NoCandidateSessionError(ForecastFailClosedError):
 
 
 class WriteGateClosedError(ForecastFailClosedError):
-    """The run-time write gate is not open (D-7 point 7, N-86 sub-point)."""
+    """The run-time write gate is not open (ADR-0030 D-6; ADR-0027 D-7 point 7, N-86)."""
 
     failed_gates: tuple[WriteGate, ...]
 
@@ -575,6 +578,33 @@ class WriteGateClosedError(ForecastFailClosedError):
 
     def _fields(self) -> _Fields:
         return (("failed_gates", self.failed_gates),)
+
+
+class SemanticsChanged(ForecastFailClosedError):  # the ADR fixes this class name
+    """The current program does not reproduce the stored records (ADR-0030 D-5 point 6).
+
+    Raised by the recorder's cross-commit check: after ``code_digest`` or
+    ``runtime_json`` changed, at least one stored record of a recording claim
+    recomputed to different bytes. The run ends ``gate_closed`` with this
+    class name as ``error_class`` and writes no record; new semantics take
+    effect only through a new claim. Its attributes are counts only.
+    """
+
+    records_checked: int
+    records_differing: int
+
+    def __init__(self, *, records_checked: int, records_differing: int) -> None:
+        self.records_checked = _int_at_least("records_checked", records_checked, 1)
+        self.records_differing = _int_at_least("records_differing", records_differing, 1)
+        if self.records_differing > self.records_checked:
+            raise ValueError("records_differing cannot exceed records_checked")
+        super().__init__()
+
+    def _fields(self) -> _Fields:
+        return (
+            ("records_checked", self.records_checked),
+            ("records_differing", self.records_differing),
+        )
 
 
 class ReplayExecutionRefusedError(ForecastFailClosedError):

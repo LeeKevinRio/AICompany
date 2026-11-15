@@ -73,6 +73,28 @@ def reachable_app_modules(roots: tuple[str, ...]) -> set[str]:
     return seen
 
 
+def executed_app_modules(roots: tuple[str, ...]) -> set[str]:
+    """The ``app.*`` module files Python runs when it imports ``roots``.
+
+    :func:`reachable_app_modules` plus what an ``import`` statement executes
+    beyond the named module: every parent package's ``__init__.py`` (and what
+    that imports). Imported symbols (``app.x.y.NAME``) are left out, so every
+    member is a module or a package.
+    """
+    seen: set[str] = set()
+    queue = list(roots)
+    while queue:
+        module = queue.pop()
+        path = module_path(module)
+        if module in seen or path is None:
+            continue
+        seen.add(module)
+        parts = module.split(".")
+        queue.extend(".".join(parts[:end]) for end in range(1, len(parts)))
+        queue.extend(imported_modules(path, module) - seen)
+    return seen
+
+
 def offenders(reachable: set[str], forbidden_package: str) -> list[str]:
     """The reachable modules that live inside ``forbidden_package``."""
     return sorted(
