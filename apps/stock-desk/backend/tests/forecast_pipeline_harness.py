@@ -42,14 +42,16 @@ What one run does (D-7 points 2-6):
    :class:`Failure`: a kind and a place, never a label or a count;
 6. renders the output: the two fixed lines of D-7 point 5 first
    (:data:`HEADER`), then the report's own ``records``, ``compare`` (between
-   its fixed banners), ``verify`` and ``status`` sections, so every D-4
-   point 3 / 5 rule of the report holds for the harness output too. "Passed"
-   (D-4 point 3) is read with ``wall_clock`` -- the actual clock unless a test
-   injects one (D-7 point 6).
+   its fixed banners), ``verify`` and the execution part of ``status``
+   (``report.render_execution_status``) sections, so every D-4 point 3 / 5
+   rule of the report holds for the harness output too. The review trigger
+   is left out: no n-hat, no T1 / T2 (ADR-0030 supplement 5 point 5, C5-1).
+   "Passed" (D-4 point 3) is read with ``wall_clock`` -- the actual clock
+   unless a test injects one (D-7 point 6).
 
 :func:`render_summary` is what may leave the machine that ran the harness: the
-pass / fail line, the failure kinds (no count), counts of runs and records
-written, and hashes -- no label, no comparison, no realised value.
+pass / fail line, the failure kinds (no count), runs per outcome and hashes --
+no label, no comparison, no realised value, no n-hat, no record count.
 
 PIT, finality and ``late`` are verified with synthetic fixtures only (D-7
 point 6): :func:`synthetic_series` builds deterministic closes on consecutive
@@ -464,7 +466,7 @@ def run_acceptance(
         *report.render_records(store, now=now),
         *report.render_compare(store, now=now),
         *report.render_verify(report.verify_records(store, _recording(store))),
-        *report.render_status(store, now=now),
+        *report.render_execution_status(store, now=now),
     ]
     result.ledger_sha256 = hashlib.sha256(db_path.read_bytes()).hexdigest()
     return result
@@ -565,22 +567,23 @@ def _check(
 
 
 def render_summary(result: AcceptanceResult) -> list[str]:
-    """The shareable part of a run: pass / fail, execution counts and hashes.
+    """The shareable part of a run: pass / fail, the failure kinds, runs per outcome, hashes.
 
-    No label, no comparison, no realised value; the counts are execution status
-    only (runs per outcome and their ``records_written``; D-4 point 5).
+    No label, no comparison, no realised value, no n-hat and no record count
+    of any kind -- not written, insufficient, checked or compared (ADR-0030
+    supplement 5 point 5, C5-2; C5-5). The only counts are execution status:
+    the window's session count and the runs per ``outcome`` (D-4 point 5).
     """
     outcomes: dict[str, int] = {}
     for run in result.runs:
         outcomes[run.outcome] = outcomes.get(run.outcome, 0) + 1
     runs = "，".join(f"{outcome}={count}" for outcome, count in sorted(outcomes.items()))
-    written = sum(run.records_written for run in result.runs)
     return [
         HEADER[0],
         HEADER[1],
         f"管線驗收 {result.rules}：{'通過' if result.passed else '失敗'}",
         f"視窗定案 session 數：{len(result.window)}",
-        f"執行次數：{runs}；records_written 合計：{written}",
+        f"執行次數：{runs}",
         f"失敗種類：{'，'.join(result.failure_kinds) or '無'}",
         f"暫存帳 sha256：{result.ledger_sha256}",
         f"輸出 sha256：{result.output_sha256}",

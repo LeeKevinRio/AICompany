@@ -11,7 +11,10 @@ by D-4 points 3 and 5); D-5 points 3 and 5; D-8 point 4. Commands, each with
   ``late = 0`` record), the phase-0 grid points and how many have no
   ``late = 0`` record, and per recording claim the D-8 point 4 review trigger:
   D_v, c_1, n-hat with :data:`N_HAT_NOTE`, d_1, T1, T2 (all derived by
-  ``store.py``'s read-only queries). No label, no comparison;
+  ``store.py``'s read-only queries). No label, no comparison. The two parts
+  are :func:`render_execution_status` and :func:`render_review_trigger`; the
+  pipeline acceptance harness prints the first only (ADR-0030 supplement 5
+  point 5: no n-hat, T1 or T2 in its output);
 * ``verify (--all | --claim-id ID)`` -- D-5 point 3: every record of the
   recording claims (``--all``) or of one claim is recomputed from its stored
   snapshot with the rule set and the definition rebuilt from the claim's
@@ -374,7 +377,27 @@ def _yes(value: bool) -> str:
 
 
 def render_status(store: ForecastStore, *, now: datetime) -> list[str]:
-    """``status``: execution status only (module docstring)."""
+    """``status``: execution status only (module docstring).
+
+    :func:`render_execution_status` followed by :func:`render_review_trigger`.
+    """
+    return [
+        *render_execution_status(store, now=now),
+        *render_review_trigger(store, now=now),
+    ]
+
+
+def _recording_claims(store: ForecastStore) -> list[ClaimRow]:
+    recording = store.recording_claims()
+    return [recording[key] for key in sorted(recording)]
+
+
+def render_execution_status(store: ForecastStore, *, now: datetime) -> list[str]:
+    """``status`` without the review trigger: runs per outcome and the F-2 counts.
+
+    No n-hat and no T1 / T2: the pipeline acceptance harness prints only this
+    part (ADR-0030 supplement 5 point 5, C5-1).
+    """
     today = taipei_date(now)
     runs = store.runs()
     counts = {outcome: 0 for outcome in get_args(RunOutcome)}
@@ -388,7 +411,7 @@ def render_status(store: ForecastStore, *, now: datetime) -> list[str]:
         {taipei_date(run.started_at) for run in runs if run.outcome == "inputs_not_ready"}
     )
     window = f2_window(today)
-    recording = [store.recording_claims()[key] for key in sorted(store.recording_claims())]
+    recording = _recording_claims(store)
     digests = store.snapshot_digests()
     latest = (
         {date.fromisoformat(str(bar["session_date"])) for bar in store.snapshot(digests[-1]).bars}
@@ -425,7 +448,14 @@ def render_status(store: ForecastStore, *, now: datetime) -> list[str]:
             f"  {claim.claim_id}：第 0 相位格點 {len(grid.points)} 個，"
             f"其中沒有 late = 0 紀錄 {grid.lost} 個"
         )
-    for claim in recording:
+    return lines
+
+
+def render_review_trigger(store: ForecastStore, *, now: datetime) -> list[str]:
+    """The D-8 point 4 review trigger of each recording claim, n-hat with its fixed note."""
+    today = taipei_date(now)
+    lines: list[str] = []
+    for claim in _recording_claims(store):
         trigger = store.review_trigger(claim.claim_id, today=today)
         d_v = "無" if trigger.d_v is None else trigger.d_v.isoformat()
         d_1 = "無" if trigger.d_1 is None else trigger.d_1.isoformat()

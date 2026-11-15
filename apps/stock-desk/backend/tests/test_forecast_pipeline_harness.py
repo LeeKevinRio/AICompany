@@ -66,7 +66,7 @@ from tests.forecast_pipeline_harness import (
 )
 from tests.import_graph import APP_ROOT
 from tests.outlook_helpers import TAIPEI, definition
-from tests.test_forecast_report import LABEL_WORDS, d4_violations
+from tests.test_forecast_report import LABEL_WORDS, N_HAT_NOTE, d4_violations
 
 #: A fixed "actual" clock for the deterministic runs: Monday 2026-11-16, 09:00 Taipei.
 FIXED_NOW = datetime(2026, 11, 16, 9, tzinfo=TAIPEI)
@@ -464,6 +464,52 @@ def test_the_summary_holds_no_label_and_no_comparison(tmp_path: Path) -> None:
     assert not any(word in text for word in ("實現", "符合", "B1", "B6", "B8", "模型"))
     assert d4_violations(summary, unpassed_hashes=set()) == []
     assert result.ledger_sha256 in text and result.output_sha256 in text
+
+
+def test_the_summary_lists_no_record_count(tmp_path: Path) -> None:
+    # ADR-0030 supplement 5 point 5, C5-2: only the window size and the runs per outcome.
+    result = _run(tmp_path, P1)
+    assert render_summary(result) == [
+        *HEADER,
+        "管線驗收 P-1：通過",
+        f"視窗定案 session 數：{WINDOW_SESSIONS}",
+        f"執行次數：ok={WINDOW_SESSIONS}",
+        "失敗種類：無",
+        f"暫存帳 sha256：{result.ledger_sha256}",
+        f"輸出 sha256：{result.output_sha256}",
+    ]
+    failed = _run(tmp_path / "s", P1, bars=synthetic_series(LAST, 45))
+    assert render_summary(failed)[2:6] == [
+        "管線驗收 P-1：失敗",
+        f"視窗定案 session 數：{WINDOW_SESSIONS}",
+        f"執行次數：ok={WINDOW_SESSIONS}",
+        "失敗種類：vacuous_equality",
+    ]
+
+
+REVIEW_TRIGGER_MARKS = ("n̂", N_HAT_NOTE, "T1=", "T2=", "重審觸發", "c₁=", "d₁=")
+
+
+def test_the_output_holds_no_n_hat_while_report_status_does(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ADR-0030 supplement 5 point 5, C5-1: neither the full output nor the summary.
+    result = _run(tmp_path, P0)
+    for lines in (result.output, render_summary(result)):
+        text = "\n".join(lines)
+        assert not [mark for mark in REVIEW_TRIGGER_MARKS if mark in text]
+    assert any(line.startswith("執行狀態（") for line in result.output)
+    # The report's own status on the same ledger still lists the review trigger.
+    ledger = tmp_path / "work" / harness.LEDGER_NAME
+    code = report.main(["status", "--db", str(ledger)], clock=lambda: FIXED_NOW)
+    status = capsys.readouterr().out
+    assert code == report.EXIT_OK
+    assert all(mark in status for mark in REVIEW_TRIGGER_MARKS)
+    store = ForecastStore(ledger)
+    assert report.render_status(store, now=FIXED_NOW) == [
+        *report.render_execution_status(store, now=FIXED_NOW),
+        *report.render_review_trigger(store, now=FIXED_NOW),
+    ]
 
 
 # --- isolation (D-7 points 2-3, K-11) -----------------------------------------------------------
