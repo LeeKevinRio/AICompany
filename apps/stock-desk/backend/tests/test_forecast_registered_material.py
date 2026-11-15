@@ -9,6 +9,7 @@ banned phrase scan. Synthetic fixtures only.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 
 import pytest
@@ -24,6 +25,7 @@ from app.forecast.definitions import (
     registered_ruleset,
 )
 from tests.dirdef_helpers import DIRDEF_V1_0_G7
+from tests.import_graph import APP_ROOT
 from tests.outlook_helpers import definition, rule_bytes, ruleset
 
 
@@ -97,3 +99,65 @@ def test_nothing_registered_is_cached() -> None:
     text, full, d_logic = _definition_json()
     registered_definition(text, full_sha256=full, logic_sha256=d_logic)
     assert _caches() == before
+
+
+# --- K-11 (qa batch 5 follow-up 5): only report.py takes caller bytes into a rule set ---------
+
+#: The two ``app/`` functions that accept rule bytes and a definition from the caller.
+CALLER_MATERIAL = frozenset({"registered_ruleset", "registered_definition"})
+
+
+def _material_uses(source: str) -> list[str]:
+    """Every reference to :data:`CALLER_MATERIAL` in ``source``, except their own ``def``.
+
+    A call, an attribute, a bare name (an alias or a callback), an import and a
+    string argument (``getattr``) all count, so an indirect use is caught too.
+    """
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Name) and node.id in CALLER_MATERIAL:
+            found.append(node.id)
+        elif isinstance(node, ast.Attribute) and node.attr in CALLER_MATERIAL:
+            found.append(ast.unparse(node))
+        elif isinstance(node, ast.ImportFrom):
+            found += [alias.name for alias in node.names if alias.name in CALLER_MATERIAL]
+        elif isinstance(node, ast.Call):
+            found += [
+                str(arg.value)
+                for arg in node.args
+                if isinstance(arg, ast.Constant) and arg.value in CALLER_MATERIAL
+            ]
+    return found
+
+
+def test_k11_only_the_report_uses_the_caller_material_functions() -> None:
+    users = {
+        path.relative_to(APP_ROOT).as_posix()
+        for path in sorted(APP_ROOT.rglob("*.py"))
+        if _material_uses(path.read_text(encoding="utf-8"))
+    }
+    assert users == {"forecast/report.py"}
+    # definitions.py defines them and does not use them itself.
+    source = (APP_ROOT / "forecast" / "definitions.py").read_text(encoding="utf-8")
+    defined = {n.name for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)}
+    assert CALLER_MATERIAL <= defined and _material_uses(source) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "definitions.registered_ruleset(b, rules_sha256=s, logic_sha256=l)\n",
+        "from app.forecast.definitions import registered_definition\n",
+        "from app.forecast.definitions import registered_ruleset as load\n",
+        "f = definitions.registered_definition\n",
+        "f = getattr(definitions, 'registered_ruleset')\n",
+        "registered_ruleset(b, rules_sha256=s, logic_sha256=l)\n",
+    ],
+)
+def test_the_caller_material_scan_has_teeth(source: str) -> None:
+    assert _material_uses(source) != []
+
+
+def test_the_caller_material_scan_ignores_docstrings_and_other_names() -> None:
+    source = '"""registered_ruleset is mentioned here."""\ndef registered_rulesets():\n    pass\n'
+    assert _material_uses(source) == []
