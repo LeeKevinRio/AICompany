@@ -9,14 +9,19 @@
 * ``N_MIN``, ``K_c`` and alpha* each come from one function (G7 "不設欄位、由程式導出");
 * nothing is registered: both published registries stay empty;
 * the two user-facing strings (``description``, ``MARKET_PRICE_INDEX_DEVIATION``)
-  hold no banned phrase after NFKC and whitespace removal (freeze pack 4.3).
+  hold no banned phrase after NFKC and whitespace removal (freeze pack 4.3);
+* TA SP-A ruling (2026-11-15): ``name`` stays inside ``rules_logic_sha256``, so an
+  edit of a rule's ``name`` alone changes that hash.
 """
 
 from __future__ import annotations
 
+import copy
 import unicodedata
+from pathlib import Path
 
 import pytest
+import yaml
 
 from app.advice.loader import BANNED_PHRASES
 from app.dirdef.definition import (
@@ -27,8 +32,16 @@ from app.dirdef.definition import (
     n_min,
 )
 from app.dirdef.registry import PUBLISHED_DIRECTION_DEFINITIONS, PUBLISHED_RULESETS
-from app.dirdef.rules import RULE_TEXT_FIELDS
+from app.dirdef.rules import (
+    BANNED_PHRASES_CONTEXT_KEY,
+    RULE_TEXT_FIELDS,
+    OutlookRuleSet,
+    rules_logic_sha256,
+)
 from tests.dirdef_helpers import DIRDEF_V1_0_G7, G7_NON_LOGIC_ROWS, dirdef_v1_0
+
+RULES_DIR = Path(__file__).resolve().parent.parent / "app" / "outlook" / "rules"
+CONTEXT = {BANNED_PHRASES_CONTEXT_KEY: BANNED_PHRASES}
 
 
 def _squeezed(text: str) -> str:
@@ -91,8 +104,24 @@ def test_the_two_user_facing_strings_hold_no_banned_phrase() -> None:
         assert hits == [], name
 
 
-def test_rule_text_fields_are_unchanged_pending_the_name_decision() -> None:
-    # TA G5 accepted "name into RULE_TEXT_FIELDS"; freeze pack 4.3 (round 2) keeps
-    # name inside rules_logic_sha256 and leaves the choice to the validation layer
-    # ADR. The two disagree, so this batch changes nothing (reported as a stop point).
+def test_rule_text_fields_leave_name_inside_the_logic_hash() -> None:
+    # TA SP-A ruling 2026-11-15: ``name`` stays inside rules_logic_sha256 (the
+    # stricter, fail-closed side); RULE_TEXT_FIELDS does not hold it.
     assert frozenset({"explanation", "counterargument"}) == RULE_TEXT_FIELDS
+    assert "name" not in RULE_TEXT_FIELDS
+
+
+@pytest.mark.parametrize("horizon", [3, 5])
+def test_changing_only_a_rule_name_changes_rules_logic_sha256(horizon: int) -> None:
+    # TA SP-A qa check: an edit of ``name`` alone moves the logic hash, while an
+    # edit of a RULE_TEXT_FIELDS value alone does not.
+    data = (RULES_DIR / f"h{horizon}.yaml").read_bytes()
+    raw = yaml.safe_load(data)
+    original = OutlookRuleSet.model_validate(raw, context=CONTEXT)
+    renamed = copy.deepcopy(raw)
+    renamed["rules"][0]["name"] = renamed["rules"][0]["name"] + " (renamed)"
+    reworded = copy.deepcopy(raw)
+    reworded["rules"][0]["explanation"] = reworded["rules"][0]["explanation"] + " (reworded)"
+    logic = rules_logic_sha256(original)
+    assert rules_logic_sha256(OutlookRuleSet.model_validate(renamed, context=CONTEXT)) != logic
+    assert rules_logic_sha256(OutlookRuleSet.model_validate(reworded, context=CONTEXT)) == logic

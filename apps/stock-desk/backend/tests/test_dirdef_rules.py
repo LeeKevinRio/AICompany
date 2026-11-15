@@ -395,7 +395,9 @@ def test_the_deprecated_copy_cannot_swap_in_unscanned_rules(
 
 
 def test_the_production_field_list_is_the_frozen_g3_set() -> None:
-    # Freeze pack G3: nine fields, all derived from its section 2.3 table.
+    # Freeze pack section 3 (G3): nine fields, all derived from its section 2.3
+    # table. TA 2026-11-15: pinned as equal to that set (not a superset of it).
+    assert len(OUTLOOK_RULE_FIELDS) == 9
     assert OUTLOOK_RULE_FIELDS == frozenset(
         {
             "close",

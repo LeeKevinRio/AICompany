@@ -23,10 +23,13 @@ import ast
 import inspect
 import re
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
-from app.outlook.engine import compute_outlook
+from app.advice.engine import COMPARISON_OPS
+from app.dirdef.rules import ComparisonOp
+from app.outlook.engine import _OPS, PIT_ITEM, compute_outlook
 from app.outlook.inputs import capture_market_snapshot
 from tests.import_graph import APP_ROOT, offenders, reachable_app_modules
 
@@ -254,6 +257,54 @@ def test_app_has_no_second_expression_parser() -> None:
 )
 def test_the_parser_scan_has_teeth(probe: str) -> None:
     assert PARSER_PATTERN.search(probe)
+
+
+def _comparison_table_keys(source: str, name: str) -> set[str]:
+    """The string keys of the module-level dict literal bound to ``name``."""
+    for node in ast.parse(source).body:
+        target = node.target if isinstance(node, ast.AnnAssign) else None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        if isinstance(target, ast.Name) and target.id == name:
+            value = node.value if isinstance(node, ast.Assign | ast.AnnAssign) else None
+            assert isinstance(value, ast.Dict)
+            return {key.value for key in value.keys if isinstance(key, ast.Constant)}
+    raise AssertionError(f"{name} is not bound at module level")
+
+
+def test_the_outlook_and_advice_comparison_tables_have_one_key_set() -> None:
+    # qa medium (2026-11-15): K-2 forbids outlook importing app.advice, so the two
+    # operator tables are separate; their keys must stay the same set, and equal
+    # to the rule model's ComparisonOp literal.
+    outlook = _comparison_table_keys((OUTLOOK_ROOT / "engine.py").read_text("utf-8"), "_OPS")
+    advice = _comparison_table_keys(
+        (APP_ROOT / "advice" / "engine.py").read_text("utf-8"), "COMPARISON_OPS"
+    )
+    assert outlook == advice == set(_OPS) == set(COMPARISON_OPS) == set(get_args(ComparisonOp))
+    assert len(outlook) == 8
+
+
+def test_the_comparison_table_scan_has_teeth() -> None:
+    assert _comparison_table_keys('T = {"gt": f, "lt": g}\n', "T") == {"gt", "lt"}
+    with pytest.raises(AssertionError):
+        _comparison_table_keys("U = 1\n", "T")
+
+
+def test_pit_item_is_defined_once_and_names_the_ledger_column() -> None:
+    # ADR-0030 supplement 2 point 4; TA 2026-11-15 qa check.
+    assert PIT_ITEM == "inputs_max_fetched_at"
+    holders = {
+        path
+        for path, source in _sources(APP_ROOT).items()
+        if re.search(r"^\s*PIT_ITEM\b[^=\n]*=", source, re.M)
+    }
+    assert holders == {"outlook/engine.py"}
+    literal = {
+        path
+        for path, source in _sources(APP_ROOT / "outlook").items()
+        if '"inputs_max_fetched_at"' in source
+    }
+    assert literal == {"outlook/engine.py"}
 
 
 def test_holds_is_defined_once() -> None:

@@ -94,9 +94,8 @@ RangeBasis = Literal["range_evidence", "conflicting_evidence"]
 E_BARS_SHORT: Final = "E-BARS-SHORT"
 E_PRICE_UNUSABLE: Final = "E-PRICE-UNUSABLE"
 E_PIT_UNVERIFIED: Final = "E-PIT-UNVERIFIED"
-#: ``item`` of the ``E-PIT-UNVERIFIED`` missing entry. The freeze pack leaves
-#: the name to tech-architect (FX-F5, "item 由 TA 定"); this is a provisional
-#: name pending that ruling.
+#: ``item`` of the ``E-PIT-UNVERIFIED`` missing entry (freeze pack FX-F5 left the
+#: name to tech-architect; ADR-0030 supplement 2 point 4 fixes it, defined once).
 PIT_ITEM: Final = "inputs_max_fetched_at"
 
 #: Feature window lengths (freeze pack 2.3), keyed by field.
