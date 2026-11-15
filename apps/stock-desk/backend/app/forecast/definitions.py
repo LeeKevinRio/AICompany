@@ -2,6 +2,10 @@
 
 ``get_definition(definition_version)`` and ``get_ruleset(rules_version)``
 return the registered object or raise; there is no default and no fallback.
+``get_ruleset_entry(rules_version)`` returns the registry entry (horizon and
+``rules_sha256``) of a version ``get_ruleset`` accepts, for the recorder's CG-2
+run-time check (ADR-0030 D-6: a recording claim's hashes equal what this module
+returns).
 The registries are empty while the G-3 freeze is pending, so in production both
 always raise. ``claims.py``, the recorder, on-demand, the D-14 gate, the replay
 runner and the store's write validation get their definitions and rule sets
@@ -44,7 +48,11 @@ from app.dirdef.definition import (
     definition_logic_sha256,
     definition_sha256,
 )
-from app.dirdef.registry import PUBLISHED_DIRECTION_DEFINITIONS, PUBLISHED_RULESETS
+from app.dirdef.registry import (
+    PUBLISHED_DIRECTION_DEFINITIONS,
+    PUBLISHED_RULESETS,
+    PublishedRuleset,
+)
 from app.dirdef.rules import OutlookRuleSet, RuleSetLoadError, load_ruleset
 from app.dirdef.strings import string_values
 
@@ -140,3 +148,12 @@ def get_ruleset(rules_version: str) -> OutlookRuleSet:
         raise PublishedVersionRejectedError(f"rule set rejected: {exc}") from exc
     _RULESET_CACHE[rules_version] = ruleset
     return ruleset
+
+
+def get_ruleset_entry(rules_version: str) -> PublishedRuleset:
+    """The registry entry of ``rules_version`` once :func:`get_ruleset` accepts it; else raises."""
+    get_ruleset(rules_version)
+    entry = PUBLISHED_RULESETS.get(rules_version)
+    if entry is None:
+        raise UnpublishedVersionError("rules_version is not published")
+    return entry

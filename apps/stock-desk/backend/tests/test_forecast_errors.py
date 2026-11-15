@@ -29,6 +29,7 @@ from app.forecast.errors import (
     ReplayAbortedError,
     ReplayExecutionRefusedError,
     ReplayPitProofViolationError,
+    SemanticsChanged,
     SpanRegistrationGap,
     ThresholdViolation,
     UnregisteredUnobservedWeekdayError,
@@ -521,9 +522,14 @@ def test_replay_pit_rejects_bad_violations(violations: object) -> None:
         ),
         pytest.param(lambda: NoCandidateSessionError(), "", id="no-candidate-session"),
         pytest.param(
-            lambda: WriteGateClosedError(failed_gates=("G-3", "dirdef_fields")),
-            "failed_gates=G-3,dirdef_fields",
+            lambda: WriteGateClosedError(failed_gates=("CG-2", "CG-4")),
+            "failed_gates=CG-2,CG-4",
             id="write-gate-closed",
+        ),
+        pytest.param(
+            lambda: SemanticsChanged(records_checked=4, records_differing=1),
+            "records_checked=4 records_differing=1",
+            id="semantics-changed",
         ),
         pytest.param(
             lambda: ReplayExecutionRefusedError(reason="already_committed"),
@@ -584,9 +590,21 @@ def test_n115_exceptions_build_with_the_fixed_format(build: Any, expected: str) 
             id="run-id-zero",
         ),
         pytest.param(lambda: WriteGateClosedError(failed_gates=()), id="gates-empty"),
-        pytest.param(lambda: WriteGateClosedError(failed_gates=("G-4", "G-4")), id="gates-repeat"),
-        pytest.param(lambda: WriteGateClosedError(failed_gates=("G-4", "G-3")), id="gates-order"),
-        pytest.param(lambda: WriteGateClosedError(failed_gates=_any(("G-1",))), id="gates-outside"),
+        pytest.param(
+            lambda: WriteGateClosedError(failed_gates=("CG-2", "CG-2")), id="gates-repeat"
+        ),
+        pytest.param(lambda: WriteGateClosedError(failed_gates=("CG-2", "CG-1")), id="gates-order"),
+        pytest.param(lambda: WriteGateClosedError(failed_gates=_any(("G-3",))), id="gates-outside"),
+        pytest.param(
+            lambda: SemanticsChanged(records_checked=0, records_differing=0), id="semantics-zero"
+        ),
+        pytest.param(
+            lambda: SemanticsChanged(records_checked=1, records_differing=2), id="semantics-more"
+        ),
+        pytest.param(
+            lambda: SemanticsChanged(records_checked=_any(True), records_differing=1),
+            id="semantics-bool",
+        ),
         pytest.param(lambda: ReplayExecutionRefusedError(reason=_any("busy")), id="reason-outside"),
         pytest.param(
             lambda: ReplayAbortedError(
@@ -720,6 +738,7 @@ def test_every_fail_closed_type_is_listed_here() -> None:
         "GapAuditRunInconsistencyError",
         "NoCandidateSessionError",
         "WriteGateClosedError",
+        "SemanticsChanged",
         "ReplayExecutionRefusedError",
         "ReplayAbortedError",
     }
