@@ -547,14 +547,23 @@ def test_s12a_the_four_data_statuses_give_the_same_record_fields(
     assert len(set(seen.values())) == 1
 
 
-def _status_branches(source: str) -> list[str]:
+#: ADR-0030 supplement 4 point 1 (a): the one exempt place -- this module, this class.
+MISSING_ITEM_MODULE = "outlook/missing.py"
+MISSING_ITEM_CLASS = "MissingItem"
+
+
+def _status_branches(source: str, module: str) -> list[str]:
     """Branch conditions that read ``source_status`` or an answer's ``status``.
 
-    ``MissingItem``'s own ``self.source_status`` (the D-13 missing-item field,
-    ``fetch_failed`` / ``not_yet_published``, not the snapshot's DataStatus) is
-    its validator's invariant and is not counted.
+    ``module`` is the scanned file relative to ``app/``. Only ``MissingItem``'s
+    own ``self.source_status`` (the D-13 missing-item field, ``fetch_failed`` /
+    ``not_yet_published``, not the snapshot's DataStatus) is exempt, and only in
+    ``app/outlook/missing.py`` (supplement 4 point 1 (a): the module and the
+    class are both matched); the same attribute in any other class, or in a
+    class of that name in any other module, is counted.
     """
     found: list[str] = []
+    exempt_module = module == MISSING_ITEM_MODULE
 
     def reads_status(expr: ast.AST, owner: str | None) -> bool:
         for node in ast.walk(expr):
@@ -562,7 +571,8 @@ def _status_branches(source: str) -> list[str]:
                 return True
             if isinstance(node, ast.Attribute) and node.attr in {"source_status", "status"}:
                 own = (
-                    owner == "MissingItem"
+                    exempt_module
+                    and owner == MISSING_ITEM_CLASS
                     and isinstance(node.value, ast.Name)
                     and node.value.id == "self"
                     and node.attr == "source_status"
@@ -598,9 +608,23 @@ def test_s12a_source_status_is_no_branch_condition_in_the_recorder_or_the_outloo
     violations = {
         path.relative_to(APP_ROOT).as_posix(): found
         for path in paths
-        if (found := _status_branches(path.read_text(encoding="utf-8")))
+        if (
+            found := _status_branches(
+                path.read_text(encoding="utf-8"), path.relative_to(APP_ROOT).as_posix()
+            )
+        )
     }
     assert violations == {}
+
+
+def test_s12a_the_scan_covers_the_missing_item_module() -> None:
+    # The exempt file is inside the scanned set, so the exemption is the only reason it passes.
+    paths = {p.relative_to(APP_ROOT).as_posix() for p in (APP_ROOT / "outlook").rglob("*.py")}
+    assert MISSING_ITEM_MODULE in paths
+    source = (APP_ROOT / MISSING_ITEM_MODULE).read_text(encoding="utf-8")
+    assert "self.source_status" in source
+    assert _status_branches(source, MISSING_ITEM_MODULE) == []
+    assert _status_branches(source, "outlook/engine.py") != []
 
 
 @pytest.mark.parametrize(
@@ -618,19 +642,37 @@ def test_s12a_source_status_is_no_branch_condition_in_the_recorder_or_the_outloo
         "class Other:\n    def f(self):\n        if self.source_status:\n            pass\n",
     ],
 )
-def test_the_status_branch_scan_has_teeth(source: str) -> None:
-    assert _status_branches(source) != []
+@pytest.mark.parametrize("module", [MISSING_ITEM_MODULE, "forecast/recorder.py"])
+def test_the_status_branch_scan_has_teeth(source: str, module: str) -> None:
+    assert _status_branches(source, module) != []
+
+
+_OWN_STATUS = (
+    "class MissingItem:\n    def f(self):\n        if self.source_status is None:\n"
+    "            pass\n"
+)
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["outlook/engine.py", "outlook/inputs.py", "forecast/recorder.py", "outlook/missing_x.py"],
+)
+def test_the_missing_item_exemption_does_not_hold_in_another_module(module: str) -> None:
+    # Supplement 4 point 1 (a): a class named MissingItem elsewhere is not exempt.
+    assert _status_branches(_OWN_STATUS, module) != []
+
+
+def test_the_missing_item_exemption_does_not_hold_for_another_class_in_its_module() -> None:
+    other = _OWN_STATUS.replace("class MissingItem:", "class MissingItemView:")
+    assert _status_branches(other, MISSING_ITEM_MODULE) != []
+    holder = "class Holder:\n    def f(self):\n        if self.source_status:\n            pass\n"
+    assert _status_branches(holder + _OWN_STATUS, MISSING_ITEM_MODULE) != []
 
 
 def test_the_status_branch_scan_lets_recording_and_the_missing_item_through() -> None:
-    assert _status_branches("row = {'source_status': answer.status.value}\n") == []
-    assert (
-        _status_branches(
-            "class MissingItem:\n    def f(self):\n        if self.source_status is None:\n"
-            "            pass\n"
-        )
-        == []
-    )
+    recording = "row = {'source_status': answer.status.value}\n"
+    assert _status_branches(recording, "forecast/recorder.py") == []
+    assert _status_branches(_OWN_STATUS, MISSING_ITEM_MODULE) == []
 
 
 # --- supplement 2 point 2 (b): LA-G2-5 with its clock premise ----------------------------------
