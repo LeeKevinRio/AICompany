@@ -3,6 +3,7 @@
 - 狀態：accepted（CEO 2026-10-26 核可，含 C-M1～C-M4 與 C-M4、G-5→CG-3 的明確同意；決策包二補遺 #64～#67）
 - 補充紀錄：2026-11-14 append 補充一（SP-1：5 張表加 BEFORE INSERT 拒絕重複鍵 trigger；tech-architect 裁示，加嚴，不改產品行為與字面，CEO 可推翻；來源 `work/reviews/2026-11-14-G1位置與SP1裁示-tech-architect.md`）。
 - 補充紀錄：2026-11-15 append 補充二（SP-B 輸入注入、SP-C 未定案 bar 分流、快照時間欄與 PIT 缺項名；tech-architect 裁示，釐清，不放寬，不改使用者面字面，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第二批交件-dev-lead.md`）。
+- 補充紀錄：2026-11-15 append 補充三（跨 commit 比對基準、執行環境取值時點、K-2 禁詞來源、無定案 bar 與 source_status；tech-architect 裁示，收緊與釐清，不改使用者面字面與已登記雜湊，CEO 可推翻；來源 `work/reviews/2026-11-15-NM5第三批recorder交件-dev-lead.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -390,3 +391,23 @@
 4. **PIT 缺項名**：`E-PIT-UNVERIFIED` 的 `item` 為 `inputs_max_fetched_at`，只定義一次。
 
 - **S-4a（逐條可檢查）**：可達性測試不變且全綠；正式路徑上 recorder 進入點只由 `app/scheduler.py` 呼叫，而且傳入的物件就是 `app.services.index.load_market_benchmark`（AST 加 `is` 斷言）；(a) 情形重抓一次後記 `inputs_not_ready`、不寫紀錄；(b) 情形的 `content_hash` 與取數端不回傳該 bar 時相同；快照中每根 bar 都是 `fetched_at == as_of`（測試）。
+
+---
+
+## 補充三：跨 commit 比對基準、執行環境取值時點、K-2 禁詞來源、無定案 bar 與 source_status（2026-11-15）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-15-NM5第三批recorder交件-dev-lead.md` 下一步第 1～4 點（已實證：`app/advice/loader.py:44` → `app/advice/context.py:29` → `app/advice/limits.py:54` → `app.api.kelly_wording`）。
+- 性質：收緊 D-5 第 6 點與 K-2；釐清 D-2 第 1～2 點與補充二第 2 點。補充本文，不改本文；不改任何產品行為、使用者面字面、規則檔與定義物件的雜湊。取代 ADR-0027 N113-1「代價」段所述的可達狀態。CEO 可推翻。
+
+1. **比對基準**：D-5 第 6 點的「前一次執行」，讀為以下兩者：(i) run_id 小於本次的最近一次執行；(ii) 最後一次通過執行，即 outcome ∈ {`ok`, `no_new_session`, `inputs_not_ready`} 的執行。本次的 `code_digest` 或 `runtime_json` 與 (i)、(ii) 任一不同，就執行 D-5 第 6 點。沒有通過執行時，視為不同。`gate_closed`、`error` 與沒有 end 列的執行，都不是通過執行。
+2. **取值時點**：`code_digest`、`runtime_json`、`code_commit` 在 recorder 模組 import 時取值一次，同一程序內的各次執行都沿用這組值。D-2 第 1 點 `code_digest` 涵蓋範圍內的原始檔，不得在函式內 import，也不得使用 `importlib` 或 `__import__`。更換程式或依賴之後，須重啟排程程序才會生效；重啟前寫入的紀錄出自舊程式，記錄的也是舊值，出處一致。殘留風險（知悉，不處理）：import 讀檔與取值之間的極短窗口。
+3. **K-2 禁詞來源**：K-2 依可達性判定，`app.forecast.*`、`app.outlook.*` 不得可達 `app.api` 及其子模組。`BANNED_PHRASES` 的唯一定義移到 `app/advice/banned_phrases.py`，該模組不 import 任何模組。`app/advice/loader.py` 以 `from app.advice.banned_phrases import BANNED_PHRASES as BANNED_PHRASES` 再匯出，所以 ADR-0004、ADR-0022、ADR-0025 所稱的 `loader.BANNED_PHRASES` 仍指同一個物件。`app/forecast/definitions.py` 改由 `app.advice.banned_phrases` import。禁詞的值與順序不變；`app/advice/__init__.py` 不含 import。從 `app.forecast`、`app.outlook` 可達的 `app.advice` 模組，恰好是 `app.advice` 與 `app.advice.banned_phrases`。
+4. **沒有定案 bar**：補充二第 2 點 (a) 先適用。處理之後，沒有任何定案 bar，也沒有屬 (a) 的 bar 時（含取數端沒有回傳任何 bar），記 `inputs_not_ready`，`candidate_t` 為 null，不寫紀錄，並計入 F-2 的 `inputs_not_ready` 日數。
+5. **`source_status`**：照實記錄於 `forecast_input_series`，不設拒收規則。PIT 與定案的保證來自 D-3 第 2 點的逐根判定與 store 時鐘。`source_status` 不得作為 recorder 或 `app/outlook/**` 的分支條件，也不影響 T、`label`、`band_def`、`baseline_predictions_json`、`missing_json`。ADR-0005 下大盤來源恆為 backup，所以不得以「非 backup」或「非 fresh」作為拒收條件；要設拒收規則，須另修本 ADR。
+
+- **S-12a（逐條可檢查）**：
+  - 依序執行 A ok → B gate_closed → B，第三次仍記 `gate_closed`；之後改回 A，會重算並通過；沒有通過執行時會重算（測試）。
+  - 第 2 點所列範圍內，函式內沒有 import，也沒有 `importlib`／`__import__`（AST）；程序未重啟時，磁碟變更不改變記錄的 `code_digest`（測試）。
+  - 可達集合與 `app.api*` 沒有交集，可達的 advice 模組恰好如第 3 點（import graph）；`loader.BANNED_PHRASES is banned_phrases.BANNED_PHRASES`；h3、h5 的 `rules_sha256`、`rules_logic_sha256` 與 `definition_sha256` 不變（測試）。
+  - 只有 (a) bar 時，`candidate_t` 等於最大的 S；沒有任何 bar 時，`candidate_t` 為 null（測試）。
+  - 同一組 bars 分別配上 4 種 `DataStatus`，第 5 點所列欄位都逐位相同（測試）。
