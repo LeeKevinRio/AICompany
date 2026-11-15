@@ -24,9 +24,11 @@
    ``dropped_rows_json``, and T is unchanged (LA-G2-5);
 5. when every recording claim already has a record for T: ``no_new_session``
    (D-2 point 2), ``candidate_t`` filled, nothing written;
-6. capture the snapshot (``put_input_series``), compute the model and B1, B2,
-   B6, B8 from that one snapshot (``app.outlook.engine.compute_outlook``), and
-   write each record in one store transaction (D-4 point 1).
+6. capture the snapshot, compute the model and B1, B2, B6, B8 from that one
+   snapshot (``app.outlook.engine.compute_outlook``; D-4 point 1), and write
+   the snapshot and every record in one store transaction
+   (``write_run_records``; supplement 3 (revised) point 7): any failure rolls
+   all of them back and the run ends with ``records_written = 0``.
 
 Every run that got its ``forecast_run`` row ends with one ``forecast_run_end``
 row: ``ok``, ``no_new_session``, ``inputs_not_ready``, ``gate_closed`` (CG-2:
@@ -99,8 +101,10 @@ from app.forecast.store import (
     ClaimRow,
     ForecastStore,
     Label,
+    RecordInput,
     RunOutcome,
     RunRow,
+    SnapshotInput,
     StoredSnapshot,
 )
 from app.outlook.engine import OutlookOutcome, compute_outlook, n_snapshot
@@ -364,26 +368,27 @@ def _run[R](
         )
         for rc in pending
     ]
-    series = store.put_input_series(
-        bars=[bar.as_mapping() for bar in snapshot.bars],
-        source=snapshot.source,
-        source_status=snapshot.source_status,
-        staleness_minutes=snapshot.staleness_minutes,
-        reason=snapshot.reason,
-        dropped_rows=[
-            {"session_date": row.session_date.isoformat(), "reason": row.reason}
-            for row in captured.dropped
+    # Supplement 3 (revised) point 7: the snapshot and every record in one transaction.
+    _, written = store.write_run_records(
+        run_id=run_id,
+        snapshot=SnapshotInput(
+            bars=[bar.as_mapping() for bar in snapshot.bars],
+            source=snapshot.source,
+            source_status=snapshot.source_status,
+            staleness_minutes=snapshot.staleness_minutes,
+            reason=snapshot.reason,
+            dropped_rows=[
+                {"session_date": row.session_date.isoformat(), "reason": row.reason}
+                for row in captured.dropped
+            ],
+            raw_timestamp_available=snapshot.raw_timestamp_available,
+        ),
+        records=[
+            RecordInput(claim_id=rc.claim.claim_id, **_record_content(outcome))
+            for rc, outcome in outcomes
         ],
-        raw_timestamp_available=snapshot.raw_timestamp_available,
     )
-    for rc, outcome in outcomes:
-        store.write_record(
-            run_id=run_id,
-            claim_id=rc.claim.claim_id,
-            **_record_content(outcome),
-            input_series_sha256=series,
-        )
-        progress.records_written += 1
+    progress.records_written = len(written)
     return _Stop("ok")
 
 

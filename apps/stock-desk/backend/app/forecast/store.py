@@ -36,6 +36,13 @@ Record write validation (D-2 point 7; D-3 points 1, 2, 4, 6):
   must equal the claim's -- else ``LabeledThresholdSnapshotIncompleteError``;
 * all four baselines B1, B2, B6, B8 are present (S-8).
 
+A run's snapshot and records (ADR-0030 supplement 3 (revised) point 7):
+``write_run_records`` validates and inserts the snapshot and every record of
+the run in one transaction, so a failure of any one of them leaves none of
+them; it is the recorder's only write of a run's ledger rows (AST).
+``put_input_series`` and ``write_record`` are the one-row forms of the same
+validation and INSERT.
+
 Connections are opened per operation with ``foreign_keys`` and
 ``recursive_triggers`` on. The ``{table}_no_replace`` BEFORE INSERT triggers
 refuse an ``INSERT OR REPLACE`` on any connection (ADR-0030 supplement 1);
@@ -220,6 +227,80 @@ class _RecordContent:
     base_close: str
     baselines_json: str
     input_series_sha256: str
+
+
+@dataclass(frozen=True)
+class SnapshotInput:
+    """The arguments of :meth:`ForecastStore.put_input_series`, for a batch write."""
+
+    bars: Sequence[Mapping[str, object]]
+    source: str
+    source_status: str
+    staleness_minutes: int | None
+    reason: str | None
+    dropped_rows: Sequence[Mapping[str, object]] | None
+    raw_timestamp_available: bool
+
+
+@dataclass(frozen=True)
+class RecordInput:
+    """The content arguments of :meth:`ForecastStore.write_record`, for a batch write.
+
+    No ``run_id`` and no ``input_series_sha256``: the batch supplies both.
+    """
+
+    claim_id: str
+    data_as_of: date
+    label: Label
+    range_basis: str | None
+    missing: Sequence[MissingItem]
+    evidence: Mapping[str, object]
+    band_def: Mapping[str, object]
+    base_close: Decimal | int | str
+    baseline_predictions: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class _SeriesRow:
+    """A validated snapshot, ready for its INSERT."""
+
+    digest: str
+    bars_json: str
+    source: str
+    source_status: str
+    staleness_minutes: int | None
+    reason: str | None
+    dropped_json: str | None
+    raw_timestamp_available: bool
+
+
+def _series_row(snapshot: SnapshotInput) -> _SeriesRow:
+    """Validate and normalise a snapshot (no ledger read)."""
+    if not isinstance(snapshot, SnapshotInput):
+        raise ForecastStoreError("snapshot must be a SnapshotInput")
+    text = bars_json(snapshot.bars)
+    digest = content_sha256(snapshot.bars)
+    _require_text("source", snapshot.source)
+    _require_text("source_status", snapshot.source_status)
+    if snapshot.reason is not None:
+        _require_text("reason", snapshot.reason)
+    staleness = snapshot.staleness_minutes
+    if staleness is not None and (isinstance(staleness, bool) or not isinstance(staleness, int)):
+        raise ForecastStoreError("staleness_minutes must be an int or None")
+    if not isinstance(snapshot.raw_timestamp_available, bool):
+        raise ForecastStoreError("raw_timestamp_available must be a bool")
+    dropped_rows = snapshot.dropped_rows
+    dropped = None if dropped_rows is None else _json_text("dropped_rows", list(dropped_rows))
+    return _SeriesRow(
+        digest=digest,
+        bars_json=text,
+        source=snapshot.source,
+        source_status=snapshot.source_status,
+        staleness_minutes=staleness,
+        reason=snapshot.reason,
+        dropped_json=dropped,
+        raw_timestamp_available=snapshot.raw_timestamp_available,
+    )
 
 
 _CLAIM_COLUMNS: Final = (
@@ -410,43 +491,87 @@ class ForecastStore:
         A snapshot whose content is already stored is not written again (the
         existing row, with its first ``captured_at``, stays as it is).
         """
-        text = bars_json(bars)
-        digest = content_sha256(bars)
-        _require_text("source", source)
-        _require_text("source_status", source_status)
-        if reason is not None:
-            _require_text("reason", reason)
-        if staleness_minutes is not None and (
-            isinstance(staleness_minutes, bool) or not isinstance(staleness_minutes, int)
-        ):
-            raise ForecastStoreError("staleness_minutes must be an int or None")
-        if not isinstance(raw_timestamp_available, bool):
-            raise ForecastStoreError("raw_timestamp_available must be a bool")
-        dropped = None if dropped_rows is None else _json_text("dropped_rows", list(dropped_rows))
+        prepared = _series_row(
+            SnapshotInput(
+                bars=bars,
+                source=source,
+                source_status=source_status,
+                staleness_minutes=staleness_minutes,
+                reason=reason,
+                dropped_rows=dropped_rows,
+                raw_timestamp_available=raw_timestamp_available,
+            )
+        )
         with self._write() as conn:
-            exists = conn.execute(
-                "SELECT 1 FROM forecast_input_series WHERE content_sha256 = ?", (digest,)
-            ).fetchone()
-            if exists is None:
-                conn.execute(
-                    "INSERT INTO forecast_input_series (content_sha256, series_kind, source,"
-                    " source_status, staleness_minutes, reason, dropped_rows_json,"
-                    " raw_timestamp_available, bars_json, captured_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        digest,
-                        SERIES_KIND,
-                        source,
-                        source_status,
-                        staleness_minutes,
-                        reason,
-                        dropped,
-                        int(raw_timestamp_available),
-                        text,
-                        canonical_timestamp(self._now()),
+            self._insert_series(conn, prepared)
+        return prepared.digest
+
+    def _insert_series(self, conn: sqlite3.Connection, prepared: _SeriesRow) -> None:
+        exists = conn.execute(
+            "SELECT 1 FROM forecast_input_series WHERE content_sha256 = ?", (prepared.digest,)
+        ).fetchone()
+        if exists is None:
+            conn.execute(
+                "INSERT INTO forecast_input_series (content_sha256, series_kind, source,"
+                " source_status, staleness_minutes, reason, dropped_rows_json,"
+                " raw_timestamp_available, bars_json, captured_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    prepared.digest,
+                    SERIES_KIND,
+                    prepared.source,
+                    prepared.source_status,
+                    prepared.staleness_minutes,
+                    prepared.reason,
+                    prepared.dropped_json,
+                    int(prepared.raw_timestamp_available),
+                    prepared.bars_json,
+                    canonical_timestamp(self._now()),
+                ),
+            )
+
+    def write_run_records(
+        self, *, run_id: int, snapshot: SnapshotInput, records: Sequence[RecordInput]
+    ) -> tuple[str, list[str]]:
+        """A run's snapshot and every record of it, in one transaction (supplement 3 point 7).
+
+        The same validation as :meth:`put_input_series` and :meth:`write_record`,
+        each record referencing the snapshot; any failure rolls back the snapshot
+        and every record, so the run wrote nothing. Returns the snapshot's
+        ``content_sha256`` and the ``forecast_id`` of each record, in order. The
+        recorder's one write of a run's ledger rows (AST).
+        """
+        prepared = _series_row(snapshot)
+        if isinstance(records, (str, bytes)) or not isinstance(records, Sequence) or not records:
+            raise ForecastStoreError("records must be a non-empty sequence of RecordInput")
+        contents: list[tuple[str, _RecordContent]] = []
+        for record in records:
+            if not isinstance(record, RecordInput):
+                raise ForecastStoreError("records must hold RecordInput values only")
+            contents.append(
+                (
+                    record.claim_id,
+                    self._record_content(
+                        data_as_of=record.data_as_of,
+                        label=record.label,
+                        range_basis=record.range_basis,
+                        missing=record.missing,
+                        evidence=record.evidence,
+                        band_def=record.band_def,
+                        base_close=record.base_close,
+                        baseline_predictions=record.baseline_predictions,
+                        input_series_sha256=prepared.digest,
                     ),
                 )
-        return digest
+            )
+        with self._write() as conn:
+            self._require_open_run(conn, run_id)
+            self._insert_series(conn, prepared)
+            ids = [
+                self._insert_record(conn, run_id=run_id, claim_id=claim_id, content=content)
+                for claim_id, content in contents
+            ]
+        return prepared.digest, ids
 
     def register_claim(
         self,
@@ -568,36 +693,44 @@ class ForecastStore:
             baseline_predictions=baseline_predictions,
             input_series_sha256=input_series_sha256,
         )
-        band = content.band
         with self._write() as conn:
-            created = self._now()
-            self._require_open_run(conn, run_id)
-            claim = self._claim(conn, claim_id)
-            if claim is None or claim.kind != CLAIM_KIND:
-                raise ForecastStoreError("claim_id is not a registered forward claim")
-            max_fetched_at = self._check_snapshot(conn, input_series_sha256, data_as_of, created)
-            if label != "insufficient":
-                self._check_band(band, claim, data_as_of)
-            elif band["sigma_d"] is not None:
-                violations = self._band_violations(band, claim)
-                if violations:
-                    raise ForecastStoreError(
-                        f"an insufficient record's sigma_d snapshot has violations: "
-                        f"{list(violations)}"
-                    )
-            cutoff = late_cutoff_at(data_as_of)
-            columns: dict[str, object] = {
-                "forecast_id": new_ulid(created),
-                "run_id": run_id,
-                **_record_columns(claim, content, max_fetched_at),
-                "created_at": canonical_timestamp(created),
-                "late": int(created >= cutoff),
-            }
-            names = ", ".join(columns)
-            marks = ", ".join("?" for _ in columns)
-            conn.execute(
-                f"INSERT INTO forecast_record ({names}) VALUES ({marks})", tuple(columns.values())
-            )
+            return self._insert_record(conn, run_id=run_id, claim_id=claim_id, content=content)
+
+    def _insert_record(
+        self, conn: sqlite3.Connection, *, run_id: int, claim_id: str, content: _RecordContent
+    ) -> str:
+        """The write-time checks and the INSERT of one validated record (inside a write)."""
+        band = content.band
+        data_as_of = content.data_as_of
+        created = self._now()
+        self._require_open_run(conn, run_id)
+        claim = self._claim(conn, claim_id)
+        if claim is None or claim.kind != CLAIM_KIND:
+            raise ForecastStoreError("claim_id is not a registered forward claim")
+        max_fetched_at = self._check_snapshot(
+            conn, content.input_series_sha256, data_as_of, created
+        )
+        if content.label != "insufficient":
+            self._check_band(band, claim, data_as_of)
+        elif band["sigma_d"] is not None:
+            violations = self._band_violations(band, claim)
+            if violations:
+                raise ForecastStoreError(
+                    f"an insufficient record's sigma_d snapshot has violations: {list(violations)}"
+                )
+        cutoff = late_cutoff_at(data_as_of)
+        columns: dict[str, object] = {
+            "forecast_id": new_ulid(created),
+            "run_id": run_id,
+            **_record_columns(claim, content, max_fetched_at),
+            "created_at": canonical_timestamp(created),
+            "late": int(created >= cutoff),
+        }
+        names = ", ".join(columns)
+        marks = ", ".join("?" for _ in columns)
+        conn.execute(
+            f"INSERT INTO forecast_record ({names}) VALUES ({marks})", tuple(columns.values())
+        )
         return str(columns["forecast_id"])
 
     def expected_record_columns(

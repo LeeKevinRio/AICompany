@@ -45,6 +45,7 @@ from app.dirdef.registry import PublishedRuleset
 from app.dirdef.rules import rules_logic_sha256
 from app.forecast import definitions
 from app.forecast import recorder as recorder_module
+from app.forecast import store as store_module
 from app.forecast.canonical import APP_ROOT, code_digest, code_digest_files
 from app.forecast.recorder import (
     LOADED,
@@ -55,12 +56,13 @@ from app.forecast.recorder import (
     load_provenance,
     record_forecasts,
 )
-from app.forecast.store import ForecastStore
+from app.forecast.store import ForecastStore, ForecastStoreError, SnapshotInput
 from app.outlook import engine
 from app.outlook.inputs import late_cutoff_at
 from app.services.index import IndexServiceResolver, LoadedBenchmark, load_market_benchmark
 from tests.dirdef_helpers import DIRDEF_V1_0_G7
 from tests.forecast_ledger_helpers import FakeClock, file_ledger, publish_definition
+from tests.forecast_ledger_helpers import bar as ledger_bar
 from tests.import_graph import executed_app_modules, offenders, reachable_app_modules
 from tests.outlook_helpers import (
     FIXTURES,
@@ -327,27 +329,88 @@ def test_a_second_run_for_the_same_t_is_no_new_session(desk: Desk) -> None:
 def test_only_the_claim_without_a_record_for_t_is_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # h3 is replaced after both claims recorded T: the new h3 claim is the only
+    # recording claim without a record for T.
     desk = Desk(tmp_path, monkeypatch)
-    real = desk.store.write_record
-    calls: list[str] = []
+    assert desk.run(EVENING).records_written == 2
+    _publish_with_v11(monkeypatch)
+    newer = desk.register(
+        3,
+        rules_version="outlook-market-v1.1-h3",
+        replaces_claim_id=desk.h3,
+        replace_reason="test replacement",
+    )
+    second = desk.run(EVENING + timedelta(minutes=30))
+    assert (second.outcome, second.records_written) == ("ok", 1)
+    assert [r["claim_id"] for r in desk.rows("forecast_record")] == [desk.h3, desk.h5, newer]
+    assert desk.count("forecast_input_series") == 1  # the same content, stored once
 
-    def failing_h5(**kwargs: Any) -> str:
-        calls.append(kwargs["claim_id"])
-        if kwargs["claim_id"] == desk.h5 and len(calls) == 2:
-            raise sqlite3.OperationalError("disk I/O error")
-        return real(**kwargs)
 
-    monkeypatch.setattr(desk.store, "write_record", failing_h5)
+# --- supplement 3 (revised) point 7: one transaction per run (f2) --------------------------------
+
+
+def test_s12a_a_failing_second_record_rolls_back_the_whole_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    desk = Desk(tmp_path, monkeypatch)
+    # Both records get one forecast_id: the second INSERT is refused by the
+    # forecast_record_no_replace trigger, inside the run's one transaction.
+    monkeypatch.setattr(store_module, "new_ulid", lambda at: "01JCZ0000000000000000000AB")
     first = desk.run(EVENING)
     assert (first.outcome, first.records_written, first.error_class) == (
         "error",
-        1,
-        "OperationalError",
+        0,
+        "IntegrityError",
     )
-    assert _end(desk, first.run_id)["records_written"] == 1
-    second = desk.run(EVENING + timedelta(minutes=30))
-    assert (second.outcome, second.records_written) == ("ok", 1)
-    assert [r["claim_id"] for r in desk.rows("forecast_record")] == [desk.h3, desk.h5]
+    end = _end(desk, first.run_id)
+    assert (end["outcome"], end["records_written"]) == ("error", 0)
+    assert desk.count("forecast_input_series") == 0
+    assert desk.count("forecast_record") == 0
+
+
+def test_s12a_the_next_run_after_a_rolled_back_one_writes_both_from_one_snapshot(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = store_module.new_ulid
+    calls: list[int] = []
+
+    def second_fails(at: datetime, *args: Any) -> str:
+        calls.append(1)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real(at, *args)
+
+    monkeypatch.setattr(store_module, "new_ulid", second_fails)
+    first = desk.run(EVENING)
+    assert (first.outcome, first.records_written) == ("error", 0)
+    assert desk.count("forecast_record") == 0 and desk.count("forecast_input_series") == 0
+    later = desk.run(EVENING + timedelta(minutes=30))
+    assert (later.outcome, later.records_written) == ("ok", 2)
+    (snapshot,) = desk.rows("forecast_input_series")
+    records = desk.rows("forecast_record")
+    assert [r["claim_id"] for r in records] == [desk.h3, desk.h5]
+    assert {r["input_series_sha256"] for r in records} == {snapshot["content_sha256"]}
+
+
+def test_s12a_the_batch_refuses_an_empty_or_foreign_record_list(desk: Desk) -> None:
+    run_id = desk.store.begin_run(code_commit="c", code_digest="d" * 64, runtime={})
+    snapshot = SnapshotInput(
+        bars=[ledger_bar(T)],
+        source="yfinance",
+        source_status="backup",
+        staleness_minutes=0,
+        reason=None,
+        dropped_rows=None,
+        raw_timestamp_available=False,
+    )
+    bad: Any = object()
+    with pytest.raises(ForecastStoreError, match="snapshot must be a SnapshotInput"):
+        desk.store.write_run_records(run_id=run_id, snapshot=bad, records=[])
+    cases: list[tuple[Any, str]] = [([], "non-empty"), ("x", "non-empty"), ([bad], "RecordInput")]
+    for records, match in cases:
+        with pytest.raises(ForecastStoreError, match=match):
+            desk.store.write_run_records(run_id=run_id, snapshot=snapshot, records=records)
+    assert desk.count("forecast_input_series") == 0
 
 
 # --- inputs_not_ready: supplement 2 point 2 (a) -----------------------------------------------
@@ -1439,7 +1502,11 @@ def test_the_job_is_check_has_teeth() -> None:
     assert _job_wiring_violations({}) != []
 
 
-WRITE_METHODS = ("begin_run", "end_run", "put_input_series", "write_record")
+#: The recorder's writes; a run's snapshot and records go through the batch only
+#: (supplement 3 (revised) point 7).
+WRITE_METHODS = ("begin_run", "end_run", "write_run_records")
+#: The one-row forms of the batch write: no app/ module calls them.
+SINGLE_ROW_WRITES = ("put_input_series", "write_record")
 
 
 def _callers(name: str, sources: Mapping[str, str]) -> set[str]:
@@ -1456,6 +1523,23 @@ def _callers(name: str, sources: Mapping[str, str]) -> set[str]:
 @pytest.mark.parametrize("method", WRITE_METHODS)
 def test_k4_the_ledger_writes_are_called_from_the_recorder_only(method: str) -> None:
     assert _callers(method, _app_sources()) == {"forecast/recorder.py"}
+
+
+@pytest.mark.parametrize("method", SINGLE_ROW_WRITES)
+def test_k4_no_app_module_writes_a_snapshot_or_record_outside_the_batch(method: str) -> None:
+    assert _callers(method, _app_sources()) == set()
+
+
+def test_k4_the_recorder_calls_the_batch_once() -> None:
+    tree = ast.parse((APP_ROOT / "forecast" / "recorder.py").read_text(encoding="utf-8"))
+    calls = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "write_run_records"
+    ]
+    assert len(calls) == 1
 
 
 def test_k4_no_app_module_registers_a_claim_yet() -> None:

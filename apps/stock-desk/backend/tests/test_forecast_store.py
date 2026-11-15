@@ -199,11 +199,27 @@ DERIVED_PARAMS = {
 
 
 @pytest.mark.parametrize(
-    "method", ["begin_run", "end_run", "put_input_series", "register_claim", "write_record"]
+    "method",
+    [
+        "begin_run",
+        "end_run",
+        "put_input_series",
+        "register_claim",
+        "write_record",
+        "write_run_records",
+    ],
 )
 def test_write_functions_take_no_timestamp_or_derived_column(method: str) -> None:
     params = set(inspect.signature(getattr(ForecastStore, method)).parameters)
     assert params.isdisjoint(STAMP_PARAMS | DERIVED_PARAMS)
+
+
+@pytest.mark.parametrize("batch_type", [store_module.SnapshotInput, store_module.RecordInput])
+def test_the_batch_inputs_carry_no_timestamp_or_derived_column(batch_type: type) -> None:
+    # Supplement 3 (revised) point 7: the batch write has the one-row forms' S-2 rule.
+    fields = set(inspect.signature(batch_type).parameters)
+    assert fields and fields.isdisjoint(STAMP_PARAMS | DERIVED_PARAMS | {"run_id"})
+    assert "input_series_sha256" not in fields
 
 
 def _executed_sql(source: str) -> str:
