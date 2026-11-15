@@ -92,6 +92,7 @@ def _run(
         wall_clock=lambda: now,
         backend_dir=backend,
         env={},
+        cwd=root,
         run_time=run_time,
     )
 
@@ -333,6 +334,7 @@ def test_the_run_refuses_a_work_dir_in_the_production_data_folder(tmp_path: Path
             wall_clock=lambda: FIXED_NOW,
             backend_dir=backend,
             env={},
+            cwd=tmp_path,
         )
     assert sorted(p.name for p in (backend / "data").iterdir()) == []
 
@@ -494,6 +496,22 @@ def test_the_harness_reads_no_price_cache_and_opens_only_its_own_ledger() -> Non
         and n.func.id in {"refuse_production", "_create_ledger"}
     ]
     assert order == ["refuse_production", "_create_ledger"]
+
+
+def test_every_test_run_compares_against_stand_ins_only() -> None:
+    # No test makes the production path rule look at the real <backend>/data/ or at
+    # the process working directory's data/ (both default otherwise).
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"run_acceptance", "refuse_production"}
+    ]
+    assert len(calls) >= 3
+    for call in calls:
+        assert {"backend_dir", "env", "cwd"} <= {k.arg for k in call.keywords}
 
 
 def test_the_harness_ledger_kind_is_forward_only(tmp_path: Path) -> None:

@@ -374,13 +374,19 @@ def run_acceptance(
     run_time: Callable[[date], datetime] | None = None,
     backend_dir: Path = BACKEND_DIR,
     env: Mapping[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> AcceptanceResult:
-    """One harness run (module docstring); returns what it found, refusing production paths."""
+    """One harness run (module docstring); returns what it found, refusing production paths.
+
+    ``backend_dir``, ``env`` and ``cwd`` -- what the production path rule
+    compares against -- are for tests; the defaults are this checkout's backend,
+    the process environment and working directory.
+    """
     db_path = work_dir / LEDGER_NAME
     refuse_production(
         db_path,
         backend_dir=backend_dir,
-        cwd=Path.cwd(),
+        cwd=Path.cwd() if cwd is None else cwd,
         env=os.environ if env is None else env,
     )
     if db_path.exists():
