@@ -1,0 +1,156 @@
+# outlook-market-v1.0-h5: Appendix B skeleton of pre-registration v0.32, encoded as specified.
+# Aggregation follows ADR-0025 D-2.3 (a)-(c) literally (TA ruling 2026-11-14): no damping step.
+# Vote 4 (volatility state) is encoded by gating every directional rule with
+# vol_ratio_20_120 lte 1.5; with all weights 1 and theta 2 this gives the same label
+# as "halve the sum, round toward zero" in all 54 cases.
+version: "1.0.0"
+aggregation:
+  theta: 2
+  min_completeness: 1.0
+rules:
+  - id: trend_up
+    name: 均線多頭排列（趨勢票）
+    direction: bullish
+    weight: 1.0
+    condition:
+      all:
+        - {field: close, op: gt, ref: ma20}
+        - {field: ma20, op: gt, ref: ma60}
+        - {field: vol_ratio_20_120, op: lte, value: 1.5}
+    explanation: 加權指數（價格指數）收盤高於 20 日均線，且 20 日均線高於 60 日均線；趨勢票計為偏多一票。近 20 日與近 120 日日報酬標準差的比值高於 1.5 時，本規則不計票。
+    counterargument: 均線落後於價格，排列成立時，漲勢可能已經走了一段；在轉折點附近，這一票可能與之後的走勢相反。
+    invalidation:
+      any:
+        - {field: close, op: lte, ref: ma20}
+        - {field: ma20, op: lte, ref: ma60}
+        - {field: vol_ratio_20_120, op: gt, value: 1.5}
+  - id: trend_down
+    name: 均線空頭排列（趨勢票）
+    direction: bearish
+    weight: 1.0
+    condition:
+      all:
+        - {field: close, op: lt, ref: ma20}
+        - {field: ma20, op: lt, ref: ma60}
+        - {field: vol_ratio_20_120, op: lte, value: 1.5}
+    explanation: 加權指數（價格指數）收盤低於 20 日均線，且 20 日均線低於 60 日均線；趨勢票計為偏空一票。近 20 日與近 120 日日報酬標準差的比值高於 1.5 時，本規則不計票。
+    counterargument: 均線落後於價格，排列成立時，跌勢可能已經走了一段；在轉折點附近，這一票可能與之後的走勢相反。加權指數是價格指數，6～9 月除息旺季的股利發放會壓低點數，使這個排列較容易成立，不代表含息報酬同樣偏弱。
+    invalidation:
+      any:
+        - {field: close, op: gte, ref: ma20}
+        - {field: ma20, op: gte, ref: ma60}
+        - {field: vol_ratio_20_120, op: gt, value: 1.5}
+  - id: trend_neutral
+    name: 均線未成排列（趨勢票）
+    direction: range
+    weight: 1.0
+    condition:
+      all:
+        - any:
+            - {field: close, op: lte, ref: ma20}
+            - {field: ma20, op: lte, ref: ma60}
+        - any:
+            - {field: close, op: gte, ref: ma20}
+            - {field: ma20, op: gte, ref: ma60}
+    explanation: 收盤、20 日均線與 60 日均線不構成多頭或空頭排列；趨勢票計為 0，記為震盪的判定依據。
+    counterargument: 均線未成排列只表示這一票沒有方向，不表示期間內波動小；期間內仍可能大漲或大跌。
+    invalidation:
+      any:
+        - all:
+            - {field: close, op: gt, ref: ma20}
+            - {field: ma20, op: gt, ref: ma60}
+        - all:
+            - {field: close, op: lt, ref: ma20}
+            - {field: ma20, op: lt, ref: ma60}
+  - id: momentum_up
+    name: 20 日動能偏多（動能票）
+    direction: bullish
+    weight: 1.0
+    condition:
+      all:
+        - {field: z_past_20, op: gt, value: 0.5}
+        - {field: vol_ratio_20_120, op: lte, value: 1.5}
+    explanation: 加權指數（價格指數）過去 20 個交易日的對數報酬，除以近 60 日波動換算到 20 日的幅度，結果大於 0.5；動能票計為偏多一票。近 20 日與近 120 日日報酬標準差的比值高於 1.5 時，本規則不計票。
+    counterargument: 20 日動能反映的是已經發生的漲幅，短期內可能反轉；0.5 這個門檻是事前選定，沒有用真實資料調整過。
+    invalidation:
+      any:
+        - {field: z_past_20, op: lte, value: 0.5}
+        - {field: vol_ratio_20_120, op: gt, value: 1.5}
+  - id: momentum_down
+    name: 20 日動能偏空（動能票）
+    direction: bearish
+    weight: 1.0
+    condition:
+      all:
+        - {field: z_past_20, op: lt, value: -0.5}
+        - {field: vol_ratio_20_120, op: lte, value: 1.5}
+    explanation: 加權指數（價格指數）過去 20 個交易日的對數報酬，除以近 60 日波動換算到 20 日的幅度，結果小於 −0.5；動能票計為偏空一票。近 20 日與近 120 日日報酬標準差的比值高於 1.5 時，本規則不計票。
+    counterargument: 20 日動能反映的是已經發生的跌幅，短期內可能反轉。6～9 月除息旺季，價格指數的股利拖累會使 20 日報酬偏低。
+    invalidation:
+      any:
+        - {field: z_past_20, op: gte, value: -0.5}
+        - {field: vol_ratio_20_120, op: gt, value: 1.5}
+  - id: momentum_neutral
+    name: 20 日動能未達門檻（動能票）
+    direction: range
+    weight: 1.0
+    condition:
+      all:
+        - {field: z_past_20, op: gte, value: -0.5}
+        - {field: z_past_20, op: lte, value: 0.5}
+    explanation: 20 日動能介於 −0.5 與 0.5 之間（含兩端）；動能票計為 0，記為震盪的判定依據。
+    counterargument: 動能未達門檻只表示這一票沒有方向，不表示期間內波動小；期間內仍可能大漲或大跌。
+    invalidation:
+      any:
+        - {field: z_past_20, op: lt, value: -0.5}
+        - {field: z_past_20, op: gt, value: 0.5}
+  - id: stretch_down_reversal
+    name: 短期跌幅過大（反轉票）
+    direction: bullish
+    weight: 1.0
+    condition:
+      all:
+        - {field: z_past_5, op: lt, value: -1.5}
+        - {field: vol_ratio_20_120, op: lte, value: 1.5}
+    explanation: 過去 5 個交易日的對數報酬，除以近 60 日波動換算到 5 日的幅度，結果小於 −1.5；反轉票把短期跌幅過大計為偏多一票。近 20 日與近 120 日日報酬標準差的比值高於 1.5 時，本規則不計票。
+    counterargument: 急跌之後可能繼續下跌；這一票假設短期過度延伸會回補，這個假設沒有經過驗證。
+    invalidation:
+      any:
+        - {field: z_past_5, op: gte, value: -1.5}
+        - {field: vol_ratio_20_120, op: gt, value: 1.5}
+  - id: stretch_up_reversal
+    name: 短期漲幅過大（反轉票）
+    direction: bearish
+    weight: 1.0
+    condition:
+      all:
+        - {field: z_past_5, op: gt, value: 1.5}
+        - {field: vol_ratio_20_120, op: lte, value: 1.5}
+    explanation: 過去 5 個交易日的對數報酬，除以近 60 日波動換算到 5 日的幅度，結果大於 1.5；反轉票把短期漲幅過大計為偏空一票。近 20 日與近 120 日日報酬標準差的比值高於 1.5 時，本規則不計票。
+    counterargument: 急漲之後可能繼續上漲；這一票假設短期過度延伸會回落，這個假設沒有經過驗證。
+    invalidation:
+      any:
+        - {field: z_past_5, op: lte, value: 1.5}
+        - {field: vol_ratio_20_120, op: gt, value: 1.5}
+  - id: stretch_neutral
+    name: 短期漲跌未過度延伸（反轉票）
+    direction: range
+    weight: 1.0
+    condition:
+      all:
+        - {field: z_past_5, op: gte, value: -1.5}
+        - {field: z_past_5, op: lte, value: 1.5}
+    explanation: 過去 5 個交易日的換算幅度介於 −1.5 與 1.5 之間（含兩端）；反轉票計為 0，記為震盪的判定依據。
+    counterargument: 未過度延伸只表示這一票沒有方向，不表示期間內波動小；期間內仍可能大漲或大跌。
+    invalidation:
+      any:
+        - {field: z_past_5, op: lt, value: -1.5}
+        - {field: z_past_5, op: gt, value: 1.5}
+  - id: high_volatility_range
+    name: 近期波動明顯放大
+    direction: range
+    weight: 1.0
+    condition: {field: vol_ratio_20_120, op: gt, value: 1.5}
+    explanation: 近 20 日日報酬標準差超過近 120 日的 1.5 倍（恰好 1.5 倍不算）；這時本規則集的偏多、偏空規則都不計票，結果一律判為震盪，並以本規則作為震盪的判定依據。
+    counterargument: 改判震盪是本規則集對高波動的處理方式，不是對期間內走勢的描述；波動放大時，期間內的漲跌幅可能更大。
+    invalidation: {field: vol_ratio_20_120, op: lte, value: 1.5}

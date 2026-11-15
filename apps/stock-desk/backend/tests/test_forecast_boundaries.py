@@ -880,7 +880,8 @@ def test_the_rules_directory_holds_only_the_two_rule_files() -> None:
         else set()
     )
     assert found <= {"h3.yaml", "h5.yaml"}
-    assert found == set()  # B2: no rule file before the G-3 freeze
+    # NM-5: the two frozen market rule files are landed (not registered; CG-2 does that).
+    assert found == {"h3.yaml", "h5.yaml"}
 
 
 # --- definitions.py, claims.py, forecast/__init__.py --------------------------------------
