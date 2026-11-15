@@ -18,6 +18,8 @@ with an injected fake price service (no network, no cache, no database):
 
 from __future__ import annotations
 
+import math
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -34,6 +36,7 @@ from app.outlook.inputs import (
     _cut_snapshot,
     capture_market_snapshot,
     late_cutoff_at,
+    snapshot_view,
 )
 from app.services.index import LoadedBenchmark, load_market_benchmark
 from tests.import_graph import offenders, reachable_app_modules
@@ -209,3 +212,44 @@ def test_late_cutoff_is_the_next_calendar_day_at_midnight_taipei(
 
 def test_the_store_uses_the_one_cutoff_definition() -> None:
     assert store.late_cutoff_at is inputs.late_cutoff_at
+
+
+# --- The computation side's reading (snapshot_view) -------------------------------------------
+
+
+def test_a_snapshot_needs_a_bar() -> None:
+    with pytest.raises(SnapshotShapeError):
+        MarketSnapshot(
+            bars=(),
+            source="yfinance",
+            source_status="backup",
+            staleness_minutes=None,
+            reason=None,
+            dropped=(),
+            raw_timestamp_available=False,
+        )
+    with pytest.raises(SnapshotShapeError):
+        snapshot_view([], data_as_of=date(2026, 11, 13))
+
+
+def test_the_view_must_end_on_its_decision_session() -> None:
+    bars = fixture_bars("FX-A")[-5:]
+    with pytest.raises(SnapshotShapeError):
+        snapshot_view(bars, data_as_of=bars[-1].session_date + timedelta(days=1))
+
+
+def test_the_view_reads_closes_by_lag_and_keeps_nan() -> None:
+    bars = fixture_bars("FX-A")[-3:]
+    bars[0] = replace(bars[0], close=Decimal("sNaN"))
+    bars[1] = replace(bars[1], close=Decimal("NaN"))
+    view = snapshot_view(bars, data_as_of=bars[-1].session_date)
+    assert view.closes_by_lag[0] == float(bars[-1].close)
+    assert math.isnan(view.closes_by_lag[1]) and math.isnan(view.closes_by_lag[2])
+    assert view.sessions_by_lag == tuple(b.session_date for b in reversed(bars))
+
+
+def test_a_float_close_is_a_type_error() -> None:
+    bars = fixture_bars("FX-A")[-2:]
+    bars[-1] = replace(bars[-1], close=100.0)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        snapshot_view(bars, data_as_of=bars[-1].session_date)

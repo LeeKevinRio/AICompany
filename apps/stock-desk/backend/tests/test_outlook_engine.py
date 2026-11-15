@@ -721,3 +721,12 @@ def test_every_result_keeps_missing_iff_insufficient() -> None:
         for horizon in (3, 5):
             evaluation = _evaluate(bars, horizon)
             assert bool(evaluation.missing) == (evaluation.label == "insufficient")
+
+
+def test_a_naive_fetch_stamp_is_pit_unverified() -> None:
+    bars = fixture_bars("FX-B")
+    last = bars[-1]
+    bars[-1] = replace(last, fetched_at=last.fetched_at.replace(tzinfo=None))
+    evaluation = _evaluate(bars)
+    assert [m.code for m in evaluation.missing] == ["E-PIT-UNVERIFIED"]
+    assert evaluation.missing[0].available is not None  # the latest aware stamp
