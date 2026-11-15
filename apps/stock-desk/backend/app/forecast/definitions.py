@@ -16,8 +16,11 @@ Rule files (ADR-0025 D-2 point 3): ``app/outlook/rules/h3.yaml`` and
 ``app/outlook/`` package directory; the getters take no path and this module
 reads no environment variable. The bytes go to the ``app.dirdef`` loader with
 the registered ``rules_sha256`` and ``banned_phrases=BANNED_PHRASES`` imported
-from ``app.advice.loader`` (the single source of banned phrases; this module is
-the only loader call site in ``app/``).
+from ``app.advice.banned_phrases`` (the single source of banned phrases, a leaf
+module that imports nothing, so this import reaches no other ``app.advice`` or
+``app.api`` module -- ADR-0030 supplement 3 point 3; ``app.advice.loader``
+re-exports the same object; this module is the only loader call site in
+``app/``).
 
 Before a definition is returned it is checked, in order (B2D-1d): its
 ``definition_version`` equals the registry key, ``definition_logic_sha256`` and
@@ -41,7 +44,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final, get_args
 
-from app.advice.loader import BANNED_PHRASES
+from app.advice.banned_phrases import BANNED_PHRASES
 from app.dirdef.definition import (
     DirectionDefinition,
     Horizon,

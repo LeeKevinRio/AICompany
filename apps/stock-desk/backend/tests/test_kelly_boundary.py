@@ -54,6 +54,7 @@ GUARDED_MODULES = (
 #: would be the same violation, and a guard aimed at one file would not see it.
 ADVICE_MODULES = (
     "app.advice",
+    "app.advice.banned_phrases",
     "app.advice.book",
     "app.advice.book_limits",
     "app.advice.context",

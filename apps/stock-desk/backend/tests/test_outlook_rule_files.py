@@ -192,3 +192,23 @@ def test_the_two_rule_sets_differ_in_logic() -> None:
 
 def test_neither_file_is_registered() -> None:
     assert dict(PUBLISHED_RULESETS) == {}
+
+
+#: ``definition_sha256`` / ``definition_logic_sha256`` of the G7 stand-in the h3 / h5
+#: recorder tests register with the two files (ADR-0030 supplement 3 S-12a point 3:
+#: moving the banned phrases to their leaf module changes none of the hashes).
+G7_DEFINITION_SHA256 = "a0d0a34d5fad3593b902c755b3c060497901acc2ba923c71fef5b9ebe89bd6e2"
+G7_DEFINITION_LOGIC_SHA256 = "4cc1fe80054a017f47030805a486ad81e1bda249d730c7c1f6bd2c73c01d1afa"
+
+
+def test_the_k2_move_keeps_the_three_hashes() -> None:
+    from app.advice import banned_phrases, loader
+    from app.dirdef.definition import definition_logic_sha256, definition_sha256
+    from tests.outlook_helpers import definition
+
+    assert loader.BANNED_PHRASES is banned_phrases.BANNED_PHRASES is BANNED_PHRASES
+    for horizon in (3, 5):
+        assert hashlib.sha256(_bytes(horizon)).hexdigest() == FREEZE_PACK_SHA256[horizon]
+        assert rules_logic_sha256(_load(horizon)) == LOGIC_SHA256[horizon]
+    assert definition_sha256(definition()) == G7_DEFINITION_SHA256
+    assert definition_logic_sha256(definition()) == G7_DEFINITION_LOGIC_SHA256

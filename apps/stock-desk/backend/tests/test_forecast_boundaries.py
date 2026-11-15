@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from app.advice.loader import BANNED_PHRASES
+from app.advice.banned_phrases import BANNED_PHRASES
 from tests.import_graph import (
     APP_ROOT,
     imported_modules,
@@ -773,6 +773,9 @@ def test_the_object_setattr_scan_has_teeth() -> None:
 
 
 LOADER_MODULE = "app.advice.loader"
+#: The one definition of the phrases (ADR-0030 supplement 3 point 3): a leaf module.
+PHRASES_MODULE = "app.advice.banned_phrases"
+PHRASE_MODULES = (PHRASES_MODULE, LOADER_MODULE)
 
 
 def _forecast_outlook_dirdef_sources() -> dict[str, str]:
@@ -785,7 +788,8 @@ def _forecast_outlook_dirdef_sources() -> dict[str, str]:
 
 def _banned_phrase_importers(sources: dict[str, str]) -> dict[str, list[str]]:
     """Every way a file reaches ``BANNED_PHRASES``: the name imported (with its resolved
-    module), the loader module imported, or ``x.BANNED_PHRASES`` read as an attribute."""
+    module), the leaf or the loader module imported, or ``x.BANNED_PHRASES`` read as an
+    attribute."""
     found: dict[str, list[str]] = {}
     for path, text in sources.items():
         module, is_package = _path_module(path)
@@ -795,20 +799,21 @@ def _banned_phrase_importers(sources: dict[str, str]) -> dict[str, list[str]]:
                 for alias in node.names:
                     if alias.name == "BANNED_PHRASES":
                         found.setdefault(path, []).append(base)
-                    elif f"{base}.{alias.name}" == LOADER_MODULE:
-                        found.setdefault(path, []).append(f"module {LOADER_MODULE}")
+                    elif f"{base}.{alias.name}" in PHRASE_MODULES:
+                        found.setdefault(path, []).append(f"module {base}.{alias.name}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name == LOADER_MODULE:
-                        found.setdefault(path, []).append(f"module {LOADER_MODULE}")
+                    if alias.name in PHRASE_MODULES:
+                        found.setdefault(path, []).append(f"module {alias.name}")
             elif isinstance(node, ast.Attribute) and node.attr == "BANNED_PHRASES":
                 found.setdefault(path, []).append("attribute BANNED_PHRASES")
     return found
 
 
-def test_only_definitions_imports_the_banned_phrases_from_the_advice_loader() -> None:
+def test_only_definitions_imports_the_banned_phrases_from_the_leaf_module() -> None:
+    # FL-78 (i), source moved by ADR-0030 supplement 3 point 3.
     assert _banned_phrase_importers(_forecast_outlook_dirdef_sources()) == {
-        "forecast/definitions.py": [LOADER_MODULE]
+        "forecast/definitions.py": [PHRASES_MODULE]
     }
 
 
@@ -831,11 +836,93 @@ def test_only_definitions_imports_the_banned_phrases_from_the_advice_loader() ->
         pytest.param(
             "from app.advice.loader import BANNED_PHRASES as P\n", [LOADER_MODULE], id="alias"
         ),
+        pytest.param(
+            "from app.advice import banned_phrases\nX = banned_phrases.BANNED_PHRASES\n",
+            [f"module {PHRASES_MODULE}", "attribute BANNED_PHRASES"],
+            id="leaf-module-then-attribute",
+        ),
+        pytest.param(
+            "from ..advice.banned_phrases import BANNED_PHRASES\n",
+            [PHRASES_MODULE],
+            id="leaf-relative",
+        ),
     ],
 )
 def test_the_banned_phrase_import_scan_has_teeth(source: str, expected: list[str]) -> None:
     found = _banned_phrase_importers({"outlook/probe.py": source})
     assert sorted(found["outlook/probe.py"]) == sorted(expected)
+
+
+def _phrase_definitions(sources: dict[str, str]) -> set[str]:
+    """Files that bind ``BANNED_PHRASES`` by assignment (a definition, not an import)."""
+    found: set[str] = set()
+    for path, text in sources.items():
+        for node in ast.walk(ast.parse(text)):
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+            elif isinstance(node, ast.AnnAssign | ast.AugAssign):
+                targets = [node.target]
+            if any(isinstance(t, ast.Name) and t.id == "BANNED_PHRASES" for t in targets):
+                found.add(path)
+    return found
+
+
+def test_the_banned_phrases_are_defined_once_in_the_leaf_module() -> None:
+    assert _phrase_definitions(_app_sources()) == {"advice/banned_phrases.py"}
+
+
+def test_the_phrase_definition_scan_has_teeth() -> None:
+    sources = {"a.py": "BANNED_PHRASES = ('x',)\n", "b.py": "BANNED_PHRASES: tuple = ()\n"}
+    assert _phrase_definitions(sources) == {"a.py", "b.py"}
+
+
+def test_the_leaf_module_imports_nothing() -> None:
+    source = (APP_ROOT / "advice" / "banned_phrases.py").read_text(encoding="utf-8")
+    assert [
+        ast.unparse(n)
+        for n in ast.walk(ast.parse(source))
+        if isinstance(n, ast.Import | ast.ImportFrom)
+    ] == []
+    names = {getattr(n, "id", None) for n in ast.walk(ast.parse(source))}
+    assert "__import__" not in names
+
+
+def test_the_advice_package_file_imports_nothing() -> None:
+    source = (APP_ROOT / "advice" / "__init__.py").read_text(encoding="utf-8")
+    assert _imports_of_source(source) == set()
+
+
+def test_the_loader_re_exports_the_leaf_object() -> None:
+    from app.advice import banned_phrases, loader
+
+    assert loader.BANNED_PHRASES is banned_phrases.BANNED_PHRASES
+    tree = ast.parse((APP_ROOT / "advice" / "loader.py").read_text(encoding="utf-8"))
+    imports = [
+        (node.module, alias.name, alias.asname)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name == "BANNED_PHRASES"
+    ]
+    assert imports == [(PHRASES_MODULE, "BANNED_PHRASES", "BANNED_PHRASES")]
+
+
+def test_the_phrases_keep_their_values_and_order() -> None:
+    from app.advice.banned_phrases import BANNED_PHRASES as LEAF
+
+    assert LEAF == (
+        "保證",
+        "必漲",
+        "必賺",
+        "必跌",
+        "穩賺",
+        "穩賠",
+        "一定會",
+        "包賺",
+        "零風險",
+        "無風險",
+    )
 
 
 def test_the_loader_is_called_only_from_definitions_with_the_imported_phrases() -> None:
@@ -870,6 +957,13 @@ def test_no_copy_of_a_banned_phrase_in_dirdef_or_outlook(root: Path) -> None:
     assert {
         p: c for p, t in _sources_under(root).items() if (c := _constants_with_banned_phrases(t))
     } == {}
+
+
+def test_no_copy_of_a_banned_phrase_outside_the_leaf_module() -> None:
+    # FL-78 (i) "no copy", pointed at the new single source (supplement 3 point 3).
+    assert {p for p, t in _app_sources().items() if _constants_with_banned_phrases(t)} == {
+        "advice/banned_phrases.py"
+    }
 
 
 def test_the_banned_copy_scan_has_teeth() -> None:

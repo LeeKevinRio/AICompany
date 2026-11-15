@@ -60,7 +60,7 @@ from app.outlook.inputs import late_cutoff_at
 from app.services.index import IndexServiceResolver, load_market_benchmark
 from tests.dirdef_helpers import DIRDEF_V1_0_G7
 from tests.forecast_ledger_helpers import FakeClock, file_ledger, publish_definition
-from tests.import_graph import offenders, reachable_app_modules
+from tests.import_graph import executed_app_modules, offenders, reachable_app_modules
 from tests.outlook_helpers import (
     FIXTURES,
     TAIPEI,
@@ -1014,6 +1014,9 @@ def test_the_caller_scan_has_teeth() -> None:
 # --- K-2 reachability (supplement 2 point 1: unchanged, by reachability) ----------------------
 
 K2_UNREACHABLE = (
+    "app.api",
+    "app.advice.loader",
+    "app.advice.context",
     "app.services",
     "app.portfolio",
     "app.positions",
@@ -1033,17 +1036,49 @@ def test_k2_the_recorder_reaches_none_of_the_forbidden_packages(package: str) ->
     assert offenders(reachable_app_modules(("app.forecast.recorder",)), package) == []
 
 
-def test_k2_the_advice_and_api_modules_come_only_through_the_banned_phrase_import() -> None:
-    # K-2 lets definitions.py import BANNED_PHRASES from app.advice.loader; what that
-    # module reaches (app.advice.context / limits, app.api.kelly_wording) is all the
-    # recorder reaches of app.advice and app.api.
-    reached = reachable_app_modules(("app.forecast.recorder",))
-    via_phrases = reachable_app_modules(("app.advice.loader",)) | {
-        "app.advice.loader.BANNED_PHRASES"
+def _core_modules() -> tuple[str, ...]:
+    """Every module of ``app/forecast`` and ``app/outlook`` (the two K-2 packages)."""
+    return tuple(
+        sorted(
+            ".".join(path.relative_to(APP_ROOT.parent).with_suffix("").parts).removesuffix(
+                ".__init__"
+            )
+            for package in ("forecast", "outlook")
+            for path in (APP_ROOT / package).rglob("*.py")
+        )
+    )
+
+
+def test_k2_the_core_reaches_no_api_module() -> None:
+    # Supplement 3 point 3: by reachability, transitive imports and parent packages included.
+    assert offenders(reachable_app_modules(_core_modules()), "app.api") == []
+    assert offenders(executed_app_modules(_core_modules()), "app.api") == []
+
+
+def test_k2_the_core_reaches_exactly_the_advice_package_and_the_leaf_module() -> None:
+    assert set(offenders(executed_app_modules(_core_modules()), "app.advice")) == {
+        "app.advice",
+        "app.advice.banned_phrases",
     }
-    for package in ("app.advice", "app.api"):
-        assert set(offenders(reached, package)) <= set(via_phrases)
-    assert offenders(reached, "app.api") != []  # the transitive path exists (reported)
+
+
+def test_k2_the_core_module_list_and_the_executed_scan_have_teeth() -> None:
+    assert {"app.forecast", "app.forecast.recorder", "app.outlook.engine"} <= set(_core_modules())
+    # Through the old route (the loader) the scan sees the api module and the parent package.
+    via_loader = executed_app_modules(("app.advice.loader",))
+    assert offenders(via_loader, "app.api") != []
+    assert {"app.advice", "app.advice.context", "app.advice.limits"} <= via_loader
+    # Imported names are not modules.
+    assert "app.advice.banned_phrases.BANNED_PHRASES" not in executed_app_modules(
+        ("app.forecast.definitions",)
+    )
+
+
+def test_k2_the_loader_and_the_leaf_hold_one_object() -> None:
+    from app.advice import banned_phrases, loader
+
+    assert loader.BANNED_PHRASES is banned_phrases.BANNED_PHRASES
+    assert vars(definitions)["BANNED_PHRASES"] is banned_phrases.BANNED_PHRASES
 
 
 def test_the_recorder_reachability_scan_has_teeth() -> None:

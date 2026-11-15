@@ -16,7 +16,9 @@ file fails at load time instead of quietly producing a rule that never fires:
 * Rule ids are unique and the file declares a semver ``version``.
 * :data:`BANNED_PHRASES` are rejected in rule text. Guarantee-flavoured wording
   is a compliance red line, so the guard lives in the loader (every consumer
-  gets it) rather than only in a test.
+  gets it) rather than only in a test. The list itself is defined once, in the
+  leaf module ``app.advice.banned_phrases``; this module re-exports that same
+  object (ADR-0030 supplement 3 point 3).
 
 Validation errors are reported as ``<filename>：規則 <id> 的 <欄位> -- <原因>``
 so a rule author can find the offending rule without decoding a pydantic dump.
@@ -41,24 +43,11 @@ from pydantic import (
     model_validator,
 )
 
+from app.advice.banned_phrases import BANNED_PHRASES as BANNED_PHRASES
 from app.advice.context import ADVICE_RULE_FIELDS, KNOWN_FIELDS
 
 #: The rule file shipped with the product.
 DEFAULT_RULES_PATH = Path(__file__).parent / "rules" / "default.yaml"
-
-#: Wording that may never appear in a rule's text (compliance red line).
-BANNED_PHRASES: tuple[str, ...] = (
-    "保證",
-    "必漲",
-    "必賺",
-    "必跌",
-    "穩賺",
-    "穩賠",
-    "一定會",
-    "包賺",
-    "零風險",
-    "無風險",
-)
 
 _TEXT_FIELDS = ("name", "explanation", "counterargument", "invalidation")
 
