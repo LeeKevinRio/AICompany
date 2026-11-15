@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import copy
-import unicodedata
 from pathlib import Path
 
 import pytest
@@ -38,6 +37,7 @@ from app.dirdef.rules import (
     OutlookRuleSet,
     rules_logic_sha256,
 )
+from app.forecast.definitions import squeeze
 from tests.dirdef_helpers import DIRDEF_V1_0_G7, G7_NON_LOGIC_ROWS, dirdef_v1_0
 
 RULES_DIR = Path(__file__).resolve().parent.parent / "app" / "outlook" / "rules"
@@ -45,7 +45,7 @@ CONTEXT = {BANNED_PHRASES_CONTEXT_KEY: BANNED_PHRASES}
 
 
 def _squeezed(text: str) -> str:
-    return "".join(unicodedata.normalize("NFKC", text).split())
+    return squeeze(text)  # the one comparison form (qa batch 4 follow-up 4)
 
 
 def test_the_g7_rows_are_exactly_the_definition_fields() -> None:

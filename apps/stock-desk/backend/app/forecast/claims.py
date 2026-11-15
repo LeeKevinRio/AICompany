@@ -198,7 +198,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _phrase_scan_lines(scan: definitions.PhraseScan) -> list[str]:
     lines = [
-        "banned phrase scan (NFKC, whitespace removed):"
+        "banned phrase scan (NFKC, whitespace and zero-width removed):"
         f" rules {scan.rules_strings} strings, definition {scan.definition_strings} strings,"
         f" {scan.phrases} phrases, hits {len(scan.hits)}"
     ]

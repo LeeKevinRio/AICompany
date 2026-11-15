@@ -36,7 +36,7 @@ from typing import Any
 
 import pytest
 
-from app.dirdef.definition import DirectionDefinition
+from app.dirdef.definition import DirectionDefinition, definition_logic_sha256, definition_sha256
 from app.dirdef.hashing import canonical_json
 from app.dirdef.registry import PublishedRuleset
 from app.dirdef.rules import rules_logic_sha256
@@ -154,7 +154,7 @@ def test_register_writes_one_row_with_every_field(
     assert row["provisional_results_seen"] == 1
     assert row["registered_at"] == canonical_timestamp(cli.clock.now)
     out = capsys.readouterr().out.splitlines()
-    assert out[0].startswith("banned phrase scan (NFKC, whitespace removed): rules ")
+    assert out[0].startswith("banned phrase scan (NFKC, whitespace and zero-width removed): rules ")
     assert out[0].endswith(", 10 phrases, hits 0")
     assert f"registered claim_id={_claim_key(H3)}" in out
     assert f"registered_at={row['registered_at']}" in out
@@ -351,6 +351,20 @@ def test_the_registered_row_cannot_be_rewritten(cli: Cli, sql: str) -> None:
 # --- CG-2: banned phrase scan before registering (D-6; FL-78 (m)) --------------------------
 
 
+#: qa batch 4 follow-up 4: the six zero-width characters the scan removes.
+ZERO_WIDTH_FORMS = [
+    pytest.param("保​證", id="U+200B"),
+    pytest.param("必‌漲", id="U+200C"),
+    pytest.param("必‍賺", id="U+200D"),
+    pytest.param("穩⁠賠", id="U+2060"),
+    pytest.param("包﻿賺", id="U+FEFF"),
+    pytest.param("零­風險", id="U+00AD"),
+    pytest.param("一​定­會", id="two-kinds"),
+    pytest.param("無 ​風險", id="space-and-zero-width"),
+    pytest.param("必 跌", id="no-break-space"),
+]
+
+
 def _poisoned_rules(monkeypatch: pytest.MonkeyPatch, phrase_form: str) -> None:
     """h3 bytes with ``phrase_form`` in an explanation, published under H3 (seam: the reader)."""
     text = rule_bytes(3).decode("utf-8")
@@ -387,6 +401,57 @@ def test_a_spaced_phrase_in_the_rules_is_a_scan_hit(
     assert lines[1].startswith("  hit rules: ")
     assert "banned phrase" in captured.err
     assert cli.rows() == []
+
+
+@pytest.mark.parametrize("form", ZERO_WIDTH_FORMS)
+def test_a_zero_width_split_phrase_in_the_rules_is_a_scan_hit(
+    cli: Cli, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], form: str
+) -> None:
+    _poisoned_rules(monkeypatch, form)
+    assert definitions.get_ruleset(H3) is not None  # the loader's plain comparison misses it
+    assert cli.register(H3) == claims.EXIT_REFUSED
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].endswith("hits 1") and lines[1].startswith("  hit rules: ")
+    assert cli.rows() == []
+
+
+@pytest.mark.parametrize("form", ZERO_WIDTH_FORMS)
+def test_a_zero_width_split_phrase_in_the_definition_is_a_scan_hit(form: str) -> None:
+    poisoned = DirectionDefinition.model_validate(
+        {**DIRDEF_V1_0_G7, "description": f"合成定義，{form}（測試）"}
+    )
+    scan = definitions.registration_phrase_scan(ruleset(3), poisoned)
+    assert len(scan.hits) == 1 and scan.hits[0].startswith("definition: ")
+
+
+def test_squeeze_removes_whitespace_and_exactly_the_zero_width_characters() -> None:
+    assert definitions.ZERO_WIDTH == frozenset({"​", "‌", "‍", "⁠", "﻿", "­"})
+    every = "".join(sorted(definitions.ZERO_WIDTH))
+    assert definitions.squeeze(f"保{every} 　 \t證") == "保證"
+    # NFKC still applies (full-width letters), other characters stay.
+    assert definitions.squeeze("ＡＢ​c-d") == "ABc-d"
+
+
+@pytest.mark.parametrize("horizon", [3, 5])
+def test_the_zero_width_removal_changes_no_registered_hash(horizon: int) -> None:
+    # Only the comparison form changes: the landed bytes, their two hashes and the
+    # stand-in definition hashes are the pinned ones, and the landed files scan clean.
+    pinned = {
+        3: (
+            "f4f366a5d5e66fd7fd49c916f5bb31401e84c2f23b3bb7a534f55be406fb3443",
+            "ddd3c51a1cb9b30a3e957a5a98888ca48916deb35f66027f2f49e7b824f34484",
+        ),
+        5: (
+            "0a385de3e2f4118bc1e7c2c5dd1a667ce0a9067399ccd1b6e7c4dbab19d5707c",
+            "e5310b8e6ce14525e81616eedd4368d45a682cb8a4647129ea5617a41cedf1bb",
+        ),
+    }
+    assert (_sha(rule_bytes(horizon)), rules_logic_sha256(ruleset(horizon))) == pinned[horizon]
+    assert (definition_sha256(definition()), definition_logic_sha256(definition())) == (
+        "a0d0a34d5fad3593b902c755b3c060497901acc2ba923c71fef5b9ebe89bd6e2",
+        "4cc1fe80054a017f47030805a486ad81e1bda249d730c7c1f6bd2c73c01d1afa",
+    )
+    assert definitions.registration_phrase_scan(ruleset(horizon), definition()).hits == ()
 
 
 def test_a_spaced_phrase_in_the_definition_is_a_scan_hit(

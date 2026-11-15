@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import hashlib
-import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +33,7 @@ from app.dirdef.rules import (
     rules_logic_sha256,
 )
 from app.dirdef.strings import string_values
-from app.forecast.definitions import rules_path
+from app.forecast.definitions import rules_path, squeeze
 
 #: Freeze pack 4.3, round 2 (check values for the transcription, not registered values).
 FREEZE_PACK_SHA256 = {
@@ -75,7 +74,7 @@ def _load(horizon: int) -> OutlookRuleSet:
 
 
 def _squeezed(text: str) -> str:
-    return "".join(unicodedata.normalize("NFKC", text).split())
+    return squeeze(text)  # the one comparison form (qa batch 4 follow-up 4)
 
 
 def _yaml_strings(value: Any) -> list[str]:

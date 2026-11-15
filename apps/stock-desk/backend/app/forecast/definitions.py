@@ -39,8 +39,8 @@ For the claim registration CLI (``app.forecast.claims``; ADR-0030 D-6 CG-2):
 :func:`get_rules_bytes` returns the registered rule file bytes (re-read and
 checked against ``rules_sha256``), and :func:`registration_phrase_scan` runs
 the pre-registration banned phrase check -- every string value of the rule set
-and the definition, NFKC-normalised with whitespace removed -- with the same
-``BANNED_PHRASES``.
+and the definition, NFKC-normalised with whitespace and zero-width characters
+removed -- with the same ``BANNED_PHRASES``.
 
 Test seams (named in the tests): the two registry names below, the
 :func:`_read_rules_bytes` reader, and the two cache dicts.
@@ -194,9 +194,23 @@ class PhraseScan:
     hits: tuple[str, ...]
 
 
+#: Invisible characters ``str.split()`` keeps (qa batch 4 follow-up 4): zero width
+#: space, zero width non-joiner, zero width joiner, word joiner, zero width
+#: no-break space (BOM) and soft hyphen. NFKC leaves every one of them in place.
+ZERO_WIDTH: Final[frozenset[str]] = frozenset(
+    {"​", "‌", "‍", "⁠", "﻿", "­"}
+)
+
+
 def squeeze(text: str) -> str:
-    """NFKC-normalised ``text`` with every whitespace character removed."""
-    return "".join(unicodedata.normalize("NFKC", text).split())
+    """NFKC-normalised ``text`` with every whitespace and :data:`ZERO_WIDTH` character removed.
+
+    So a phrase split by a space, a full-width space, a no-break space or a
+    zero-width character is still found. Only the comparison form changes: the
+    scanned rule bytes and definition objects, and their hashes, are untouched.
+    """
+    normalised = unicodedata.normalize("NFKC", text)
+    return "".join(char for char in "".join(normalised.split()) if char not in ZERO_WIDTH)
 
 
 def registration_phrase_scan(
@@ -205,8 +219,9 @@ def registration_phrase_scan(
     """Every string value of the rule set and the definition against every phrase.
 
     ADR-0030 D-6 CG-2: strings that may be rendered later are NFKC-normalised
-    with whitespace removed before the comparison (so a spaced or compatibility
-    form of a phrase is a hit). Every string value is scanned -- a superset of
+    with whitespace and zero-width characters removed before the comparison
+    (:func:`squeeze`; so a spaced, zero-width-split or compatibility form of a
+    phrase is a hit). Every string value is scanned -- a superset of
     what can be rendered. No phrases to scan with is a rejection.
     """
     if not BANNED_PHRASES:
