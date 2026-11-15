@@ -1008,3 +1008,135 @@ def test_ulids_encode_the_millisecond_and_are_crockford() -> None:
     assert new_ulid(at) != new_ulid(at)
     with pytest.raises(ValueError):
         new_ulid(datetime(1969, 12, 31, tzinfo=UTC))
+
+
+# --- reads for the recorder (NM-5 third batch) ------------------------------------------
+
+
+def test_now_is_the_store_clock_in_utc(ledger: Ledger) -> None:
+    ledger.clock.now = _at(T, 22, 10)
+    assert ledger.store.now() == datetime(2026, 11, 13, 14, 10, tzinfo=UTC)
+    ledger.clock.now = datetime(2026, 11, 13, 22, 10)  # naive
+    with pytest.raises(ForecastStoreError, match="timezone-aware"):
+        ledger.store.now()
+
+
+def test_claim_rows_carry_both_logic_hashes(ledger: Ledger) -> None:
+    claim = ledger.store.claim(ledger.h3)
+    assert claim is not None
+    assert claim.rules_logic_sha256 == LOGIC
+    assert claim.definition_logic_sha256 == definition_logic_sha256(ledger.definition)
+
+
+def test_latest_run_before_filters_by_outcome(ledger: Ledger) -> None:
+    first = ledger.run()
+    ledger.store.end_run(first, outcome="ok", candidate_t=T, records_written=0)
+    second = ledger.run()
+    ledger.store.end_run(second, outcome="gate_closed", candidate_t=None, records_written=0)
+    third = ledger.run()  # interrupted: no end row
+    fourth = ledger.run()
+    store = ledger.store
+    assert store.latest_run_before(first) is None
+    before = store.latest_run_before(fourth)
+    assert before is not None and before.run_id == third and before.outcome is None
+    passed = store.latest_run_before(fourth, outcomes=("ok", "no_new_session"))
+    assert passed is not None and passed.run_id == first and passed.outcome == "ok"
+    closed = store.latest_run_before(fourth, outcomes=("gate_closed",))
+    assert closed is not None and closed.run_id == second
+    assert store.latest_run_before(first, outcomes=("ok",)) is None
+
+
+@pytest.mark.parametrize(
+    ("run_id", "outcomes"),
+    [(True, None), ("1", None), (1, ()), (1, ("finished",))],
+)
+def test_latest_run_before_refuses_bad_arguments(
+    ledger: Ledger, run_id: Any, outcomes: Any
+) -> None:
+    with pytest.raises(ForecastStoreError):
+        ledger.store.latest_run_before(run_id, outcomes=outcomes)
+
+
+def test_has_record_and_stored_records(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    run_id = ledger.run()
+    assert not ledger.store.has_record(ledger.h3, T)
+    assert ledger.store.stored_records(ledger.h3) == []
+    ledger.record(run_id, ledger.h3, T, series)
+    assert ledger.store.has_record(ledger.h3, T)
+    assert not ledger.store.has_record(ledger.h5, T)
+    assert ledger.store.stored_records(ledger.h3) == ledger.rows("forecast_record")
+    with pytest.raises(ForecastStoreError, match="date"):
+        ledger.store.has_record(ledger.h3, _at(T, 22))
+
+
+def test_a_stored_snapshot_reads_back_as_stored(ledger: Ledger) -> None:
+    series = ledger.snapshot(T, staleness_minutes=7, reason="cached")
+    stored = ledger.store.snapshot(series)
+    (row,) = ledger.rows("forecast_input_series")
+    assert stored.content_sha256 == series == row["content_sha256"]
+    assert canonical_json(list(stored.bars)) == row["bars_json"]
+    assert content_sha256(stored.bars) == series
+    assert (stored.source, stored.source_status) == ("yfinance", "backup")
+    assert (stored.staleness_minutes, stored.reason) == (7, "cached")
+    assert stored.raw_timestamp_available is False
+    assert canonical_timestamp(stored.captured_at) == row["captured_at"]
+    with pytest.raises(ForecastStoreError, match="not a stored snapshot"):
+        ledger.store.snapshot("f" * 64)
+
+
+def test_a_snapshot_whose_bars_are_not_objects_is_inconsistent(ledger: Ledger) -> None:
+    conn = sqlite3.connect(ledger.path, isolation_level=None)
+    try:
+        conn.execute(
+            "INSERT INTO forecast_input_series (content_sha256, series_kind, source,"
+            " source_status, raw_timestamp_available, bars_json, captured_at)"
+            " VALUES (?, 'index_bars', 'yfinance', 'backup', 0, '[1]', ?)",
+            ("e" * 64, canonical_timestamp(_at(T, 22))),
+        )
+    finally:
+        conn.close()
+    with pytest.raises(LedgerInconsistentError):
+        ledger.store.snapshot("e" * 64)
+
+
+def _content(ledger: Ledger, series: str, **overrides: Any) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "claim_id": ledger.h3,
+        "data_as_of": T,
+        "label": "range",
+        "range_basis": None,
+        "missing": [],
+        "evidence": {"rules_fired": []},
+        "band_def": band(ledger.definition, 3),
+        "base_close": Decimal("17000.5"),
+        "baseline_predictions": dict(BASELINES),
+        "input_series_sha256": series,
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_expected_columns_are_the_stored_content_columns(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    ledger.clock.now = _at(T, 22, 10)
+    ledger.record(ledger.run(), ledger.h3, T, series)
+    (stored,) = ledger.rows("forecast_record")
+    expected = ledger.store.expected_record_columns(**_content(ledger, series))
+    outside = {"forecast_id", "run_id", "created_at", "late"}
+    assert set(expected) == set(stored) - outside
+    assert expected == {key: value for key, value in stored.items() if key not in outside}
+    other = ledger.store.expected_record_columns(**_content(ledger, series, label="bullish"))
+    assert other["content_hash"] != stored["content_hash"]
+
+
+def test_expected_columns_refuse_what_the_write_refuses(ledger: Ledger) -> None:
+    series = ledger.snapshot(T)
+    store = ledger.store
+    with pytest.raises(ForecastStoreError, match="claim_id"):
+        store.expected_record_columns(**_content(ledger, series, claim_id="nope"))
+    with pytest.raises(ForecastStoreError, match="not a stored snapshot"):
+        store.expected_record_columns(**_content(ledger, "f" * 64))
+    with pytest.raises(ForecastStoreError, match="insufficient"):
+        store.expected_record_columns(**_content(ledger, series, label="insufficient"))

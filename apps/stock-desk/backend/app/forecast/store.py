@@ -48,6 +48,11 @@ Read-only queries: ``first_record_at`` and "counts toward m" are the D-2 point
 (m itself also needs the ``work/`` registrations and is not computed here);
 ``recording_claims`` is the latest-registered forward claim per
 ``(scope_kind, horizon)`` (D-6 CG-2); ``d_v`` and ``n_hat`` follow D-8 point 4.
+For the recorder (``recorder.py``): ``now`` (the store clock, the recorder's
+only clock), ``latest_run_before``, ``has_record``, ``stored_records``,
+``snapshot`` and ``expected_record_columns`` -- the last one derives the
+``content_hash`` columns exactly as ``write_record`` does (``_record_columns``,
+one definition), so the D-5 point 6 recomputation compares like with like.
 """
 
 from __future__ import annotations
@@ -147,8 +152,10 @@ class ClaimRow:
     kind: str
     rules_version: str
     rules_sha256: str
+    rules_logic_sha256: str
     definition_version: str
     definition_sha256: str
+    definition_logic_sha256: str
     replaces_claim_id: str | None
     registered_at: datetime
 
@@ -166,9 +173,59 @@ class RunRow:
     ended_at: datetime | None
 
 
+_RUN_SELECT: Final = (
+    "SELECT r.run_id, r.started_at, r.code_commit, r.code_digest, r.runtime_json,"
+    " e.outcome, e.ended_at FROM forecast_run r"
+    " LEFT JOIN forecast_run_end e ON e.run_id = r.run_id"
+)
+
+
+def _run_row(row: Sequence[object]) -> RunRow:
+    return RunRow(
+        run_id=int(str(row[0])),
+        started_at=datetime.fromisoformat(str(row[1])),
+        code_commit=str(row[2]),
+        code_digest=str(row[3]),
+        runtime_json=str(row[4]),
+        outcome=None if row[5] is None else str(row[5]),
+        ended_at=None if row[6] is None else datetime.fromisoformat(str(row[6])),
+    )
+
+
+@dataclass(frozen=True)
+class StoredSnapshot:
+    """A ``forecast_input_series`` row as stored; ``bars`` are the parsed ``bars_json``."""
+
+    content_sha256: str
+    bars: tuple[Mapping[str, object], ...]
+    source: str
+    source_status: str
+    staleness_minutes: int | None
+    reason: str | None
+    raw_timestamp_available: bool
+    captured_at: datetime
+
+
+@dataclass(frozen=True)
+class _RecordContent:
+    """The validated, normalised content of one record, before any ledger read."""
+
+    data_as_of: date
+    label: str
+    range_basis: str | None
+    missing_json: str
+    band: dict[str, object]
+    band_json: str
+    evidence_json: str
+    base_close: str
+    baselines_json: str
+    input_series_sha256: str
+
+
 _CLAIM_COLUMNS: Final = (
     "claim_id, scope_kind, scope_key, horizon, kind, rules_version, rules_sha256, "
-    "definition_version, definition_sha256, replaces_claim_id, registered_at"
+    "definition_version, definition_sha256, replaces_claim_id, registered_at, "
+    "rules_logic_sha256, definition_logic_sha256"
 )
 
 
@@ -185,6 +242,8 @@ def _claim_row(row: Sequence[object]) -> ClaimRow:
         definition_sha256=str(row[8]),
         replaces_claim_id=None if row[9] is None else str(row[9]),
         registered_at=datetime.fromisoformat(str(row[10])),
+        rules_logic_sha256=str(row[11]),
+        definition_logic_sha256=str(row[12]),
     )
 
 
@@ -270,6 +329,10 @@ class ForecastStore:
         if not isinstance(now, datetime) or now.utcoffset() is None:
             raise ForecastStoreError("the store clock must return a timezone-aware datetime")
         return now.astimezone(UTC)
+
+    def now(self) -> datetime:
+        """The store clock's current time in UTC: the recorder's only clock (S-6, K-10)."""
+        return self._now()
 
     # --- writes --------------------------------------------------------------------
 
@@ -494,16 +557,120 @@ class ForecastStore:
         input_series_sha256: str,
     ) -> str:
         """Validate and insert one ``forecast_record``; return its ``forecast_id``."""
+        content = self._record_content(
+            data_as_of=data_as_of,
+            label=label,
+            range_basis=range_basis,
+            missing=missing,
+            evidence=evidence,
+            band_def=band_def,
+            base_close=base_close,
+            baseline_predictions=baseline_predictions,
+            input_series_sha256=input_series_sha256,
+        )
+        band = content.band
+        with self._write() as conn:
+            created = self._now()
+            self._require_open_run(conn, run_id)
+            claim = self._claim(conn, claim_id)
+            if claim is None or claim.kind != CLAIM_KIND:
+                raise ForecastStoreError("claim_id is not a registered forward claim")
+            max_fetched_at = self._check_snapshot(conn, input_series_sha256, data_as_of, created)
+            if label != "insufficient":
+                self._check_band(band, claim, data_as_of)
+            elif band["sigma_d"] is not None:
+                violations = self._band_violations(band, claim)
+                if violations:
+                    raise ForecastStoreError(
+                        f"an insufficient record's sigma_d snapshot has violations: "
+                        f"{list(violations)}"
+                    )
+            cutoff = late_cutoff_at(data_as_of)
+            columns: dict[str, object] = {
+                "forecast_id": new_ulid(created),
+                "run_id": run_id,
+                **_record_columns(claim, content, max_fetched_at),
+                "created_at": canonical_timestamp(created),
+                "late": int(created >= cutoff),
+            }
+            names = ", ".join(columns)
+            marks = ", ".join("?" for _ in columns)
+            conn.execute(
+                f"INSERT INTO forecast_record ({names}) VALUES ({marks})", tuple(columns.values())
+            )
+        return str(columns["forecast_id"])
+
+    def expected_record_columns(
+        self,
+        *,
+        claim_id: str,
+        data_as_of: date,
+        label: Label,
+        range_basis: str | None,
+        missing: Sequence[MissingItem],
+        evidence: Mapping[str, object],
+        band_def: Mapping[str, object],
+        base_close: Decimal | int | str,
+        baseline_predictions: Mapping[str, object],
+        input_series_sha256: str,
+    ) -> dict[str, object]:
+        """The stored columns ``write_record`` would give this content, ``content_hash`` included.
+
+        Read-only: the same normalisation and derivation as :meth:`write_record`
+        (one definition, ``_record_columns``) against the registered claim and
+        the stored snapshot, without the write-time checks and without the
+        columns outside ``content_hash`` (``forecast_id``, ``run_id``,
+        ``created_at``, ``late``). The recorder's D-5 point 6 recomputation
+        compares these with the stored rows.
+        """
+        content = self._record_content(
+            data_as_of=data_as_of,
+            label=label,
+            range_basis=range_basis,
+            missing=missing,
+            evidence=evidence,
+            band_def=band_def,
+            base_close=base_close,
+            baseline_predictions=baseline_predictions,
+            input_series_sha256=input_series_sha256,
+        )
+        with self._read() as conn:
+            claim = self._claim(conn, claim_id)
+            if claim is None or claim.kind != CLAIM_KIND:
+                raise ForecastStoreError("claim_id is not a registered forward claim")
+            row = conn.execute(
+                "SELECT bars_json FROM forecast_input_series WHERE content_sha256 = ?",
+                (input_series_sha256,),
+            ).fetchone()
+        if row is None:
+            raise ForecastStoreError("input_series_sha256 is not a stored snapshot")
+        return _record_columns(claim, content, _max_fetched_at(_stored_bars(str(row[0]))))
+
+    @classmethod
+    def _record_content(
+        cls,
+        *,
+        data_as_of: date,
+        label: Label,
+        range_basis: str | None,
+        missing: Sequence[MissingItem],
+        evidence: Mapping[str, object],
+        band_def: Mapping[str, object],
+        base_close: Decimal | int | str,
+        baseline_predictions: Mapping[str, object],
+        input_series_sha256: str,
+    ) -> _RecordContent:
+        """Validate and normalise a record's content (no ledger read)."""
         if isinstance(data_as_of, datetime) or not isinstance(data_as_of, date):
             raise ForecastStoreError("data_as_of must be a date")
         if label not in get_args(Label):
             raise ForecastStoreError("label is outside its closed list")
         if range_basis is not None:
             _require_text("range_basis", range_basis)
-        missing_json = self._missing_json(missing)
+        missing_json = cls._missing_json(missing)
         if (label == "insufficient") != bool(missing):
             raise ForecastStoreError("label is insufficient exactly when missing is non-empty")
-        band = self._band_def(band_def)
+        band = cls._band_def(band_def)
         band_json = _json_text("band_def", band)
         if label == "insufficient" and (band["up_pct"] is not None or band["down_pct"] is not None):
             raise ForecastStoreError("an insufficient record has null up_pct and down_pct")
@@ -528,60 +695,18 @@ class ForecastStore:
         except ValueError as exc:
             raise ForecastStoreError(f"base_close: {exc}") from None
         _require_sha256("input_series_sha256", input_series_sha256)
-
-        with self._write() as conn:
-            created = self._now()
-            self._require_open_run(conn, run_id)
-            claim = self._claim(conn, claim_id)
-            if claim is None or claim.kind != CLAIM_KIND:
-                raise ForecastStoreError("claim_id is not a registered forward claim")
-            max_fetched_at = self._check_snapshot(conn, input_series_sha256, data_as_of, created)
-            if label != "insufficient":
-                self._check_band(band, claim, data_as_of)
-            elif band["sigma_d"] is not None:
-                violations = self._band_violations(band, claim)
-                if violations:
-                    raise ForecastStoreError(
-                        f"an insufficient record's sigma_d snapshot has violations: "
-                        f"{list(violations)}"
-                    )
-            cutoff = late_cutoff_at(data_as_of)
-            columns: dict[str, object] = {
-                "forecast_id": new_ulid(created),
-                "run_id": run_id,
-                "claim_id": claim.claim_id,
-                "scope_kind": claim.scope_kind,
-                "scope_key": claim.scope_key,
-                "horizon": claim.horizon,
-                "data_as_of": data_as_of.isoformat(),
-                "definition_version": claim.definition_version,
-                "definition_sha256": claim.definition_sha256,
-                "rules_version": claim.rules_version,
-                "rules_sha256": claim.rules_sha256,
-                "label": label,
-                "range_basis": range_basis,
-                "missing_json": missing_json,
-                "evidence_json": evidence_json,
-                "band_def": band_json,
-                "base_close": close,
-                "baseline_predictions_json": baselines_json,
-                "input_series_sha256": input_series_sha256,
-                "inputs_max_fetched_at": max_fetched_at,
-                "created_at": canonical_timestamp(created),
-                "late": int(created >= cutoff),
-                "late_cutoff_at": canonical_timestamp(cutoff),
-                "valid_until_session_estimate": valid_until_session_estimate(
-                    data_as_of, claim.horizon
-                ).isoformat(),
-                "validation_status": VALIDATION_STATUS,
-            }
-            columns["content_hash"] = record_content_hash(columns)
-            names = ", ".join(columns)
-            marks = ", ".join("?" for _ in columns)
-            conn.execute(
-                f"INSERT INTO forecast_record ({names}) VALUES ({marks})", tuple(columns.values())
-            )
-        return str(columns["forecast_id"])
+        return _RecordContent(
+            data_as_of=data_as_of,
+            label=label,
+            range_basis=range_basis,
+            missing_json=missing_json,
+            band=band,
+            band_json=band_json,
+            evidence_json=evidence_json,
+            base_close=close,
+            baselines_json=baselines_json,
+            input_series_sha256=input_series_sha256,
+        )
 
     # --- write validation helpers ---------------------------------------------------
 
@@ -669,7 +794,7 @@ class ForecastStore:
             raise ForecastStoreError("data_as_of is not the snapshot's latest session")
         if not all(bar.final for bar in bars):
             raise ForecastStoreError("the snapshot holds a bar that is not final")
-        return canonical_timestamp(max(bar.fetched_at for bar in bars))
+        return _max_fetched_at(bars)
 
     # --- reads ---------------------------------------------------------------------
 
@@ -777,23 +902,109 @@ class ForecastStore:
     def latest_run(self) -> RunRow | None:
         """The run with the highest ``run_id`` and its end row, if any."""
         with self._read() as conn:
+            row = conn.execute(f"{_RUN_SELECT} ORDER BY r.run_id DESC LIMIT 1").fetchone()
+        return None if row is None else _run_row(row)
+
+    def latest_run_before(
+        self, run_id: int, *, outcomes: Sequence[RunOutcome] | None = None
+    ) -> RunRow | None:
+        """The latest run before ``run_id``; with ``outcomes``, the latest that ended in one."""
+        if isinstance(run_id, bool) or not isinstance(run_id, int):
+            raise ForecastStoreError("run_id must be an int")
+        query = f"{_RUN_SELECT} WHERE r.run_id < ?"
+        params: list[object] = [run_id]
+        if outcomes is not None:
+            if not outcomes or any(o not in get_args(RunOutcome) for o in outcomes):
+                raise ForecastStoreError("outcomes must be a non-empty subset of the outcomes")
+            query += f" AND e.outcome IN ({', '.join('?' for _ in outcomes)})"
+            params.extend(outcomes)
+        with self._read() as conn:
+            row = conn.execute(f"{query} ORDER BY r.run_id DESC LIMIT 1", params).fetchone()
+        return None if row is None else _run_row(row)
+
+    def has_record(self, claim_id: str, data_as_of: date) -> bool:
+        """Whether the claim already has a record for ``data_as_of`` (the UNIQUE key)."""
+        if isinstance(data_as_of, datetime) or not isinstance(data_as_of, date):
+            raise ForecastStoreError("data_as_of must be a date")
+        with self._read() as conn:
             row = conn.execute(
-                "SELECT r.run_id, r.started_at, r.code_commit, r.code_digest, r.runtime_json,"
-                " e.outcome, e.ended_at FROM forecast_run r"
-                " LEFT JOIN forecast_run_end e ON e.run_id = r.run_id"
-                " ORDER BY r.run_id DESC LIMIT 1"
+                "SELECT 1 FROM forecast_record WHERE claim_id = ? AND data_as_of = ?",
+                (claim_id, data_as_of.isoformat()),
+            ).fetchone()
+        return row is not None
+
+    def stored_records(self, claim_id: str) -> list[dict[str, object]]:
+        """Every ``forecast_record`` row of the claim as stored, by ``data_as_of``."""
+        with closing(self._connect()) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM forecast_record WHERE claim_id = ? ORDER BY data_as_of, rowid",
+                (claim_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def snapshot(self, content_sha256: str) -> StoredSnapshot:
+        """The stored snapshot with this ``content_sha256``; raises when there is none."""
+        with self._read() as conn:
+            row = conn.execute(
+                "SELECT bars_json, source, source_status, staleness_minutes, reason,"
+                " raw_timestamp_available, captured_at FROM forecast_input_series"
+                " WHERE content_sha256 = ?",
+                (content_sha256,),
             ).fetchone()
         if row is None:
-            return None
-        return RunRow(
-            run_id=int(row[0]),
-            started_at=datetime.fromisoformat(str(row[1])),
-            code_commit=str(row[2]),
-            code_digest=str(row[3]),
-            runtime_json=str(row[4]),
-            outcome=None if row[5] is None else str(row[5]),
-            ended_at=None if row[6] is None else datetime.fromisoformat(str(row[6])),
+            raise ForecastStoreError("input_series_sha256 is not a stored snapshot")
+        bars = json.loads(str(row[0]))
+        if not isinstance(bars, list) or not all(isinstance(bar, dict) for bar in bars):
+            raise LedgerInconsistentError("bars_json is not an array of bars")
+        return StoredSnapshot(
+            content_sha256=content_sha256,
+            bars=tuple(bars),
+            source=str(row[1]),
+            source_status=str(row[2]),
+            staleness_minutes=None if row[3] is None else int(str(row[3])),
+            reason=None if row[4] is None else str(row[4]),
+            raw_timestamp_available=bool(row[5]),
+            captured_at=datetime.fromisoformat(str(row[6])),
         )
+
+
+def _record_columns(
+    claim: ClaimRow, content: _RecordContent, inputs_max_fetched_at: str
+) -> dict[str, object]:
+    """Every ``content_hash`` column of a record, and the hash (D-2 point 4; one definition)."""
+    columns: dict[str, object] = {
+        "claim_id": claim.claim_id,
+        "scope_kind": claim.scope_kind,
+        "scope_key": claim.scope_key,
+        "horizon": claim.horizon,
+        "data_as_of": content.data_as_of.isoformat(),
+        "definition_version": claim.definition_version,
+        "definition_sha256": claim.definition_sha256,
+        "rules_version": claim.rules_version,
+        "rules_sha256": claim.rules_sha256,
+        "label": content.label,
+        "range_basis": content.range_basis,
+        "missing_json": content.missing_json,
+        "evidence_json": content.evidence_json,
+        "band_def": content.band_json,
+        "base_close": content.base_close,
+        "baseline_predictions_json": content.baselines_json,
+        "input_series_sha256": content.input_series_sha256,
+        "inputs_max_fetched_at": inputs_max_fetched_at,
+        "late_cutoff_at": canonical_timestamp(late_cutoff_at(content.data_as_of)),
+        "valid_until_session_estimate": valid_until_session_estimate(
+            content.data_as_of, claim.horizon
+        ).isoformat(),
+        "validation_status": VALIDATION_STATUS,
+    }
+    columns["content_hash"] = record_content_hash(columns)
+    return columns
+
+
+def _max_fetched_at(bars: Sequence[_StoredBar]) -> str:
+    """``inputs_max_fetched_at``: the latest ``fetched_at`` of a stored snapshot."""
+    return canonical_timestamp(max(bar.fetched_at for bar in bars))
 
 
 @dataclass(frozen=True)
