@@ -5,7 +5,9 @@ dataclass field or parameter whose name matches ``forward_return*``,
 ``excess_gross``, ``excess_net``, ``label_return*`` or ``round_trip_cost`` may
 only be *defined* in ``app/backtest/basket.py``, ``app/backtest/sector_eval.py``,
 ``app/research/**`` -- plus the pre-v4 whitelist ``app/backtest/event_study.py``
-(its ``forward_returns`` is unreachable from ``app.sectors`` by C-2).
+(its ``forward_returns`` is unreachable from ``app.sectors`` by C-2) and
+``app/forecast/scoring.py`` (the provisional comparison; ADR-0025 C-15 revision,
+ADR-0030 D-1 point 3).
 """
 
 from __future__ import annotations
@@ -21,8 +23,15 @@ from tests.import_graph import APP_ROOT
 PATTERN = re.compile(
     r"^(forward_return\w*|excess_gross|excess_net|label_return\w*|round_trip_cost)$"
 )
+#: ``forecast/scoring.py``: the C-15 whitelist entry as ADR-0025 revised it and
+#: ADR-0030 D-1 point 3 / D-5 point 5 restate it (the provisional comparison).
 ALLOWED_FILES = frozenset(
-    {"backtest/basket.py", "backtest/sector_eval.py", "backtest/event_study.py"}
+    {
+        "backtest/basket.py",
+        "backtest/sector_eval.py",
+        "backtest/event_study.py",
+        "forecast/scoring.py",
+    }
 )
 ALLOWED_DIRS = ("research",)
 
@@ -83,6 +92,17 @@ def test_the_allowed_files_really_define_them() -> None:
     assert {"round_trip_cost", "excess_gross", "excess_net", "forward_return"} <= basket
     assert {"excess_net"} <= evaluator
     assert "forward_returns" in defined_names(APP_ROOT / "backtest" / "event_study.py")
+    assert "forward_return" in defined_names(APP_ROOT / "forecast" / "scoring.py")
+
+
+def test_in_the_forecast_package_only_scoring_defines_them() -> None:
+    # ADR-0030 D-1 point 3: forward return identifiers only in app/forecast/scoring.py.
+    holders = {
+        path.name
+        for path in sorted((APP_ROOT / "forecast").rglob("*.py"))
+        if any(PATTERN.match(name) for name in defined_names(path))
+    }
+    assert holders == {"scoring.py"}
 
 
 @pytest.mark.parametrize(
