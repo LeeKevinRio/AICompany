@@ -88,6 +88,7 @@ from app.dirdef.definition import (
     definition_sha256,
 )
 from app.dirdef.hashing import canonical_json
+from app.forecast import claims as claim_keys  # a module import: claims.py imports this module
 from app.forecast.band import labeled_snapshot_violations
 from app.forecast.canonical import (
     bars_json,
@@ -96,7 +97,6 @@ from app.forecast.canonical import (
     content_sha256,
     record_content_hash,
 )
-from app.forecast.claims import claim_id as make_claim_id
 from app.forecast.definitions import get_definition
 from app.forecast.errors import (
     LabeledThresholdSnapshotIncompleteError,
@@ -656,7 +656,7 @@ class ForecastStore:
         if not isinstance(definition, DirectionDefinition):
             raise ForecastStoreError("definition must be a DirectionDefinition")
         try:
-            new_id = make_claim_id(
+            new_id = claim_keys.claim_id(
                 scope_kind=SCOPE_KIND,
                 horizon=horizon,
                 rules_version=rules_version,

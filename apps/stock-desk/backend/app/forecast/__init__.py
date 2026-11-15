@@ -15,8 +15,9 @@ Contents (ADR-0027 D-1):
   plus the violation list from ``errors.py``);
 * ``definitions.py`` (B2) -- the one reader of the published dirdef and rule set
   registries in ``app.dirdef``; both are empty, so every lookup raises;
-* ``claims.py`` (B2) -- the claim id and m / m_eff pure functions (no
-  registration, no CLI);
+* ``claims.py`` (B2; NM-5) -- the claim id and m / m_eff pure functions, and
+  the operator registration CLI ``python -m app.forecast.claims register``
+  (ADR-0030 D-1 point 3), which refuses the production database;
 * ``schema.py`` (NM-5) -- the DDL of the five append-only tables (ADR-0030
   D-2) and the ``sqlite_master`` completeness check;
 * ``canonical.py`` (NM-5) -- bar normalisation, ``content_sha256``,

@@ -35,12 +35,22 @@ The definition scan enumerates string values with
 uses, the one enumeration in ``app/`` -- and a hit raises
 :class:`BannedPhraseInDefinitionError`.
 
+For the claim registration CLI (``app.forecast.claims``; ADR-0030 D-6 CG-2):
+:func:`get_rules_bytes` returns the registered rule file bytes (re-read and
+checked against ``rules_sha256``), and :func:`registration_phrase_scan` runs
+the pre-registration banned phrase check -- every string value of the rule set
+and the definition, NFKC-normalised with whitespace removed -- with the same
+``BANNED_PHRASES``.
+
 Test seams (named in the tests): the two registry names below, the
 :func:`_read_rules_bytes` reader, and the two cache dicts.
 """
 
 from __future__ import annotations
 
+import hashlib
+import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, get_args
 
@@ -151,6 +161,72 @@ def get_ruleset(rules_version: str) -> OutlookRuleSet:
         raise PublishedVersionRejectedError(f"rule set rejected: {exc}") from exc
     _RULESET_CACHE[rules_version] = ruleset
     return ruleset
+
+
+def get_rules_bytes(rules_version: str) -> bytes:
+    """The rule file bytes of a version :func:`get_ruleset` accepts, as registered.
+
+    For the claim registration (``forecast_claim_registry.rules_bytes``). The
+    file is read again and its sha256 must still equal the registered
+    ``rules_sha256``, so the bytes stored are the bytes that were checked.
+    """
+    get_ruleset(rules_version)
+    entry = get_ruleset_entry(rules_version)
+    try:
+        data = _read_rules_bytes(entry.horizon)
+    except OSError as exc:
+        raise PublishedVersionRejectedError(
+            f"rule file of horizon {entry.horizon} cannot be read ({type(exc).__name__})"
+        ) from exc
+    if hashlib.sha256(data).hexdigest() != entry.rules_sha256:
+        raise PublishedVersionRejectedError("rule file no longer matches its rules_sha256")
+    return data
+
+
+@dataclass(frozen=True)
+class PhraseScan:
+    """The CG-2 pre-registration banned phrase check (ADR-0030 D-6) of one claim."""
+
+    rules_strings: int
+    definition_strings: int
+    phrases: int
+    #: ``"<rules|definition>: <phrase>"`` for each string holding a phrase.
+    hits: tuple[str, ...]
+
+
+def squeeze(text: str) -> str:
+    """NFKC-normalised ``text`` with every whitespace character removed."""
+    return "".join(unicodedata.normalize("NFKC", text).split())
+
+
+def registration_phrase_scan(
+    ruleset: OutlookRuleSet, definition: DirectionDefinition
+) -> PhraseScan:
+    """Every string value of the rule set and the definition against every phrase.
+
+    ADR-0030 D-6 CG-2: strings that may be rendered later are NFKC-normalised
+    with whitespace removed before the comparison (so a spaced or compatibility
+    form of a phrase is a hit). Every string value is scanned -- a superset of
+    what can be rendered. No phrases to scan with is a rejection.
+    """
+    if not BANNED_PHRASES:
+        raise PublishedVersionRejectedError("no banned phrases to scan with: rejected")
+    phrases = [squeeze(phrase) for phrase in BANNED_PHRASES]
+    rules = string_values(ruleset)
+    texts = string_values(definition)
+    hits = tuple(
+        f"{where}: {phrase}"
+        for where, values in (("rules", rules), ("definition", texts))
+        for value in values
+        for phrase in phrases
+        if phrase in squeeze(value)
+    )
+    return PhraseScan(
+        rules_strings=len(rules),
+        definition_strings=len(texts),
+        phrases=len(phrases),
+        hits=hits,
+    )
 
 
 def get_ruleset_entry(rules_version: str) -> PublishedRuleset:

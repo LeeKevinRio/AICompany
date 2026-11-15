@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 import sys
 from pathlib import Path
 
@@ -1006,13 +1007,70 @@ def test_the_forecast_package_file_imports_nothing() -> None:
     assert _imports_of_source(source) == set()
 
 
-def test_claims_is_pure_for_now() -> None:
-    path = FORECAST_ROOT / "claims.py"
-    source = path.read_text(encoding="utf-8")
-    assert _dirdef_import_violations(source, _module_name(path)) == []
-    names = {getattr(n, "id", None) for n in ast.walk(ast.parse(source))}
-    assert "__name__" not in names  # no ``if __name__ == "__main__"`` CLI block yet
-    assert _io_violations(source) == []
+#: The pure functions of claims.py (ADR-0027 D-10): no IO in their bodies.
+CLAIMS_PURE_FUNCTIONS = ("claim_id", "count_m", "m_eff")
+
+
+def test_claims_pure_functions_stay_pure() -> None:
+    tree = ast.parse((FORECAST_ROOT / "claims.py").read_text(encoding="utf-8"))
+    bodies = {
+        node.name: ast.unparse(node)
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in CLAIMS_PURE_FUNCTIONS
+    }
+    assert set(bodies) == set(CLAIMS_PURE_FUNCTIONS)
+    assert {name: v for name, body in bodies.items() if (v := _io_violations(body))} == {}
+
+
+def test_claims_imports_the_stdlib_dirdef_and_three_forecast_modules_only() -> None:
+    # ADR-0030 D-1 point 3: the registration CLI lives in claims.py and writes through
+    # the store; it reads definitions for the rule set, its bytes and the definition.
+    tree = ast.parse((FORECAST_ROOT / "claims.py").read_text(encoding="utf-8"))
+    app_imports: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            assert all(_is_stdlib(a.name) for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            assert node.level == 0
+            if _top_level(module) == "app":
+                app_imports |= {f"{module}.{a.name}" for a in node.names}
+            else:
+                assert _is_stdlib(module) or module == "__future__", module
+    assert app_imports == {
+        "app.dirdef.definition.DEFINITION_VERSION_PATTERN",
+        "app.dirdef.definition.DirectionDefinition",
+        "app.dirdef.definition.Horizon",
+        "app.dirdef.rules.rules_logic_sha256",
+        "app.forecast.definitions",
+        "app.forecast.store",
+        "app.forecast.canonical.APP_ROOT",
+        "app.forecast.canonical.canonical_timestamp",
+    }
+
+
+def test_claims_writes_only_through_the_store_and_has_a_plain_main_block() -> None:
+    source = (FORECAST_ROOT / "claims.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "register_claim" in calls
+    assert not calls & {"execute", "executemany", "executescript", "connect"}
+    sql_like = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and re.search(r"\b(INSERT|UPDATE|DELETE|REPLACE)\b\s", node.value)
+    ]
+    assert sql_like == []
+    mains = [n for n in tree.body if isinstance(n, ast.If)]
+    assert [ast.unparse(n) for n in mains] == [
+        "if __name__ == '__main__':\n    raise SystemExit(main())"
+    ]
 
 
 # --- outlook: volatility, basket (FL-55, FL-56, FL-78 (e)) ---------------------------------

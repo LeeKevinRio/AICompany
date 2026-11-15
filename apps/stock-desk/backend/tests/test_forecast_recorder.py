@@ -1678,9 +1678,9 @@ def test_k4_the_recorder_calls_the_batch_once() -> None:
     assert len(calls) == 1
 
 
-def test_k4_no_app_module_registers_a_claim_yet() -> None:
-    # The registration CLI (claims.py) is a later batch.
-    assert _callers("register_claim", _app_sources()) == set()
+def test_k4_only_the_registration_cli_registers_a_claim() -> None:
+    # ADR-0030 K-4: the write functions are called by the recorder and the CLI only.
+    assert _callers("register_claim", _app_sources()) == {"forecast/claims.py"}
 
 
 def test_the_caller_scan_has_teeth() -> None:
