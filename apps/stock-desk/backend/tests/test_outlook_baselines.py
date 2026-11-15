@@ -14,19 +14,22 @@ Synthetic bars only. Cells:
 
 from __future__ import annotations
 
+import ast
 import math
 import statistics
 from collections.abc import Sequence
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from app.dirdef.definition import DirectionDefinition
-from app.outlook.baselines import compute_baselines, threshold_label
+from app.outlook.baselines import compute_baselines, threshold_label, z_score
 from app.outlook.inputs import FutureBarError, SnapshotBar
 from tests.dirdef_helpers import DIRDEF_V1_0_G7
+from tests.import_graph import APP_ROOT
 from tests.outlook_helpers import (
     bars_from_closes,
     definition,
@@ -67,6 +70,58 @@ def _baselines(
 )
 def test_threshold_label(z: float, label: str) -> None:
     assert threshold_label(z, k=0.43, eps=1e-12) == label
+
+
+# --- z_score (qa batch 5 supplement: one z for B1, B2 and the provisional comparison) --------
+
+
+@pytest.mark.parametrize("horizon", [3, 5])
+@pytest.mark.parametrize("ret", [0.0, 0.0123, -0.0456, 1e-300, -7.5])
+@pytest.mark.parametrize("sigma", [0.01, 0.0153, 3e-5])
+def test_z_score_is_the_inline_formula_bit_for_bit(horizon: int, ret: float, sigma: float) -> None:
+    # The expression B1, B2 and scoring each wrote inline before it was shared.
+    assert z_score(ret, sigma_d=sigma, horizon=horizon) == ret / (sigma * math.sqrt(horizon))
+
+
+def _sqrt_owners(path: Path) -> list[str]:
+    """The functions of ``path`` that reference ``sqrt`` (``"<module>"`` outside any)."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+
+    def is_sqrt(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Attribute) and node.attr == "sqrt") or (
+            isinstance(node, ast.Name) and node.id == "sqrt"
+        )
+
+    functions = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+    owners = [f.name for f in functions if any(is_sqrt(n) for n in ast.walk(f))]
+    inside = {id(n) for f in functions for n in ast.walk(f)}
+    if any(is_sqrt(n) and id(n) not in inside for n in ast.walk(tree)):
+        owners.append("<module>")
+    return owners
+
+
+def _calls(path: Path, name: str) -> bool:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == name
+        for n in ast.walk(tree)
+    )
+
+
+def test_the_z_of_baselines_and_scoring_is_computed_by_z_score_only() -> None:
+    baselines = APP_ROOT / "outlook" / "baselines.py"
+    scoring = APP_ROOT / "forecast" / "scoring.py"
+    assert _sqrt_owners(baselines) == ["z_score"]
+    assert _sqrt_owners(scoring) == []
+    assert _calls(baselines, "z_score") and _calls(scoring, "z_score")
+
+
+def test_the_sqrt_scan_has_teeth(tmp_path: Path) -> None:
+    source = tmp_path / "m.py"
+    source.write_text("import math\ndef f(r, s, h):\n    return r / (s * math.sqrt(h))\n")
+    assert _sqrt_owners(source) == ["f"]
+    source.write_text("from math import sqrt\nX = 1 / sqrt(2)\n")
+    assert _sqrt_owners(source) == ["<module>"]
 
 
 # --- B1 ----------------------------------------------------------------------------------------

@@ -32,7 +32,8 @@ snapshot, and the date it reads as today.
   The realised label is the pre-registration section 2.1 rule on
   ``z = ln(c_{T+h} / c_T) / (sigma_d * sqrt(h))`` with the record's own
   ``K_h``, ``EPS`` and ``sigma_d`` (``app.outlook.baselines.threshold_label``,
-  the single definition of the label rule; ``app.outlook.volatility.log_return``).
+  the single definition of the label rule; ``app.outlook.baselines.z_score``,
+  the z B1 and B2 use; ``app.outlook.volatility.log_return``).
 
 Isolation (ADR-0030 D-5 point 5, K-7): nothing here is written to any table;
 ``store.py``, ``recorder.py`` and ``schema.py`` do not import this module, and
@@ -45,7 +46,6 @@ are defined in this module only in ``app/forecast``.
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -55,7 +55,7 @@ from app.data.session_calendar import is_final
 from app.dirdef.definition import DirectionLabel
 from app.forecast.band import threshold_inputs
 from app.forecast.canonical import canonical_price
-from app.outlook.baselines import UNAVAILABLE, threshold_label
+from app.outlook.baselines import UNAVAILABLE, threshold_label, z_score
 from app.outlook.inputs import SNAPSHOT_MARKET, MarketSnapshot
 from app.outlook.volatility import log_return
 
@@ -205,7 +205,7 @@ def provisional_comparison(
     forward_return = log_return(float(window[-1].close), float(window[0].close))
     if forward_return is None:
         return _none("price_unusable")
-    z = forward_return / (threshold.sigma_d * math.sqrt(horizon))
+    z = z_score(forward_return, sigma_d=threshold.sigma_d, horizon=horizon)
     realized = threshold_label(z, k=threshold.K_h, eps=threshold.EPS)
     matches: list[tuple[str, bool | None]] = [
         (key, None if label == UNAVAILABLE else label == realized)

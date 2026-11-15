@@ -10,6 +10,8 @@ caller passes in. Nothing here reads a registry, a clock or a database.
 * :func:`threshold_label` -- the pre-registration §2.1 label rule
   (``z > K + EPS`` bullish, ``z < -K - EPS`` bearish, otherwise range), the
   single definition in ``app/``;
+* :func:`z_score` -- ``ret / (sigma_d * sqrt(h))``, the z every baseline and the
+  provisional comparison use, defined once;
 * B1 -- the label of the realised window (T-h, T]: ``z = ln(c_0 / c_h) /
   (sigma_d(T-h) * sqrt(h))``, sigma_d(T-h) over ``r_h .. r_{h+W-1}``.
   Unavailable reasons, first that holds: ``E-BARS-SHORT`` (fewer than
@@ -57,6 +59,15 @@ def threshold_label(z: float, *, k: float, eps: float) -> DirectionLabel:
     return "range"
 
 
+def z_score(ret: float, *, sigma_d: float, horizon: int) -> float:
+    """The §2.1 z of an h-day log return: ``ret / (sigma_d * sqrt(h))``, the single definition.
+
+    B1, B2 and the provisional comparison (``app.forecast.scoring``) all call it,
+    so their z cannot drift apart.
+    """
+    return ret / (sigma_d * math.sqrt(horizon))
+
+
 def _close(closes_by_lag: Sequence[float], lag: int) -> float | None:
     return closes_by_lag[lag] if lag < len(closes_by_lag) else None
 
@@ -70,7 +81,7 @@ def _realised(
     ret = log_return(later, _close(closes_by_lag, anchor))
     if ret is None or sigma.value is None:
         return None, None, sigma
-    z = ret / (sigma.value * math.sqrt(horizon))
+    z = z_score(ret, sigma_d=sigma.value, horizon=horizon)
     return threshold_label(z, k=definition.k_for(horizon), eps=definition.EPS), z, sigma
 
 
