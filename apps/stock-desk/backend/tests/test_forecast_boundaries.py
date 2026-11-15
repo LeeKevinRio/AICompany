@@ -249,6 +249,7 @@ def test_the_scanned_packages_hold_exactly_the_b1_and_b2_modules() -> None:
         "outlook/__init__.py",
         "outlook/baselines.py",
         "outlook/basket.py",
+        "outlook/engine.py",
         "outlook/inputs.py",
         "outlook/missing.py",
         "outlook/volatility.py",
