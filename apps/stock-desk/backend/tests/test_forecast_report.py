@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import math
 import re
 import shutil
@@ -132,14 +133,16 @@ def _publish(monkeypatch: pytest.MonkeyPatch) -> None:
 class Ledger:
     """A ``tmp_path`` ledger: two claims, :data:`RUNS` recorder runs on the last sessions."""
 
-    def __init__(self, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch, *, bars_count: int = 330
+    ) -> None:
         root.mkdir(parents=True, exist_ok=True)
         self.path = file_ledger(root)
         self.clock = FakeClock(datetime(2026, 10, 1, 9, tzinfo=TAIPEI))
         self.store = ForecastStore(self.path, clock=self.clock)
         _publish(monkeypatch)
         self.claims = [self._register(3), self._register(5)]
-        bars = _series()
+        bars = _series(bars_count)
         service = FakeIndexService(bars)
         resolver: IndexServiceResolver = {"TW": service}
         self.sessions = [b.date for b in bars][-RUNS:]
@@ -189,6 +192,26 @@ def ledger(built: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     return copy
 
 
+#: A series long enough for the rules (R = 121) but too short for B2's 120 votes.
+SHORT_BARS = 130
+
+
+@pytest.fixture(scope="module")
+def built_short(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+    """A ledger whose every B2 is ``unavailable`` (``b2_realized_short``); tests copy it."""
+    with pytest.MonkeyPatch.context() as patch:
+        root = tmp_path_factory.mktemp("report-short")
+        yield Ledger(root, patch, bars_count=SHORT_BARS).path
+
+
+@pytest.fixture
+def short_ledger(built_short: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    copy = tmp_path / "short-ledger.db"
+    shutil.copy2(built_short, copy)
+    _publish(monkeypatch)
+    return copy
+
+
 def _run(path: Path, *args: str, capsys: pytest.CaptureFixture[str]) -> tuple[int, list[str]]:
     code = report.main([args[0], "--db", str(path), *args[1:]], clock=lambda: NOW)
     return code, capsys.readouterr().out.splitlines()
@@ -227,6 +250,9 @@ def d4_violations(lines: Sequence[str], *, unpassed_hashes: set[str]) -> list[st
                 found.append(f"label of an unpassed record: {line}")
         if "n̂" in line and N_HAT_NOTE not in line:
             found.append(f"n-hat without its note: {line}")
+        for cell in re.finditer(r"(?<![A-Za-z0-9_])B[1268]=unavailable(?::([^\s（]*))?", line):
+            if cell.group(1) in (None, "", "None"):
+                found.append(f"unavailable without its reason: {line}")
         text = line
         for fixed in FIXED_TEXTS:
             text = text.replace(fixed, "")
@@ -269,8 +295,34 @@ def test_the_d4_checker_lets_the_fixed_texts_and_n_hat_through() -> None:
         scoring.PROVISIONAL_BANNER,
         f"n̂=3（{N_HAT_NOTE}）",
         "  T=2026-11-02 late=0 B1=range B2=unavailable:b2_realized_short B6=range B8=x 模型=y",
+        "  T=2026-11-02 h=3 late=0 實現=x B1=unavailable:E-BARS-SHORT（不適用）"
+        " B2=unavailable:b2_realized_short（不適用） B6=range（符合） B8=x（不符合）"
+        " 模型=y（符合）",
     ]
     assert d4_violations(lines, unpassed_hashes=set()) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(
+            "  T=2026-11-02 h=3 late=0 實現=x B1=x（符合） B2=unavailable（不適用）"
+            " B6=x（符合） B8=x（符合） 模型=x（符合）",
+            id="compare-without-reason",
+        ),
+        pytest.param("  T=2026-11-02 B1=x B2=unavailable B6=x B8=x 模型=x", id="records-bare"),
+        pytest.param("  T=2026-11-02 B1=x B2=unavailable: B6=x B8=x 模型=x", id="empty-reason"),
+        pytest.param("  T=2026-11-02 B1=x B2=unavailable:None B6=x B8=x 模型=x", id="none-reason"),
+        pytest.param("  T=2026-11-02 B1=unavailable B2=x B6=x B8=x 模型=x", id="b1"),
+        pytest.param("  T=2026-11-02 B1=x B2=x B6=x B8=unavailable", id="b8-at-the-end"),
+    ],
+)
+def test_the_d4_checker_catches_an_unavailable_baseline_without_its_reason(line: str) -> None:
+    # D-4 point 3: an unavailable baseline is listed with its reason.
+    assert any(
+        v.startswith("unavailable without its reason")
+        for v in d4_violations([line], unpassed_hashes=set())
+    )
 
 
 # --- records ----------------------------------------------------------------------------------
@@ -355,6 +407,72 @@ def test_compare_rows_hold_every_party_in_one_format(
     for line in [line for line in lines if "實現=" in line]:
         cells = re.findall(r"(B1|B2|B6|B8|模型)=(\S+?)（(符合|不符合|不適用)）", line)
         assert [cell[0] for cell in cells] == ["B1", "B2", "B6", "B8", "模型"]
+
+
+def _baseline_cells(line: str) -> dict[str, str]:
+    return dict(re.findall(r"(B1|B2|B6|B8)=([^\s（]+)", line))
+
+
+def _t(line: str) -> str:
+    found = re.search(r"T=(\S+)", line)
+    assert found is not None
+    return found.group(1)
+
+
+def test_compare_lists_an_unavailable_b2_with_its_reason_as_records_does(
+    short_ledger: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Every B2 of this ledger is unavailable (b2_realized_short); no model label is insufficient.
+    rows = _records(short_ledger)
+    assert all(r["label"] != "insufficient" for r in rows)
+    reasons = {json.loads(str(r["baseline_predictions_json"]))["B2"].get("reason") for r in rows}
+    assert reasons == {"b2_realized_short"}
+    code, lines = _run(short_ledger, "compare", capsys=capsys)
+    assert code == report.EXIT_OK
+    compared = [line for line in lines if "實現=" in line]
+    assert compared
+    assert all("B2=unavailable:b2_realized_short（不適用）" in line for line in compared)
+    unpassed = _unpassed_hashes(short_ledger, report.taipei_date(NOW))
+    assert d4_violations(lines, unpassed_hashes=unpassed) == []
+    # The negative case: the same output with the reason dropped (the batch 5 defect).
+    dropped = [line.replace("unavailable:b2_realized_short", "unavailable") for line in lines]
+    assert any(
+        v.startswith("unavailable without its reason")
+        for v in d4_violations(dropped, unpassed_hashes=unpassed)
+    )
+    # One format in both subcommands: compare's baseline cells are the records' own.
+    _, record_lines = _run(short_ledger, "records", capsys=capsys)
+    h3_claim = next(i for i, line in enumerate(record_lines) if "|h3|" in line)
+    h5_claim = next(i for i, line in enumerate(record_lines) if "|h5|" in line)
+    listed = {
+        _t(line): _baseline_cells(line) for line in record_lines[h3_claim:h5_claim] if "B1=" in line
+    }
+    h3 = [line for line in compared if " h=3 " in line]
+    assert h3
+    for line in h3:
+        assert _baseline_cells(line) == listed[_t(line)]
+
+
+def test_a_stored_unavailable_baseline_without_its_reason_is_never_printed_bare(
+    short_ledger: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Negative case: a malformed stored B2 is refused by records and unreadable in compare.
+    for row in _records(short_ledger):
+        text = str(row["baseline_predictions_json"]).replace(',"reason":"b2_realized_short"', "")
+        assert text != row["baseline_predictions_json"]
+        _tamper(
+            short_ledger,
+            "forecast_record",
+            "UPDATE forecast_record SET baseline_predictions_json = ? WHERE forecast_id = ?",
+            (text, row["forecast_id"]),
+        )
+    code, lines = _run(short_ledger, "records", capsys=capsys)
+    assert code == report.EXIT_UNREADABLE and lines == []
+    code, lines = _run(short_ledger, "compare", capsys=capsys)
+    assert code == report.EXIT_OK
+    rows = [line for line in lines if line.startswith("  T=")]
+    assert rows and all("無法對照：record_unreadable" in line for line in rows)
+    assert d4_violations(lines, unpassed_hashes=set()) == []
 
 
 def test_compare_order_does_not_follow_the_results(

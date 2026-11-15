@@ -8,8 +8,11 @@ snapshot, and the date it reads as today.
 * :func:`provisional_comparison` -- the realised label of (T, T+h] and, for
   the model and each of the four baselines B1, B2, B6, B8, whether its label
   equals it. ``None`` for a party is "not compared": an ``insufficient``
-  model label or an ``unavailable`` baseline. When the input cannot support a
-  comparison the result is "no comparison" with one reason, first that holds:
+  model label or an ``unavailable`` baseline. A baseline is kept whole
+  (:class:`BaselinePrediction`: its label, and its reason exactly when it is
+  ``unavailable``), so every output can list the reason (ADR-0030 D-4
+  point 3). When the input cannot support a comparison the result is "no
+  comparison" with one reason, first that holds:
 
   - ``valid_until_not_passed`` -- ``today`` is not after
     ``valid_until_session_estimate`` (AV-18);
@@ -85,6 +88,34 @@ class RecordUnreadableError(ValueError):
 
 
 @dataclass(frozen=True)
+class BaselinePrediction:
+    """One stored baseline (B1, B2, B6, B8): a label, and a reason exactly when ``unavailable``."""
+
+    label: str
+    reason: str | None
+
+    @classmethod
+    def from_stored(cls, value: object) -> BaselinePrediction:
+        """One ``baseline_predictions_json`` entry; ``TypeError`` / ``KeyError`` / ``ValueError``.
+
+        ADR-0030 D-4 point 1: a baseline is a label, or ``unavailable`` with a
+        reason. A reason that is missing, empty or not text on an
+        ``unavailable`` entry, or any reason on a labelled one, is malformed.
+        """
+        if not isinstance(value, Mapping):
+            raise TypeError("a baseline prediction is not an object")
+        label = value["label"]
+        reason = value.get("reason")
+        if not isinstance(label, str):
+            raise TypeError("a baseline label is not text")
+        if (label == UNAVAILABLE) != (reason is not None):
+            raise ValueError("a reason is stored exactly when a baseline is unavailable")
+        if reason is not None and (not isinstance(reason, str) or not reason):
+            raise ValueError("an unavailable baseline's reason is not text")
+        return cls(label=label, reason=reason)
+
+
+@dataclass(frozen=True)
 class ComparedRecord:
     """The columns of one stored record the comparison reads."""
 
@@ -93,7 +124,8 @@ class ComparedRecord:
     label: str
     band_def: Mapping[str, object]
     base_close: str
-    baseline_labels: Mapping[str, str]
+    #: B1, B2, B6, B8 in :data:`BASELINES` order, each whole (label and reason).
+    baseline_predictions: Mapping[str, BaselinePrediction]
     valid_until_session_estimate: date
 
     @classmethod
@@ -102,7 +134,7 @@ class ComparedRecord:
         try:
             band_def = json.loads(str(row["band_def"]))
             baselines = json.loads(str(row["baseline_predictions_json"]))
-            labels = {key: str(baselines[key]["label"]) for key in BASELINES}
+            predictions = {key: BaselinePrediction.from_stored(baselines[key]) for key in BASELINES}
             if not isinstance(band_def, dict):
                 raise TypeError("band_def is not an object")
             return cls(
@@ -111,7 +143,7 @@ class ComparedRecord:
                 label=str(row["label"]),
                 band_def=band_def,
                 base_close=str(row["base_close"]),
-                baseline_labels=labels,
+                baseline_predictions=predictions,
                 valid_until_session_estimate=date.fromisoformat(
                     str(row["valid_until_session_estimate"])
                 ),
@@ -177,7 +209,7 @@ def provisional_comparison(
     realized = threshold_label(z, k=threshold.K_h, eps=threshold.EPS)
     matches: list[tuple[str, bool | None]] = [
         (key, None if label == UNAVAILABLE else label == realized)
-        for key, label in ((key, record.baseline_labels[key]) for key in BASELINES)
+        for key, label in ((key, record.baseline_predictions[key].label) for key in BASELINES)
     ]
     matches.append((MODEL, None if record.label == "insufficient" else record.label == realized))
     return ProvisionalComparison(realized=realized, matches=tuple(matches), reason=None)

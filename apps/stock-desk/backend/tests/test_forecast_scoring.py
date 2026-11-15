@@ -19,7 +19,12 @@ from typing import Any
 import pytest
 
 from app.forecast import scoring
-from app.forecast.scoring import ComparedRecord, RecordUnreadableError, provisional_comparison
+from app.forecast.scoring import (
+    BaselinePrediction,
+    ComparedRecord,
+    RecordUnreadableError,
+    provisional_comparison,
+)
 from app.outlook.inputs import MarketSnapshot, SnapshotBar
 from tests.import_graph import APP_ROOT, offenders, reachable_app_modules
 from tests.outlook_helpers import TAIPEI
@@ -87,7 +92,12 @@ def _record(**overrides: Any) -> ComparedRecord:
             "down_pct": 0.1,
         },
         "base_close": "10000",
-        "baseline_labels": {"B1": "range", "B2": "unavailable", "B6": "range", "B8": "bullish"},
+        "baseline_predictions": {
+            "B1": BaselinePrediction(label="range", reason=None),
+            "B2": BaselinePrediction(label="unavailable", reason="b2_realized_short"),
+            "B6": BaselinePrediction(label="range", reason=None),
+            "B8": BaselinePrediction(label="bullish", reason=None),
+        },
         "valid_until_session_estimate": _sessions(T, 4)[-1],
     }
     values.update(overrides)
@@ -206,16 +216,52 @@ def test_a_stored_row_reads_as_a_compared_record() -> None:
         "valid_until_session_estimate": "2026-11-05",
     }
     record = ComparedRecord.from_row(row)
-    assert record.baseline_labels == {
-        "B1": "range",
-        "B2": "unavailable",
-        "B6": "range",
-        "B8": "bearish",
+    # The baselines are kept whole: an unavailable one keeps its reason (D-4 point 3).
+    assert record.baseline_predictions == {
+        "B1": BaselinePrediction(label="range", reason=None),
+        "B2": BaselinePrediction(label="unavailable", reason="b2_realized_short"),
+        "B6": BaselinePrediction(label="range", reason=None),
+        "B8": BaselinePrediction(label="bearish", reason=None),
     }
     assert record.valid_until_session_estimate == date(2026, 11, 5)
     for broken in ({"band_def": "[]"}, {"baseline_predictions_json": "{}"}, {"horizon": "x"}):
         with pytest.raises(RecordUnreadableError):
             ComparedRecord.from_row({**row, **broken})
+
+
+@pytest.mark.parametrize(
+    "b2",
+    [
+        pytest.param({"label": "unavailable"}, id="unavailable-without-reason"),
+        pytest.param({"label": "unavailable", "reason": None}, id="null-reason"),
+        pytest.param({"label": "unavailable", "reason": ""}, id="empty-reason"),
+        pytest.param({"label": "unavailable", "reason": 3}, id="reason-not-text"),
+        pytest.param({"label": "range", "reason": "b2_realized_short"}, id="reason-on-a-label"),
+        pytest.param({"label": None}, id="label-not-text"),
+        pytest.param("unavailable", id="not-an-object"),
+    ],
+)
+def test_a_malformed_baseline_makes_the_record_unreadable(b2: object) -> None:
+    # Negative cases: a baseline the outputs could not list as D-4 point 3 requires.
+    baselines = {
+        "B1": {"label": "range"},
+        "B2": b2,
+        "B6": {"label": "range"},
+        "B8": {"label": "bearish"},
+    }
+    row = {
+        "data_as_of": "2026-11-02",
+        "horizon": 3,
+        "label": "range",
+        "band_def": json.dumps(dict(_record().band_def)),
+        "base_close": "10000",
+        "baseline_predictions_json": json.dumps(baselines),
+        "valid_until_session_estimate": "2026-11-05",
+    }
+    with pytest.raises(RecordUnreadableError):
+        ComparedRecord.from_row(row)
+    with pytest.raises((TypeError, KeyError, ValueError)):
+        BaselinePrediction.from_stored(b2)
 
 
 # --- K-7 isolation, C-15 ------------------------------------------------------------------

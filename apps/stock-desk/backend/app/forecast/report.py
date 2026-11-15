@@ -33,6 +33,13 @@ by D-4 points 3 and 5); D-5 points 3 and 5; D-8 point 4. Commands, each with
   as the first and the last line. Records are listed by registration order
   and T, never sorted, filtered or grouped by a comparison result.
 
+A baseline is printed by :func:`prediction_text` in every subcommand: its
+label, or ``unavailable:<reason>`` (D-4 point 3: an unavailable baseline is
+listed with its reason). A stored baseline that is ``unavailable`` without a
+reason is malformed (``scoring.BaselinePrediction.from_stored``): ``records``
+refuses the ledger (exit 3) and ``compare`` lists that record as
+``record_unreadable``; neither prints it without its reason.
+
 D-4 point 3 / 5 on every output: when a model label is listed the four
 baselines are on the same line, in the same ``name=value`` form (no colour,
 bold, ordering or position that sets the model apart; the model is the last
@@ -133,20 +140,20 @@ def _record_head(row: Mapping[str, object], outcomes: Mapping[int, str]) -> str:
     )
 
 
-def _prediction_text(prediction: object) -> str:
-    """A baseline as its label, or ``unavailable:<reason>``."""
-    if not isinstance(prediction, Mapping):
-        raise TypeError("a baseline prediction is not an object")
-    label = str(prediction["label"])
-    if label == "unavailable":
-        return f"unavailable:{prediction.get('reason')}"
-    return label
+def prediction_text(prediction: scoring.BaselinePrediction) -> str:
+    """A baseline as its label, or ``unavailable:<reason>`` (D-4 point 3; every subcommand)."""
+    if prediction.reason is not None:
+        return f"{prediction.label}:{prediction.reason}"
+    return prediction.label
 
 
 def label_cells(row: Mapping[str, object]) -> str:
     """The four baselines and the model label, one format, model last (D-4 point 3)."""
     baselines = json.loads(str(row["baseline_predictions_json"]))
-    cells = [f"{key}={_prediction_text(baselines[key])}" for key in scoring.BASELINES]
+    cells = [
+        f"{key}={prediction_text(scoring.BaselinePrediction.from_stored(baselines[key]))}"
+        for key in scoring.BASELINES
+    ]
     cells.append(f"模型={row['label']}")
     return " ".join(cells)
 
@@ -231,10 +238,10 @@ def render_compare(store: ForecastStore, *, now: datetime) -> list[str]:
             if result.reason is not None:
                 lines.append(f"  {head} 無法對照：{result.reason}")
                 continue
-            labels = dict(record.baseline_labels)
-            labels[scoring.MODEL] = record.label
+            texts = {key: prediction_text(p) for key, p in record.baseline_predictions.items()}
+            texts[scoring.MODEL] = record.label
             cells = " ".join(
-                f"{'模型' if party == scoring.MODEL else party}={labels[party]}"
+                f"{'模型' if party == scoring.MODEL else party}={texts[party]}"
                 f"（{_match_text(matched)}）"
                 for party, matched in result.matches
             )
