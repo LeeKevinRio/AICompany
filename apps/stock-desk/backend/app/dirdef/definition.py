@@ -14,12 +14,23 @@ object for a row's ``definition_version``. The type carries:
   ``c8_decision_sha256``;
 * the constants FL-31, FL-36 and FL-37 name: the F-2 exit deadlines (FL-31),
   the §4.3 and alpha* constants (FL-36), and the C-8 choice (FL-37, carried by
-  ``f2_variant`` per D-14).
+  ``f2_variant`` per D-14);
+* the fields ADR-0030 D-10 adds before the freeze, named by the freeze pack G7
+  table: ``SIGMA_WINDOW``, ``B2_WINDOW``, ``B2_MIN_REALIZED``,
+  ``MAJORITY_TIE_ORDER``, ``NEFF_BLOCK_LEN3`` / ``NEFF_BLOCK_LEN5``,
+  ``SEASON_MONTHS`` (logic fields) and the risk R-1 deviation text
+  ``MARKET_PRICE_INDEX_DEVIATION`` (a :data:`DEFINITION_NON_LOGIC_FIELDS` member).
 
-Field names beyond the D-1 and D-14 ones are provisional (名稱暫定); quant
-confirms them when freezing ``dirdef-v1.0``. The values are not set here and
-nothing is registered: validation below only rejects values that no definition
-could hold (non-finite, out of range, unordered), it does not pin numbers.
+The values are not set here and nothing is registered: ``dirdef-v1.0`` is
+registered by the CG-2 registration batch, which also lands the C-8 decision
+record that ``c8_decision_ref`` / ``c8_decision_sha256`` point at. Validation
+below only rejects values that no definition could hold (non-finite, out of
+range, unordered, repeated); it does not pin numbers.
+
+Derived, not stored (freeze pack G7, one function each): :func:`n_min`
+(``N_MIN``, the first market checkpoint), :func:`market_checkpoint_count`
+(``K_c``) and :func:`alpha_star`. ``N_SNAPSHOT`` also needs the rule set's
+longest look-back and is derived in ``app/outlook/engine.py``.
 
 It satisfies ``app.forecast.band.BandDefinition`` structurally (``EPS``,
 ``SIGMA_FLOOR``, ``SIGMA_MIN_VALID``, ``k_for``) without importing it.
@@ -65,9 +76,19 @@ BasketExclusionReason = Literal[
 #: The C-8 choice (ADR-0027 D-14 G-2; D-12).
 F2Variant = Literal["F2-A", "F2-B"]
 
-#: Fields outside ``definition_logic_sha256`` (D-10 point 1, B2D-1).
+#: The three direction labels a baseline can vote for (B2 tie order, pre-registration §3).
+DirectionLabel = Literal["range", "bullish", "bearish"]
+
+#: Fields outside ``definition_logic_sha256`` (D-10 point 1, B2D-1; ADR-0030 D-10
+#: lists the risk R-1 deviation text here).
 DEFINITION_NON_LOGIC_FIELDS: Final[frozenset[str]] = frozenset(
-    {"definition_version", "description", "c8_decision_ref", "c8_decision_sha256"}
+    {
+        "definition_version",
+        "description",
+        "c8_decision_ref",
+        "c8_decision_sha256",
+        "MARKET_PRICE_INDEX_DEVIATION",
+    }
 )
 
 _SHA256_HEX: Final = r"^[0-9a-f]{64}$"
@@ -75,6 +96,7 @@ _SHA256_HEX: Final = r"^[0-9a-f]{64}$"
 PositiveFinite = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 OpenUnit = Annotated[float, Field(gt=0, lt=1)]
 PositiveInt = Annotated[int, Field(ge=1)]
+Month = Annotated[int, Field(ge=1, le=12)]
 
 
 def _strictly_increasing(values: tuple[int, ...]) -> bool:
@@ -102,8 +124,27 @@ class DirectionDefinition(GuardedModel):
     K3: PositiveFinite
     K5: PositiveFinite
     EPS: PositiveFinite
+    #: Daily log returns in the sigma_d window (freeze pack G7; pre-registration L994).
+    SIGMA_WINDOW: Annotated[int, Field(ge=2)]
     SIGMA_MIN_VALID: Annotated[int, Field(ge=2)]
     SIGMA_FLOOR: PositiveFinite
+
+    # --- Baselines (pre-registration §3; ADR-0030 D-4 point 1) ---
+    #: B2 snapshot positions T' = lag h .. lag h + B2_WINDOW - 1.
+    B2_WINDOW: PositiveInt
+    #: B2 is ``unavailable`` (``b2_realized_short``) below this many voting positions.
+    B2_MIN_REALIZED: PositiveInt
+    #: The majority tie order (range > bullish > bearish in v0.31).
+    MAJORITY_TIE_ORDER: tuple[DirectionLabel, ...]
+
+    # --- Validation layer constants carried by the definition (frozen, not evaluated) ---
+    #: n_eff block length per horizon (pre-registration L1168).
+    NEFF_BLOCK_LEN3: PositiveInt
+    NEFF_BLOCK_LEN5: PositiveInt
+    #: The dividend season months the validation report groups by (L871).
+    SEASON_MONTHS: tuple[Month, ...] = Field(min_length=1)
+    #: Risk R-1 disclosure: the market label is on the price index; outside the logic hash.
+    MARKET_PRICE_INDEX_DEVIATION: str = Field(min_length=1)
 
     # --- Basket exclusion and split suspicion (ADR-0027 D-3, D-9.3) ---
     BASKET_EXCLUSION_REASON_ORDER: tuple[BasketExclusionReason, ...] = Field(min_length=1)
@@ -150,12 +191,19 @@ class DirectionDefinition(GuardedModel):
     def _well_formed(self) -> Self:
         if len(set(self.BASKET_EXCLUSION_REASON_ORDER)) != len(self.BASKET_EXCLUSION_REASON_ORDER):
             raise ValueError("BASKET_EXCLUSION_REASON_ORDER repeats a reason")
+        if self.SIGMA_MIN_VALID > self.SIGMA_WINDOW:
+            raise ValueError("SIGMA_MIN_VALID cannot exceed SIGMA_WINDOW")
+        if self.B2_MIN_REALIZED > self.B2_WINDOW:
+            raise ValueError("B2_MIN_REALIZED cannot exceed B2_WINDOW")
+        if sorted(self.MAJORITY_TIE_ORDER) != sorted(get_args(DirectionLabel)):
+            raise ValueError("MAJORITY_TIE_ORDER must order each of the three labels once")
         if not _is_repo_relative(self.c8_decision_ref):
             raise ValueError("c8_decision_ref must be a repo-relative POSIX path")
         for name in (
             "CHECKPOINTS_MARKET_SYMBOL",
             "CHECKPOINTS_SECTOR",
             "BOOTSTRAP_BLOCK_LEN_ALTERNATIVES",
+            "SEASON_MONTHS",
         ):
             if not _strictly_increasing(getattr(self, name)):
                 raise ValueError(f"{name} must be strictly increasing")
@@ -172,6 +220,23 @@ class DirectionDefinition(GuardedModel):
         if isinstance(horizon, bool) or horizon not in get_args(Horizon):
             raise ValueError(f"no K for horizon {horizon!r}")
         return self.K3 if horizon == 3 else self.K5
+
+
+def n_min(definition: DirectionDefinition) -> int:
+    """``N_MIN``: the first market / symbol checkpoint (freeze pack G7; L1169)."""
+    return definition.CHECKPOINTS_MARKET_SYMBOL[0]
+
+
+def market_checkpoint_count(definition: DirectionDefinition) -> int:
+    """``K_c`` of a forward market claim: its number of checkpoints (G7; L1256)."""
+    return len(definition.CHECKPOINTS_MARKET_SYMBOL)
+
+
+def alpha_star(definition: DirectionDefinition, *, m_eff: int) -> float:
+    """alpha* = ``ALPHA_FAMILY`` / (m_eff x K_c) for a forward market claim (G7; L2493)."""
+    if isinstance(m_eff, bool) or not isinstance(m_eff, int) or m_eff < 1:
+        raise ValueError("m_eff must be a positive int")
+    return definition.ALPHA_FAMILY / (m_eff * market_checkpoint_count(definition))
 
 
 def definition_logic_sha256(definition: DirectionDefinition) -> str:

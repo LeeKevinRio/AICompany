@@ -268,6 +268,30 @@ DEFINITION_POSITIONS: list[tuple[str, str, Callable[[str], Any], str]] = [
     ("definition_version", "definition_version", lambda p: f"dirdef-v1.0{p}", "type"),
     ("description", "description", lambda p: f"note {p}", "scan"),
     (
+        "tie_order[0]",
+        "MAJORITY_TIE_ORDER",
+        lambda p: (p, "bullish", "bearish"),
+        "type",
+    ),
+    (
+        "tie_order[1]",
+        "MAJORITY_TIE_ORDER",
+        lambda p: ("range", p, "bearish"),
+        "type",
+    ),
+    (
+        "tie_order[2]",
+        "MAJORITY_TIE_ORDER",
+        lambda p: ("range", "bullish", p),
+        "type",
+    ),
+    (
+        "market_price_index_deviation",
+        "MARKET_PRICE_INDEX_DEVIATION",
+        lambda p: f"note {p}",
+        "scan",
+    ),
+    (
         "basket_order[0]",
         "BASKET_EXCLUSION_REASON_ORDER",
         lambda p: (p, "split_or_reduction_suspected", "t_plus_h_bar_unavailable"),

@@ -1,0 +1,98 @@
+"""``dirdef-v1.0`` fields against the freeze pack G7 table (ADR-0030 D-10; TA G5 notes).
+
+* the G7 rows are exactly the ``DirectionDefinition`` fields; the D-NL rows are
+  exactly :data:`DEFINITION_NON_LOGIC_FIELDS`, every other row is a logic field
+  (TA G5 note: the sets equal the quant table's columns);
+* the G7 values validate (``tests.dirdef_helpers.DIRDEF_V1_0_G7``; the two C-8
+  provenance fields are test stand-ins until the CG-2 registration batch lands
+  the C-8 decision record);
+* ``N_MIN``, ``K_c`` and alpha* each come from one function (G7 "不設欄位、由程式導出");
+* nothing is registered: both published registries stay empty;
+* the two user-facing strings (``description``, ``MARKET_PRICE_INDEX_DEVIATION``)
+  hold no banned phrase after NFKC and whitespace removal (freeze pack 4.3).
+"""
+
+from __future__ import annotations
+
+import unicodedata
+
+import pytest
+
+from app.advice.loader import BANNED_PHRASES
+from app.dirdef.definition import (
+    DEFINITION_NON_LOGIC_FIELDS,
+    DirectionDefinition,
+    alpha_star,
+    market_checkpoint_count,
+    n_min,
+)
+from app.dirdef.registry import PUBLISHED_DIRECTION_DEFINITIONS, PUBLISHED_RULESETS
+from app.dirdef.rules import RULE_TEXT_FIELDS
+from tests.dirdef_helpers import DIRDEF_V1_0_G7, G7_NON_LOGIC_ROWS, dirdef_v1_0
+
+
+def _squeezed(text: str) -> str:
+    return "".join(unicodedata.normalize("NFKC", text).split())
+
+
+def test_the_g7_rows_are_exactly_the_definition_fields() -> None:
+    assert set(DIRDEF_V1_0_G7) == set(DirectionDefinition.model_fields)
+    assert len(DIRDEF_V1_0_G7) == 34
+
+
+def test_the_g7_non_logic_rows_are_the_non_logic_fields() -> None:
+    assert G7_NON_LOGIC_ROWS == DEFINITION_NON_LOGIC_FIELDS
+    logic = set(DirectionDefinition.model_fields) - DEFINITION_NON_LOGIC_FIELDS
+    assert {"SIGMA_WINDOW", "B2_WINDOW", "B2_MIN_REALIZED", "MAJORITY_TIE_ORDER"} <= logic
+    assert {"NEFF_BLOCK_LEN3", "NEFF_BLOCK_LEN5", "SEASON_MONTHS", "f2_variant"} <= logic
+
+
+def test_the_g7_values_validate() -> None:
+    definition = dirdef_v1_0()
+    assert definition.definition_version == "dirdef-v1.0"
+    assert definition.f2_variant == "F2-B"
+    assert definition.SIGMA_WINDOW == 60
+    assert definition.B2_WINDOW == 250 and definition.B2_MIN_REALIZED == 120
+    assert definition.MAJORITY_TIE_ORDER == ("range", "bullish", "bearish")
+    assert definition.SEASON_MONTHS == (6, 7, 8, 9)
+    assert (definition.NEFF_BLOCK_LEN3, definition.NEFF_BLOCK_LEN5) == (3, 5)
+    assert definition.MIN_MEAN_RECALL == 1 / 3
+
+
+def test_n_min_is_the_first_market_checkpoint() -> None:
+    assert n_min(dirdef_v1_0()) == 30
+
+
+def test_k_c_is_the_number_of_market_checkpoints() -> None:
+    assert market_checkpoint_count(dirdef_v1_0()) == 6
+
+
+def test_alpha_star_is_the_family_level_over_m_eff_times_k_c() -> None:
+    assert alpha_star(dirdef_v1_0(), m_eff=8) == 0.05 / 48
+
+
+def test_alpha_star_refuses_a_bad_m_eff() -> None:
+    for bad in (0, -1, True, 8.0):
+        with pytest.raises(ValueError):
+            alpha_star(dirdef_v1_0(), m_eff=bad)  # type: ignore[arg-type]
+
+
+def test_nothing_is_registered() -> None:
+    # CG-2 registers dirdef-v1.0 and the two rule sets; this batch does not.
+    assert dict(PUBLISHED_DIRECTION_DEFINITIONS) == {}
+    assert dict(PUBLISHED_RULESETS) == {}
+
+
+def test_the_two_user_facing_strings_hold_no_banned_phrase() -> None:
+    assert len(BANNED_PHRASES) == 10
+    for name in ("description", "MARKET_PRICE_INDEX_DEVIATION"):
+        text = _squeezed(DIRDEF_V1_0_G7[name])
+        hits = [p for p in BANNED_PHRASES if _squeezed(p) in text]
+        assert hits == [], name
+
+
+def test_rule_text_fields_are_unchanged_pending_the_name_decision() -> None:
+    # TA G5 accepted "name into RULE_TEXT_FIELDS"; freeze pack 4.3 (round 2) keeps
+    # name inside rules_logic_sha256 and leaves the choice to the validation layer
+    # ADR. The two disagree, so this batch changes nothing (reported as a stop point).
+    assert frozenset({"explanation", "counterargument"}) == RULE_TEXT_FIELDS
