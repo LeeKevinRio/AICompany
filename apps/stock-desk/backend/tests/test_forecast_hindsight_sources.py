@@ -63,7 +63,7 @@ def test_the_scan_covers_the_new_core_modules() -> None:
     assert "data/session_calendar.py" in names
     assert "outlook/missing.py" in names
     # NM-5 second batch (ADR-0030 D-3 point 5 covers the new modules too).
-    assert {"outlook/inputs.py"} <= names
+    assert {"outlook/baselines.py", "outlook/inputs.py"} <= names
 
 
 @pytest.mark.parametrize("path", CORE_FILES, ids=lambda p: p.relative_to(APP_ROOT).as_posix())
