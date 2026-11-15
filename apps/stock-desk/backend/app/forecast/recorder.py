@@ -224,15 +224,18 @@ DISK_DIFFERS_WARNING: Final = (
 def warn_if_disk_differs() -> bool:
     """Recompute the on-disk digest and runtime; log one WARNING when they differ from LOADED.
 
-    Returns whether it warned. A source tree that cannot be read counts as
-    different. Nothing else changes: the run stamps :data:`LOADED` either way.
+    Returns whether it warned. A comparison that raises any ``Exception`` -- a
+    source tree or lock file that cannot be read, a runtime value that cannot
+    be serialised -- counts as different, so this check can never leave a run
+    without its end row (qa batch 4 follow-up 1). Nothing else changes: the run
+    stamps :data:`LOADED` either way.
     """
     try:
         same = (
             code_digest(APP_ROOT) == LOADED.code_digest
             and canonical_json(runtime_info(LOCK_FILE)) == LOADED.runtime_json
         )
-    except OSError:
+    except Exception:
         same = False
     if not same:
         logger.warning(DISK_DIFFERS_WARNING)

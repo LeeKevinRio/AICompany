@@ -1470,7 +1470,25 @@ def test_s12a_an_unchanged_disk_logs_nothing(desk: Desk, caplog: pytest.LogCaptu
     assert _warnings(caplog) == []
 
 
-@pytest.mark.parametrize("change", ["source", "lock-file", "unreadable"])
+def _raises(exc: BaseException) -> Any:
+    def raising(*args: Any, **kwargs: Any) -> Any:
+        raise exc
+
+    return raising
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "source",
+        "lock-file",
+        "unreadable",
+        # qa batch 4 follow-up 1: the comparison itself raising is "different".
+        "runtime-raises",
+        "digest-raises",
+        "runtime-unserialisable",
+    ],
+)
 def test_s12a_a_disk_change_without_restart_logs_one_warning_and_changes_nothing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1490,8 +1508,14 @@ def test_s12a_a_disk_change_without_restart_logs_one_warning_and_changes_nothing
         lock = tmp_path / "uv.lock"
         lock.write_bytes(b"version = 2\n")
         monkeypatch.setattr(recorder_module, "LOCK_FILE", lock)
-    else:
+    elif change == "unreadable":
         monkeypatch.setattr(recorder_module, "APP_ROOT", tmp_path / "missing")
+    elif change == "runtime-raises":
+        monkeypatch.setattr(recorder_module, "runtime_info", _raises(ValueError("bad lock")))
+    elif change == "digest-raises":
+        monkeypatch.setattr(recorder_module, "code_digest", _raises(RuntimeError("bad tree")))
+    else:
+        monkeypatch.setattr(recorder_module, "runtime_info", lambda lock: {"x": object()})
     caplog.set_level(logging.DEBUG, logger=recorder_module.__name__)
     result = drifted.run(EVENING)
     # The outcome and every record are the ones of the loaded program.
@@ -1520,6 +1544,37 @@ def test_s12a_the_warning_check_reports_whether_it_warned(
     assert recorder_module.warn_if_disk_differs() is False
     monkeypatch.setattr(recorder_module, "APP_ROOT", tmp_path / "missing")
     assert recorder_module.warn_if_disk_differs() is True
+
+
+@pytest.mark.parametrize(
+    "exc", [ValueError("x"), TypeError("x"), RuntimeError("x"), KeyError("x"), MemoryError()]
+)
+def test_qa1_any_exception_of_the_comparison_counts_as_different(
+    desk: Desk,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    exc: Exception,
+) -> None:
+    monkeypatch.setattr(recorder_module, "runtime_info", _raises(exc))
+    caplog.set_level(logging.DEBUG, logger=recorder_module.__name__)
+    assert recorder_module.warn_if_disk_differs() is True
+    result = desk.run(EVENING)
+    # The run still ends with its end row (never "interrupted" because of the check).
+    assert (result.outcome, result.records_written) == ("ok", 2)
+    assert _end(desk, result.run_id)["outcome"] == "ok"
+    assert desk.count("forecast_run") == desk.count("forecast_run_end") == 1
+    assert [w.getMessage() for w in _warnings(caplog)] == [recorder_module.DISK_DIFFERS_WARNING] * 2
+
+
+def test_qa1_an_interruption_during_the_comparison_is_not_swallowed(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only Exception is "different"; a BaseException is an interruption (no end row, D-2).
+    monkeypatch.setattr(recorder_module, "runtime_info", _raises(KeyboardInterrupt()))
+    desk.clock.now = EVENING
+    with pytest.raises(KeyboardInterrupt):
+        desk.run(EVENING)
+    assert desk.count("forecast_run") == 1 and desk.count("forecast_run_end") == 0
 
 
 def _function_level_imports(source: str) -> list[str]:
