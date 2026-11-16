@@ -6,7 +6,8 @@ test registries), ``_read_rules_bytes`` (replaced to serve fixture bytes) and
 the two cache dicts (reset per test). The outlook field list is replaced
 through ``tests.dirdef_helpers.RULE_FIELDS_SEAM``.
 
-* production: both registries are empty, so every lookup raises (G-3 closed);
+* production: the CG-2 registries hold exactly ``dirdef-v1.0`` and the two market
+  rule sets, each of which loads; every other version raises;
 * B2D-1d/1f: ``get_definition`` checks the version key, the logic hash, the
   full hash ``definition_sha256`` and then the banned phrases, in that order; an
   in-place edit of a registered version (description, C-8 provenance) keeps the
@@ -117,27 +118,36 @@ def serve(monkeypatch: pytest.MonkeyPatch) -> Callable[[bytes, str | None], list
 # --- Production state ------------------------------------------------------------------
 
 
-def test_the_registries_are_empty() -> None:
-    assert dict(registry.PUBLISHED_DIRECTION_DEFINITIONS) == {}
-    assert dict(registry.PUBLISHED_RULESETS) == {}
+def test_the_registries_hold_the_cg2_versions() -> None:
+    assert set(registry.PUBLISHED_DIRECTION_DEFINITIONS) == {"dirdef-v1.0"}
+    assert set(registry.PUBLISHED_RULESETS) == {
+        "outlook-market-v1.0-h3",
+        "outlook-market-v1.0-h5",
+    }
 
 
-@pytest.mark.parametrize("version", ["dirdef-v1.0", "dirdef-v0.1"])
-def test_every_definition_lookup_raises_in_production(version: str) -> None:
+@pytest.mark.parametrize("version", ["dirdef-v0.1", "dirdef-v1.1", "dirdef-v2.0"])
+def test_an_unregistered_definition_lookup_raises_in_production(version: str) -> None:
     with pytest.raises(UnpublishedVersionError):
         get_definition(version)
 
 
-@pytest.mark.parametrize("version", ["outlook-market-v1.0-h3", "outlook-market-v1.0-h5"])
-def test_every_ruleset_lookup_raises_in_production(version: str) -> None:
+@pytest.mark.parametrize("version", ["outlook-market-v1.0-h1", "outlook-market-v1.1-h3", "x"])
+def test_an_unregistered_ruleset_lookup_raises_in_production(version: str) -> None:
     with pytest.raises(UnpublishedVersionError):
         get_ruleset(version)
 
 
+def test_every_published_definition_loads() -> None:
+    for version in registry.PUBLISHED_DIRECTION_DEFINITIONS:
+        assert get_definition(version).definition_version == version
+
+
 def test_every_published_ruleset_loads() -> None:
-    # FL-78 (k): each registered version must load; no version is registered yet.
+    # FL-78 (k): each registered version must load.
+    assert registry.PUBLISHED_RULESETS
     for version in registry.PUBLISHED_RULESETS:
-        get_ruleset(version)  # pragma: no cover - the registry is empty until G-3
+        get_ruleset(version)
 
 
 def test_the_rule_files_sit_under_the_outlook_package() -> None:

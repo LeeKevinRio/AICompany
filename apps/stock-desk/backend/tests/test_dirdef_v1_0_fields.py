@@ -7,7 +7,8 @@
   provenance fields are test stand-ins until the CG-2 registration batch lands
   the C-8 decision record);
 * ``N_MIN``, ``K_c`` and alpha* each come from one function (G7 "不設欄位、由程式導出");
-* nothing is registered: both published registries stay empty;
+* the registered ``dirdef-v1.0`` and the two rule sets are exactly the CG-2 ones
+  (their hashes are pinned in ``tests/test_cg2_registration_values.py``);
 * the two user-facing strings (``description``, ``MARKET_PRICE_INDEX_DEVIATION``)
   hold no banned phrase after NFKC and whitespace removal (freeze pack 4.3);
 * TA SP-A ruling (2026-11-15): ``name`` stays inside ``rules_logic_sha256``, so an
@@ -90,10 +91,10 @@ def test_alpha_star_refuses_a_bad_m_eff() -> None:
             alpha_star(dirdef_v1_0(), m_eff=bad)  # type: ignore[arg-type]
 
 
-def test_nothing_is_registered() -> None:
-    # CG-2 registers dirdef-v1.0 and the two rule sets; this batch does not.
-    assert dict(PUBLISHED_DIRECTION_DEFINITIONS) == {}
-    assert dict(PUBLISHED_RULESETS) == {}
+def test_cg2_registers_exactly_dirdef_v1_0_and_the_two_rule_sets() -> None:
+    # The CG-2 registration batch registers dirdef-v1.0 and the market h3 / h5 rule sets.
+    assert set(PUBLISHED_DIRECTION_DEFINITIONS) == {"dirdef-v1.0"}
+    assert set(PUBLISHED_RULESETS) == {"outlook-market-v1.0-h3", "outlook-market-v1.0-h5"}
 
 
 def test_the_two_user_facing_strings_hold_no_banned_phrase() -> None:

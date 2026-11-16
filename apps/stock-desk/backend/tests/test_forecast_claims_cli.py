@@ -625,15 +625,19 @@ _FRESH_MAIN = (
 )
 
 
-def test_a_fresh_process_refuses_with_the_empty_production_registries(
-    cli: Cli, tmp_path: Path
-) -> None:
-    # The registries are the real, empty ones (no publish in a fresh process). The
-    # production paths compared are the tmp_path stand-ins, never the real backend's.
-    done = _python("-c", _FRESH_MAIN, str(cli.backend), *cli.argv(), cwd=tmp_path)
+def test_a_fresh_process_uses_the_published_registries(cli: Cli, tmp_path: Path) -> None:
+    # The registries are the real CG-2 ones (no test seam in a fresh process): an
+    # unregistered version is refused, a registered one registers into the tmp_path
+    # ledger. The production paths compared are the tmp_path stand-ins, never the
+    # real backend's.
+    unpublished = cli.argv(definition_version="dirdef-v9.9")
+    done = _python("-c", _FRESH_MAIN, str(cli.backend), *unpublished, cwd=tmp_path)
     assert done.returncode == claims.EXIT_REFUSED, done.stderr
     assert "UnpublishedVersionError" in done.stderr
     assert cli.rows() == []
+    done = _python("-c", _FRESH_MAIN, str(cli.backend), *cli.argv(), cwd=tmp_path)
+    assert done.returncode == claims.EXIT_OK, done.stderr
+    assert len(cli.rows()) == 1
     named = cli.argv(db=str(tmp_path / "stock-desk.db"))
     refused = _python("-c", _FRESH_MAIN, str(cli.backend), *named, cwd=tmp_path)
     assert refused.returncode == claims.EXIT_PATH_REFUSED

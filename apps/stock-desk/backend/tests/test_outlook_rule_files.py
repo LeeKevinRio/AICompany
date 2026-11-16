@@ -11,7 +11,8 @@
   ten phrases -- 0 hits (CG-2 / RC-135 rerun on the landed bytes);
 * h5 is h3 with only the horizon changed (first comment line, the reversal
   vote's field, the 3 / 5 in its explanation);
-* neither file is registered: ``PUBLISHED_RULESETS`` stays empty until CG-2.
+* CG-2 registers both files: ``PUBLISHED_RULESETS`` maps the two market versions
+  to their horizon and the sha256 of these bytes.
 """
 
 from __future__ import annotations
@@ -189,8 +190,11 @@ def test_the_two_rule_sets_differ_in_logic() -> None:
     assert rules_logic_sha256(_load(3)) != rules_logic_sha256(_load(5))
 
 
-def test_neither_file_is_registered() -> None:
-    assert dict(PUBLISHED_RULESETS) == {}
+def test_cg2_registers_both_files_with_their_bytes_hash() -> None:
+    registered = {v: (e.horizon, e.rules_sha256) for v, e in PUBLISHED_RULESETS.items()}
+    assert registered == {
+        f"outlook-market-v1.0-h{h}": (h, hashlib.sha256(_bytes(h)).hexdigest()) for h in (3, 5)
+    }
 
 
 #: ``definition_sha256`` / ``definition_logic_sha256`` of the G7 stand-in the h3 / h5

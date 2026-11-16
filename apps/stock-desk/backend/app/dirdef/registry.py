@@ -22,6 +22,7 @@ from types import MappingProxyType
 from typing import Final, get_args
 
 from app.dirdef.definition import DirectionDefinition, Horizon
+from app.dirdef.v1_0 import DIRDEF_V1_0
 
 _SHA256_HEX: Final = re.compile(r"^[0-9a-f]{64}$")
 
@@ -59,5 +60,26 @@ class PublishedRuleset:
         _require_sha256(self.rules_sha256, "rules_sha256")
 
 
-PUBLISHED_DIRECTION_DEFINITIONS: Final[Mapping[str, PublishedDefinition]] = MappingProxyType({})
-PUBLISHED_RULESETS: Final[Mapping[str, PublishedRuleset]] = MappingProxyType({})
+PUBLISHED_DIRECTION_DEFINITIONS: Final[Mapping[str, PublishedDefinition]] = MappingProxyType(
+    {
+        "dirdef-v1.0": PublishedDefinition(
+            definition=DIRDEF_V1_0,
+            definition_logic_sha256=(
+                "4cc1fe80054a017f47030805a486ad81e1bda249d730c7c1f6bd2c73c01d1afa"
+            ),
+            definition_sha256="2a58bca61c647931ecaf56aa5d17e4bfffc048c30944f3550feceadbfdacc4d0",
+        ),
+    }
+)
+PUBLISHED_RULESETS: Final[Mapping[str, PublishedRuleset]] = MappingProxyType(
+    {
+        "outlook-market-v1.0-h3": PublishedRuleset(
+            horizon=3,
+            rules_sha256="f4f366a5d5e66fd7fd49c916f5bb31401e84c2f23b3bb7a534f55be406fb3443",
+        ),
+        "outlook-market-v1.0-h5": PublishedRuleset(
+            horizon=5,
+            rules_sha256="0a385de3e2f4118bc1e7c2c5dd1a667ce0a9067399ccd1b6e7c4dbab19d5707c",
+        ),
+    }
+)

@@ -237,6 +237,7 @@ def test_the_scanned_packages_hold_exactly_the_b1_and_b2_modules() -> None:
         "dirdef/registry.py",
         "dirdef/rules.py",
         "dirdef/strings.py",
+        "dirdef/v1_0.py",
         "forecast/__init__.py",
         "forecast/band.py",
         "forecast/canonical.py",

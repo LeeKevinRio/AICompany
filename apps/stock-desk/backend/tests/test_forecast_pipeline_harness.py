@@ -630,10 +630,19 @@ def test_the_injected_registry_is_restored(tmp_path: Path) -> None:
         definitions.get_ruleset(P0.rules_version(3))
 
 
-def test_k11_the_production_registries_are_empty_and_read_only() -> None:
-    for name in ("PUBLISHED_RULESETS", "PUBLISHED_DIRECTION_DEFINITIONS"):
+#: The versions CG-2 registers (ADR-0030 D-6); no placeholder rule set is among them.
+CG2_VERSIONS = {
+    "PUBLISHED_RULESETS": {"outlook-market-v1.0-h3", "outlook-market-v1.0-h5"},
+    "PUBLISHED_DIRECTION_DEFINITIONS": {"dirdef-v1.0"},
+}
+
+
+def test_k11_the_production_registries_are_read_only_and_hold_only_cg2() -> None:
+    for name, versions in CG2_VERSIONS.items():
         value = getattr(registry, name)
-        assert isinstance(value, MappingProxyType) and dict(value) == {}
+        assert isinstance(value, MappingProxyType) and set(value) == versions
+    placeholders = {spec.rules_version(h) for spec in (P0, P1) for h in (3, 5)}
+    assert placeholders.isdisjoint(registry.PUBLISHED_RULESETS)
     assert list(inspect.signature(record_forecasts).parameters) == [
         "store",
         "load_benchmark",
