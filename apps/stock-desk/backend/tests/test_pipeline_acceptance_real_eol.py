@@ -65,7 +65,13 @@ def make_repo(
 
 
 def test_the_backend_attribute_file_pins_uv_lock_to_lf() -> None:
-    assert ATTRIBUTES.read_bytes() == b"uv.lock text eol=lf\n"
+    # The uv.lock line stays first and unchanged; CG-2 (M-7, ADR-0030 supplement 7
+    # addendum 2 point 5) adds the two rule file lines after it.
+    assert ATTRIBUTES.read_bytes() == (
+        b"uv.lock text eol=lf\n"
+        b"/app/outlook/rules/h3.yaml text eol=lf\n"
+        b"/app/outlook/rules/h5.yaml text eol=lf\n"
+    )
 
 
 def test_the_root_attribute_file_is_not_changed_by_this_work() -> None:
