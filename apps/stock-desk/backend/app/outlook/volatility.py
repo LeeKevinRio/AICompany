@@ -23,6 +23,15 @@ The estimator is :func:`statistics.stdev`, which sums in exact rational
 arithmetic and rounds the square root once: a constant series gives exactly
 ``0.0`` and the same input always gives the same bits.
 
+The window primitives of the market core live here too (freeze pack 2.2 / 2.4,
+one definition each in ``app/``): :func:`usable`, :func:`log_return` -- the one
+daily and h-day log return that sigma_d, sigma20, sigma120, the ``*_past_*``
+fields, B1, B2 and B8 all call -- and :func:`window_log_returns` /
+:func:`sigma_at`, the sigma_d window rule: the ``SIGMA_WINDOW`` positions
+``r_start .. r_{start+W-1}`` of a series indexed by lag, a position whose
+return cannot be formed (either close unusable, or the older bar absent)
+passed to :func:`sigma_d` as ``None``, never filled from another day.
+
 Imports: the standard library and the ``app.dirdef`` definition type only; no
 registry read and no ``app.forecast.*`` import.
 """
@@ -33,7 +42,7 @@ import math
 import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final, Literal, TypeGuard
 
 from app.dirdef.definition import DirectionDefinition
 
@@ -97,3 +106,42 @@ def sigma_d(
     return SigmaEstimate(
         value=raw_std, valid_returns=valid_returns, raw_std=raw_std, missing_code=None
     )
+
+
+def usable(close: object) -> TypeGuard[float]:
+    """A close is usable when it is a finite ``float`` above zero (freeze pack 2.2)."""
+    return isinstance(close, float) and math.isfinite(close) and close > 0
+
+
+def log_return(later: object, earlier: object) -> float | None:
+    """``math.log(later / earlier)`` when both are usable, else ``None`` (freeze pack 2.2).
+
+    The IEEE division comes first and the log is taken of the quotient.
+    """
+    if usable(later) and usable(earlier):
+        return math.log(later / earlier)
+    return None
+
+
+def window_log_returns(
+    closes_by_lag: Sequence[float], start: int, width: int
+) -> list[float | None]:
+    """The daily log returns ``r_start .. r_{start+width-1}`` of a series indexed by lag.
+
+    ``r_k`` is the return of the bar at lag ``k`` over the bar at lag ``k + 1``;
+    it is ``None`` when either close is unusable or lag ``k + 1`` is not in the
+    series (freeze pack 2.4).
+    """
+    count = len(closes_by_lag)
+    return [
+        log_return(closes_by_lag[k], closes_by_lag[k + 1]) if k + 1 < count else None
+        for k in range(start, start + width)
+    ]
+
+
+def sigma_at(
+    closes_by_lag: Sequence[float], start: int, *, definition: DirectionDefinition
+) -> SigmaEstimate:
+    """sigma_d at lag ``start``: :func:`sigma_d` over its ``SIGMA_WINDOW`` positions."""
+    returns = window_log_returns(closes_by_lag, start, definition.SIGMA_WINDOW)
+    return sigma_d(returns, definition=definition)

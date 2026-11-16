@@ -46,6 +46,7 @@ from app.forecast.definitions import (
     UnpublishedVersionError,
     get_definition,
     get_ruleset,
+    get_ruleset_entry,
     rules_path,
 )
 from tests.dirdef_helpers import (
@@ -268,6 +269,30 @@ DEFINITION_POSITIONS: list[tuple[str, str, Callable[[str], Any], str]] = [
     ("definition_version", "definition_version", lambda p: f"dirdef-v1.0{p}", "type"),
     ("description", "description", lambda p: f"note {p}", "scan"),
     (
+        "tie_order[0]",
+        "MAJORITY_TIE_ORDER",
+        lambda p: (p, "bullish", "bearish"),
+        "type",
+    ),
+    (
+        "tie_order[1]",
+        "MAJORITY_TIE_ORDER",
+        lambda p: ("range", p, "bearish"),
+        "type",
+    ),
+    (
+        "tie_order[2]",
+        "MAJORITY_TIE_ORDER",
+        lambda p: ("range", "bullish", p),
+        "type",
+    ),
+    (
+        "market_price_index_deviation",
+        "MARKET_PRICE_INDEX_DEVIATION",
+        lambda p: f"note {p}",
+        "scan",
+    ),
+    (
         "basket_order[0]",
         "BASKET_EXCLUSION_REASON_ORDER",
         lambda p: (p, "split_or_reduction_suspected", "t_plus_h_bar_unavailable"),
@@ -376,6 +401,36 @@ def test_a_failure_is_not_cached(serve: Callable[[bytes, str | None], list[int]]
         get_ruleset("outlook-market-v1.0-h3")
     serve(good, None)
     assert get_ruleset("outlook-market-v1.0-h3").version == "1.0.0"
+
+
+def test_the_entry_of_an_accepted_ruleset_is_returned(
+    serve: Callable[[bytes, str | None], list[int]],
+) -> None:
+    raw = ruleset_bytes(ruleset_data())
+    serve(raw, None)
+    entry = get_ruleset_entry("outlook-market-v1.0-h3")
+    assert entry.horizon == 3 and entry.rules_sha256 == sha256_hex(raw)
+
+
+def test_no_entry_is_returned_for_a_refused_ruleset(
+    serve: Callable[[bytes, str | None], list[int]],
+) -> None:
+    raw = ruleset_bytes(ruleset_data())
+    serve(raw.replace(b"0.5", b"0.6", 1), sha256_hex(raw))
+    with pytest.raises(PublishedVersionRejectedError):
+        get_ruleset_entry("outlook-market-v1.0-h3")
+    with pytest.raises(UnpublishedVersionError):
+        get_ruleset_entry("outlook-market-v9.9-h3")
+
+
+def test_a_cached_ruleset_whose_entry_was_withdrawn_has_no_entry(
+    serve: Callable[[bytes, str | None], list[int]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve(ruleset_bytes(ruleset_data()), None)
+    get_ruleset("outlook-market-v1.0-h3")
+    monkeypatch.setattr(definitions, REGISTRY_RULESETS, MappingProxyType({}))
+    with pytest.raises(UnpublishedVersionError):
+        get_ruleset_entry("outlook-market-v1.0-h3")
 
 
 # --- Registry entry types --------------------------------------------------------------

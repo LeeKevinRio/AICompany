@@ -41,8 +41,15 @@ CHANGED_VALUES: dict[str, Any] = {
     "K3": 0.44,
     "K5": 0.5,
     "EPS": 2e-12,
+    "SIGMA_WINDOW": 61,
     "SIGMA_MIN_VALID": 56,
     "SIGMA_FLOOR": 0.0011,
+    "B2_WINDOW": 251,
+    "B2_MIN_REALIZED": 121,
+    "MAJORITY_TIE_ORDER": ("range", "bearish", "bullish"),
+    "NEFF_BLOCK_LEN3": 4,
+    "NEFF_BLOCK_LEN5": 6,
+    "SEASON_MONTHS": (6, 7, 8),
     "BASKET_EXCLUSION_REASON_ORDER": (
         "split_or_reduction_suspected",
         "dividend_factor_unusable",
@@ -104,6 +111,7 @@ NON_LOGIC_CHANGES: dict[str, Any] = {
     "description": "reworded description",
     "c8_decision_ref": "work/decisions/c8-moved.md",
     "c8_decision_sha256": "1" * 64,
+    "MARKET_PRICE_INDEX_DEVIATION": "reworded deviation text",
 }
 
 
@@ -120,7 +128,13 @@ def _expected_hash(definition: DirectionDefinition) -> str:
         name: definition.model_dump(mode="json")[name]
         for name in DirectionDefinition.model_fields
         if name
-        not in {"definition_version", "description", "c8_decision_ref", "c8_decision_sha256"}
+        not in {
+            "definition_version",
+            "description",
+            "c8_decision_ref",
+            "c8_decision_sha256",
+            "MARKET_PRICE_INDEX_DEVIATION",
+        }
     }
     text = json.dumps(
         payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
@@ -214,6 +228,22 @@ def test_the_definition_is_frozen() -> None:
         pytest.param({"MIN_COVERAGE": 0.0}, id="coverage-zero"),
         pytest.param({"M_EFF_FLOOR": 0}, id="floor-zero"),
         pytest.param({"BOOTSTRAP_RESAMPLES": 0}, id="resamples-zero"),
+        pytest.param({"SIGMA_WINDOW": 54}, id="window-below-min-valid"),
+        pytest.param({"SIGMA_WINDOW": 60.0}, id="window-float"),
+        pytest.param({"B2_WINDOW": 0}, id="b2-window-zero"),
+        pytest.param({"B2_MIN_REALIZED": 251}, id="b2-min-above-window"),
+        pytest.param({"MAJORITY_TIE_ORDER": ("range", "bullish")}, id="tie-order-short"),
+        pytest.param({"MAJORITY_TIE_ORDER": ("range", "range", "bearish")}, id="tie-order-repeat"),
+        pytest.param({"MAJORITY_TIE_ORDER": ("range", "bullish", "up")}, id="tie-order-unknown"),
+        pytest.param(
+            {"MAJORITY_TIE_ORDER": ("range", "bullish", "bearish", "range")}, id="tie-order-long"
+        ),
+        pytest.param({"NEFF_BLOCK_LEN3": 0}, id="neff-zero"),
+        pytest.param({"SEASON_MONTHS": ()}, id="season-empty"),
+        pytest.param({"SEASON_MONTHS": (6, 13)}, id="season-month-13"),
+        pytest.param({"SEASON_MONTHS": (0, 6)}, id="season-month-0"),
+        pytest.param({"SEASON_MONTHS": (7, 6)}, id="season-order"),
+        pytest.param({"MARKET_PRICE_INDEX_DEVIATION": ""}, id="deviation-empty"),
     ],
 )
 def test_malformed_definitions_are_refused(overrides: dict[str, Any]) -> None:
@@ -280,9 +310,15 @@ def test_the_logic_hash_follows_the_canonical_form() -> None:
     assert definition_logic_sha256(make_definition()) == definition_logic_sha256(definition)
 
 
-def test_the_non_logic_fields_are_version_description_and_c8_provenance() -> None:
+def test_the_non_logic_fields_are_version_description_c8_provenance_and_r1_text() -> None:
     assert DEFINITION_NON_LOGIC_FIELDS == frozenset(
-        {"definition_version", "description", "c8_decision_ref", "c8_decision_sha256"}
+        {
+            "definition_version",
+            "description",
+            "c8_decision_ref",
+            "c8_decision_sha256",
+            "MARKET_PRICE_INDEX_DEVIATION",
+        }
     )
 
 
