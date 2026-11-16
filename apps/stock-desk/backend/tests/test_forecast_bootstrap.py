@@ -17,7 +17,7 @@
 * point 2: ``provisional_results_seen`` in registration order, refusing a value
   that is not 0 or 1;
 * point 6 (AST): in ``app/`` only ``store.py`` calls ``create_objects``, no
-  module calls ``create_schema`` or ``bootstrap`` (prerequisite PR),
+  module calls ``create_schema``, only ``claims.py`` calls ``bootstrap`` (CG-2 PR),
   ``_write(fresh=True)`` is only in ``ForecastStore.bootstrap``, recorder.py and
   report.py call none of them, schema.py holds no INSERT.
 
@@ -566,9 +566,9 @@ def test_s15_no_app_module_calls_create_schema() -> None:
     assert _callers("create_schema", _app_sources()) == set()
 
 
-def test_s15_no_app_module_calls_bootstrap_in_the_prerequisite_pr() -> None:
-    # Supplement 7 point 6: from the CG-2 PR on, this set is {"forecast/claims.py"}.
-    assert _callers("bootstrap", _app_sources()) == set()
+def test_s15_only_the_claims_cli_calls_bootstrap() -> None:
+    # Supplement 7 point 6: before the CG-2 PR no module; from the CG-2 PR on, claims.py.
+    assert _callers("bootstrap", _app_sources()) == {"forecast/claims.py"}
 
 
 def test_s15_write_fresh_is_only_in_store_bootstrap() -> None:

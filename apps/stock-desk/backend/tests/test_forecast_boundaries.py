@@ -1049,6 +1049,7 @@ def test_claims_imports_the_stdlib_dirdef_and_three_forecast_modules_only() -> N
         "app.forecast.store",
         "app.forecast.canonical.APP_ROOT",
         "app.forecast.canonical.canonical_timestamp",
+        "app.forecast.schema.SchemaNotEmptyError",
     }
 
 

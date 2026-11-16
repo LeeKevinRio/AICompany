@@ -48,9 +48,12 @@ imports), so either can be imported first.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import sqlite3
+import stat
+import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -61,6 +64,7 @@ from app.dirdef.rules import rules_logic_sha256
 from app.forecast import definitions
 from app.forecast import store as ledger
 from app.forecast.canonical import APP_ROOT, canonical_timestamp
+from app.forecast.schema import SchemaNotEmptyError
 
 #: ADR-0025 D-2 point 1 scopes; v1 registers market, sector_main and symbol.
 ScopeKind = Literal["market", "sector_main", "sector_sub", "theme", "symbol"]
@@ -193,6 +197,7 @@ def _parser() -> argparse.ArgumentParser:
         choices=("0", "1"),
         help="1 when any provisional comparison was seen before registering (D-1 point 2)",
     )
+    _add_bootstrap_parser(commands)
     return parser
 
 
@@ -260,6 +265,302 @@ def register(
     return row
 
 
+# --- bootstrap --production (ADR-0030 supplement 4 points 2-3, supplement 7, addendum) -------
+
+BOOTSTRAP_COMMAND: Final = "bootstrap"
+#: The post-commit check did not hold (supplement 7 point 5): no retry.
+EXIT_POST_COMMIT_CHECK_FAILED: Final = 5
+#: The D-1 point 1 horizons, in the order the two claims must be given.
+BOOTSTRAP_HORIZONS: Final = (3, 5)
+#: A line of an ``.env`` file that sets ``STOCK_DESK_DB_PATH``; only the key is looked for.
+_ENV_FILE_KEY: Final = re.compile(rf"^\s*{DB_PATH_ENV_VAR}\s*=")
+_COMMIT: Final = re.compile(r"^[0-9a-f]{40}$")
+_SHA256: Final = re.compile(r"^[0-9a-f]{64}$")
+_DRIVE: Final = re.compile(r"^[A-Za-z]:")
+
+#: Fixed sentences: no path, value or identifier is ever printed (supplement 4 point 4).
+POST_COMMIT_CHECK_FAILED: Final = (
+    "STOP: bootstrap committed but the post-commit check failed; do not retry"
+)
+#: Exit 4: the supplement 4 point 2 conditions and the transaction's SchemaNotEmptyError.
+BOOTSTRAP_PATH_REFUSALS: Final = {
+    "db_missing": "refused: the production database is not at its default location",
+    "db_not_default": "refused: the production database resolves to another location",
+    "db_not_regular": "refused: the production database is not a regular file",
+    "env_db_path": "refused: STOCK_DESK_DB_PATH is set in the environment",
+    "env_file_db_path": "refused: STOCK_DESK_DB_PATH is set in the .env file of the app",
+    "not_empty": "refused: the production database already holds forecast_ or plan_ objects",
+    "horizons": "refused: the two claims must be the h3 then the h5 rule set",
+    "replaces": "refused: a bootstrap claim replaces no claim",
+}
+#: Exit 3: every other refusal before or by the store.
+BOOTSTRAP_REFUSALS: Final = {
+    "provisional": "refused: --provisional-results-seen must be typed as 0 or 1",
+    "frozen_commit": "refused: --frozen-commit must be 40 lower-case hex digits",
+    "prereg_path": "refused: --prereg-doc-path is not a repo-relative path",
+    "prereg_sha256": "refused: --prereg-doc-sha256 must be 64 lower-case hex digits",
+    "prereg_blob": "refused: the pre-registration blob cannot be read at --frozen-commit",
+    "prereg_mismatch": "refused: the pre-registration blob does not match --prereg-doc-sha256",
+    "review_refs": "refused: --review-refs must be repo-relative paths separated by spaces",
+    "unpublished": "refused: a rule set or the definition is not published or is rejected",
+    "phrases": "refused: a banned phrase is in a rule set or the definition",
+    "store": "refused: the store refused the registration; nothing was written",
+}
+
+
+class BootstrapRefused(Exception):
+    """``bootstrap --production`` refused before the store exists; ``key`` names the sentence."""
+
+    def __init__(self, key: str, exit_code: int) -> None:
+        super().__init__(key)
+        self.key = key
+        self.exit_code = exit_code
+
+
+def _add_bootstrap_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    bootstrap = commands.add_parser(
+        BOOTSTRAP_COMMAND,
+        help="create the ledger and register the two core claims in the production database",
+    )
+    bootstrap.add_argument(
+        "--production", action="store_true", required=True, help="the production database"
+    )
+    bootstrap.add_argument(
+        "--rules-version",
+        action="append",
+        required=True,
+        help="a published rule set; given twice, h3 then h5",
+    )
+    bootstrap.add_argument("--definition-version", required=True, help="a published dirdef")
+    bootstrap.add_argument("--frozen-commit", required=True, help="the frozen commit (40 hex)")
+    bootstrap.add_argument(
+        "--prereg-doc-path", required=True, help="repo-relative path of the pre-registration"
+    )
+    bootstrap.add_argument(
+        "--prereg-doc-sha256",
+        required=True,
+        help="sha256 of the pre-registration blob at --frozen-commit",
+    )
+    bootstrap.add_argument(
+        "--review-refs", required=True, help="repo-relative review records, space separated"
+    )
+    bootstrap.add_argument(
+        "--replaces-claim-id", default=None, help="refused when given: bootstrap replaces nothing"
+    )
+    bootstrap.add_argument(
+        "--provisional-results-seen",
+        required=True,
+        help="typed by the operator: 0 or 1 (no default; supplement 6 addendum point 7)",
+    )
+
+
+def repo_relative_path_ok(path: str) -> bool:
+    """Supplement 4 point 3: repo-root relative, ``/``-separated; nothing is converted.
+
+    Refused: an empty string or surrounding spaces, a leading ``/``, a ``\\``,
+    a drive letter, and any empty, ``.`` or ``..`` part.
+    """
+    if not isinstance(path, str) or not path or path != path.strip():
+        return False
+    if path.startswith("/") or "\\" in path or _DRIVE.match(path):
+        return False
+    return all(part not in ("", ".", "..") for part in path.split("/"))
+
+
+def env_file_sets_db_path(env_file: Path) -> bool:
+    """True when a line of ``env_file`` starts with ``STOCK_DESK_DB_PATH=``; no value is kept."""
+    if not env_file.is_file():
+        return False
+    with open(env_file, encoding="utf-8-sig", errors="ignore") as handle:
+        return any(_ENV_FILE_KEY.match(line) for line in handle)
+
+
+def production_target(*, backend_dir: Path, env: Mapping[str, str]) -> Path:
+    """The production database, checked before any store exists (supplement 7 addendum point 3).
+
+    ``backend_dir`` is derived from this module's location (``BACKEND_DIR``;
+    tests pass a stand-in), never from the working directory. Neither the
+    environment nor ``<backend>/../.env`` may set ``STOCK_DESK_DB_PATH``; the
+    file must exist (``resolve(strict=True)``), resolve to
+    ``<backend>/data/stock-desk.db`` and be a regular file. Nothing is opened
+    as a database and no file is created.
+    """
+    if DB_PATH_ENV_VAR in env:
+        raise BootstrapRefused("env_db_path", EXIT_PATH_REFUSED)
+    if env_file_sets_db_path(backend_dir.parent / ".env"):
+        raise BootstrapRefused("env_file_db_path", EXIT_PATH_REFUSED)
+    target = backend_dir / "data" / PRODUCTION_DB_NAME
+    try:
+        resolved = target.resolve(strict=True)
+        expected = backend_dir.resolve(strict=True) / "data" / PRODUCTION_DB_NAME
+        mode = resolved.stat().st_mode
+    except OSError:
+        raise BootstrapRefused("db_missing", EXIT_PATH_REFUSED) from None
+    if resolved != expected:
+        raise BootstrapRefused("db_not_default", EXIT_PATH_REFUSED)
+    if not stat.S_ISREG(mode):
+        raise BootstrapRefused("db_not_regular", EXIT_PATH_REFUSED)
+    return resolved
+
+
+def git_blob(backend_dir: Path, commit: str, path: str) -> bytes | None:
+    """``git cat-file blob <commit>:<path>`` in the checkout of ``backend_dir``; else ``None``."""
+    try:
+        done = subprocess.run(
+            ["git", "cat-file", "blob", f"{commit}:{path}"],
+            cwd=backend_dir,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def bootstrap_claim_inputs(
+    args: argparse.Namespace, *, backend_dir: Path
+) -> tuple[list[ledger.ClaimInput], bool, list[str]]:
+    """The two ``ClaimInput`` of ``args``, the typed value and the phrase scan lines.
+
+    Every refusal here happens before the store exists (exit 3, or 4 for the
+    supplement 4 point 2 conditions). ``provisional_results_seen`` is taken
+    exactly as typed, ``0`` or ``1``: no default, no conversion. The
+    pre-registration bytes are the git blob at ``--frozen-commit`` and must
+    hash to ``--prereg-doc-sha256`` (supplement 4 point 3).
+    """
+    typed = args.provisional_results_seen
+    if typed not in ("0", "1"):
+        raise BootstrapRefused("provisional", EXIT_REFUSED)
+    if args.replaces_claim_id is not None:
+        raise BootstrapRefused("replaces", EXIT_PATH_REFUSED)
+    if not _COMMIT.fullmatch(args.frozen_commit):
+        raise BootstrapRefused("frozen_commit", EXIT_REFUSED)
+    if not repo_relative_path_ok(args.prereg_doc_path):
+        raise BootstrapRefused("prereg_path", EXIT_REFUSED)
+    if not _SHA256.fullmatch(args.prereg_doc_sha256):
+        raise BootstrapRefused("prereg_sha256", EXIT_REFUSED)
+    if not all(repo_relative_path_ok(ref) for ref in args.review_refs.split(" ")):
+        raise BootstrapRefused("review_refs", EXIT_REFUSED)
+    try:
+        definition = definitions.get_definition(args.definition_version)
+        entries = [definitions.get_ruleset_entry(v) for v in args.rules_version]
+    except (definitions.UnpublishedVersionError, definitions.PublishedVersionRejectedError):
+        raise BootstrapRefused("unpublished", EXIT_REFUSED) from None
+    if tuple(entry.horizon for entry in entries) != BOOTSTRAP_HORIZONS:
+        raise BootstrapRefused("horizons", EXIT_PATH_REFUSED)
+    blob = git_blob(backend_dir, args.frozen_commit, args.prereg_doc_path)
+    if not blob:
+        raise BootstrapRefused("prereg_blob", EXIT_REFUSED)
+    if hashlib.sha256(blob).hexdigest() != args.prereg_doc_sha256:
+        raise BootstrapRefused("prereg_mismatch", EXIT_REFUSED)
+    lines: list[str] = []
+    claims: list[ledger.ClaimInput] = []
+    for version, entry in zip(args.rules_version, entries, strict=True):
+        try:
+            ruleset = definitions.get_ruleset(version)
+            rules_bytes = definitions.get_rules_bytes(version)
+        except (definitions.UnpublishedVersionError, definitions.PublishedVersionRejectedError):
+            raise BootstrapRefused("unpublished", EXIT_REFUSED) from None
+        scan = definitions.registration_phrase_scan(ruleset, definition)
+        lines.append(
+            f"banned_phrase_scan_h{entry.horizon}=hits {len(scan.hits)}"
+            f" rules_strings {scan.rules_strings} definition_strings"
+            f" {scan.definition_strings} phrases {scan.phrases}"
+        )
+        if scan.hits:
+            raise BootstrapRefused("phrases", EXIT_REFUSED)
+        claims.append(
+            ledger.ClaimInput(
+                horizon=entry.horizon,
+                rules_version=version,
+                rules_bytes=rules_bytes,
+                rules_logic_sha256=rules_logic_sha256(ruleset),
+                definition=definition,
+                frozen_commit=args.frozen_commit,
+                prereg_doc_path=args.prereg_doc_path,
+                prereg_doc_blob=blob,
+                review_refs=args.review_refs,
+                replaces_claim_id=None,
+                replace_reason=None,
+                provisional_results_seen=typed == "1",
+            )
+        )
+    return claims, typed == "1", lines
+
+
+def post_commit_check(store: ledger.ForecastStore, ids: tuple[str, str], *, seen: bool) -> bool:
+    """Supplement 7 point 5, read-only: the schema first, then the rows, the runs, the value."""
+    if not store.ledger_schema_status().complete:
+        return False
+    if [row.claim_id for row in store.forward_claims()] != list(ids):
+        return False
+    if store.runs():
+        return False
+    try:
+        values = store.provisional_results_seen()
+    except ledger.LedgerInconsistentError:
+        return False
+    return values == [(claim, int(seen)) for claim in ids]
+
+
+def bootstrap_main(
+    args: argparse.Namespace,
+    *,
+    env: Mapping[str, str],
+    backend_dir: Path,
+    clock: ledger.Clock | None,
+) -> int:
+    """``bootstrap --production``: checks, ``store.bootstrap``, the post-commit check, the output.
+
+    Exit codes: 0 registered and checked; 3 refused (the input checks and any
+    other ``ForecastStoreError``); 4 refused by a supplement 4 point 2
+    condition or a ``SchemaNotEmptyError`` in the transaction; 5 committed but
+    the post-commit check failed (no retry). 3 and 4 write nothing. Unexpected
+    exceptions are not caught. The output holds fixed text, counts, hashes,
+    the commit and times only -- no path and no identifier.
+    """
+    try:
+        target = production_target(backend_dir=backend_dir, env=env)
+        claims, seen, lines = bootstrap_claim_inputs(args, backend_dir=backend_dir)
+    except BootstrapRefused as refused:
+        sentences = {**BOOTSTRAP_PATH_REFUSALS, **BOOTSTRAP_REFUSALS}
+        print(sentences[refused.key], file=sys.stderr)
+        return refused.exit_code
+    store = ledger.ForecastStore(target, clock=clock or ledger.system_clock)
+    try:
+        ids = store.bootstrap(claims=claims)
+    except SchemaNotEmptyError:
+        print(BOOTSTRAP_PATH_REFUSALS["not_empty"], file=sys.stderr)
+        return EXIT_PATH_REFUSED
+    except ledger.ForecastStoreError:
+        print(BOOTSTRAP_REFUSALS["store"], file=sys.stderr)
+        return EXIT_REFUSED
+    if not post_commit_check(store, ids, seen=seen):
+        print(POST_COMMIT_CHECK_FAILED, file=sys.stderr)
+        return EXIT_POST_COMMIT_CHECK_FAILED
+    rows = {row.claim_id: row for row in store.forward_claims()}
+    first = rows[ids[0]]
+    out = [
+        "bootstrap=ok",
+        *lines,
+        f"registered_rows={len(rows)}",
+        f"frozen_commit={args.frozen_commit}",
+        f"prereg_doc_sha256={args.prereg_doc_sha256}",
+        f"definition_sha256={first.definition_sha256}",
+        f"definition_logic_sha256={first.definition_logic_sha256}",
+    ]
+    for claim in ids:
+        row = rows[claim]
+        out.append(f"rules_sha256_h{row.horizon}={row.rules_sha256}")
+        out.append(f"rules_logic_sha256_h{row.horizon}={row.rules_logic_sha256}")
+        out.append(f"registered_at_h{row.horizon}={canonical_timestamp(row.registered_at)}")
+    out.append(f"provisional_results_seen={int(seen)}")
+    out.append("post_commit_check=ok")
+    print("\n".join(out))
+    return EXIT_OK
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -275,6 +576,10 @@ def main(
     and the store's system clock.
     """
     args = _parser().parse_args(argv)
+    if args.command == BOOTSTRAP_COMMAND:
+        return bootstrap_main(
+            args, env=os.environ if env is None else env, backend_dir=backend_dir, clock=clock
+        )
     db_path = Path(args.db)
     reason = production_path_refusal(
         db_path,
