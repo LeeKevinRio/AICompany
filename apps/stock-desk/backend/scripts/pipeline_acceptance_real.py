@@ -965,7 +965,11 @@ def main(argv: Sequence[str] | None = None, **injected: Any) -> int:
         pass
     # RC-158c: a copy that is still there after the last cleanup is never silent, whichever
     # path led here. The sentence is shown once, after the sentence the run ended with.
-    if copy_left_behind(state.root):
+    try:
+        left = copy_left_behind(state.root)
+    except OSError:
+        left = True  # fail closed: a copy that cannot be ruled out is treated as left behind
+    if left:
         if code != 3 or not copy_stop_shown:
             say(OUTER_STOP_SENTENCES["copy_not_deleted"])
         code = 3

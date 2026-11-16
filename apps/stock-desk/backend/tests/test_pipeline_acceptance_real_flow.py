@@ -1691,3 +1691,55 @@ def test_qa_cleanup_interrupted_between_the_two_ledgers_leaves_nothing(
     code, out, err = world.run(capsys, read_bars=lambda _p: bars, acceptance=fake, remover=remover)
     assert (code, out, err) == (2, [INTERRUPTED], "")
     no_residue(world)
+
+
+# --- qa M-2: a last check that cannot be made is fail-closed ---
+
+
+@pytest.mark.parametrize("failing", ["iterdir", "exists"])
+def test_m2_a_permission_error_in_the_last_check_shows_the_copy_stop(
+    tmp_path: Path, capsys: Any, spy: Any, monkeypatch: pytest.MonkeyPatch, failing: str
+) -> None:
+    world = make_world(tmp_path)
+    _old_run(world, "p0")
+    root = world.home / real.WORK_ROOT_NAME
+    real_iterdir, real_exists = Path.iterdir, Path.exists
+
+    def iterdir(self: Path) -> Any:
+        if self == root and failing == "iterdir":
+            raise PermissionError("denied")
+        return real_iterdir(self)
+
+    def exists(self: Path, *args: Any, **kwargs: Any) -> bool:
+        if self.name == "copy" and "20260101-000000" in str(self) and failing == "exists":
+            raise PermissionError("denied")
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    monkeypatch.setattr(Path, "exists", exists)
+    code, out, err = world.run(capsys, acceptance=spy[1])
+    # The sweep fails first (the fixed error sentence); the last check cannot rule a copy out.
+    assert code == 3
+    assert out == [UNEXPECTED, real.OUTER_STOP_SENTENCES["copy_not_deleted"]]
+    assert_screen_is_closed(out, err)
+    assert spy[0] == []
+
+
+def test_m2_the_last_check_alone_failing_is_fail_closed_and_shown_once(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = make_world(tmp_path)
+    bars = yfinance_bars()
+
+    def fake(folder: Path, **kwargs: Any) -> Any:
+        return AcceptanceResult(rules=kwargs["rules"].name, window=(), ledger_sha256="a" * 64)
+
+    def boom(_root: Any) -> bool:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(real, "copy_left_behind", boom)
+    code, out, err = world.run(capsys, read_bars=lambda _p: bars, acceptance=fake)
+    assert code == 3
+    assert out[-1] == real.OUTER_STOP_SENTENCES["copy_not_deleted"]
+    assert out.count(real.OUTER_STOP_SENTENCES["copy_not_deleted"]) == 1
+    assert_screen_is_closed(out, err)
