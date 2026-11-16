@@ -635,3 +635,142 @@ def test_the_boundary_scans_have_teeth() -> None:
         "    def c(self):\n        with self._write(True):\n            pass\n"
     )
     assert _fresh_write_sites(source) == ["S.a", "S.c"]
+
+
+# --- supplement 7 addendum S-15a point 1: create_objects callers per function ----------------
+
+
+def _create_objects_sites(source: str) -> set[str]:
+    """The functions of ``source`` that call ``create_objects``, under any import alias.
+
+    A call counts when it is ``create_objects(...)`` or a name bound by
+    ``from ... import create_objects as <name>``, or any ``<expr>.create_objects(...)``
+    (``schema.create_objects``, a module alias), or ``getattr(<expr>, "create_objects")``.
+    The site is the innermost enclosing function's name (``<module>`` at top level).
+    """
+    tree = ast.parse(source)
+    names = {"create_objects"} | {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name == "create_objects"
+    }
+
+    def is_call(node: ast.AST) -> bool:
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in names:
+            return True
+        if isinstance(func, ast.Attribute) and func.attr == "create_objects":
+            return True
+        return (
+            isinstance(func, ast.Name)
+            and func.id == "getattr"
+            and any(isinstance(a, ast.Constant) and a.value == "create_objects" for a in node.args)
+        )
+
+    found: set[str] = set()
+
+    def visit(node: ast.AST, where: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            inner = (
+                child.name if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) else where
+            )
+            if is_call(child):
+                found.add(inner)
+            visit(child, inner)
+
+    visit(tree, "<module>")
+    return found
+
+
+def test_s15a_create_objects_is_called_from_exactly_two_functions() -> None:
+    sites = {
+        (path, site)
+        for path, source in _app_sources().items()
+        for site in _create_objects_sites(source)
+    }
+    assert sites == {("forecast/store.py", "_write"), ("forecast/schema.py", "create_schema")}
+
+
+def test_s15a_the_function_scan_has_teeth() -> None:
+    assert _create_objects_sites("def f(c):\n    create_objects(c)\n") == {"f"}
+    aliased = "from app.forecast.schema import create_objects as make\ndef g(c):\n    make(c)\n"
+    assert _create_objects_sites(aliased) == {"g"}
+    module = (
+        "import app.forecast.schema as s\n"
+        "class K:\n    def h(self, c):\n        s.create_objects(c)\n"
+    )
+    assert _create_objects_sites(module) == {"h"}
+    dynamic = "def i(m, c):\n    getattr(m, 'create_objects')(c)\n"
+    assert _create_objects_sites(dynamic) == {"i"}
+    assert _create_objects_sites("create_objects(c)\n") == {"<module>"}
+    assert _create_objects_sites("def j():\n    create_objects = 1\n") == set()
+    # The real store.py with one more caller is caught (reverse check on a copy).
+    store_source = Path(store_module.__file__).read_text(encoding="utf-8")
+    sneaky = (
+        store_source
+        + "\n\ndef sneaky(conn):\n"
+        + "    from app.forecast.schema import create_objects as build\n"
+        + "    build(conn)\n"
+    )
+    assert _create_objects_sites(store_source) == {"_write"}
+    assert _create_objects_sites(sneaky) == {"_write", "sneaky"}
+
+
+# --- a failure of COMMIT itself ---------------------------------------------------------------
+
+
+class CommitFailsConnection:
+    """Wraps a ``sqlite3.Connection``: ``execute("COMMIT")`` raises, the rest is delegated.
+
+    Every statement's first word passed to ``execute`` is recorded, and so is
+    ``close``, so the test sees that the store issued ROLLBACK itself before
+    closing (closing alone would also discard the transaction).
+    """
+
+    def __init__(self, conn: sqlite3.Connection, log: list[str]) -> None:
+        self._conn = conn
+        self._log = log
+
+    def execute(self, sql: str, *args: Any) -> sqlite3.Cursor:
+        self._log.append(sql.split()[0].upper())
+        if sql.strip().upper() == "COMMIT":
+            raise sqlite3.OperationalError("injected: COMMIT failed")
+        return self._conn.execute(sql, *args)
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._conn.in_transaction
+
+    def close(self) -> None:
+        self._log.append("<close>")
+        self._conn.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+
+def test_a_failing_commit_rolls_everything_back(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log: list[str] = []
+    real_open = store_module._open_connection
+
+    def open_wrapped(path: Path) -> Any:
+        return CommitFailsConnection(real_open(path), log)
+
+    monkeypatch.setattr(store_module, "_open_connection", open_wrapped)
+    before = _digest(db)
+    store = ForecastStore(db, clock=ScriptedClock(START, START + timedelta(seconds=1)))
+    with pytest.raises(sqlite3.OperationalError, match="injected: COMMIT failed"):
+        store.bootstrap(claims=pair())
+    # Both rows were inserted, COMMIT failed, the store rolled back, then closed.
+    assert log.count("INSERT") == 2
+    assert log[-3:] == ["COMMIT", "ROLLBACK", "<close>"]
+    monkeypatch.undo()
+    # A new connection: no ledger object, the other table as it was, no left-over file.
+    with closing(sqlite3.connect(db)) as conn:
+        names = [str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master")]
+    assert not [n for n in names if n.lower().startswith(LEDGER_PREFIXES)]
+    _assert_untouched(db, before)
