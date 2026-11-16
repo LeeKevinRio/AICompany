@@ -11,6 +11,7 @@
 - 補充紀錄：2026-11-15 append 補充六（D-7 真實資料那一次：取數方式、注入時間戳、完整輸出不落檔、回貼白名單、失敗後的診斷路徑、通過證據與 CG-2 的綁定、`uv.lock` 換行；tech-architect 裁示，釐清與收緊，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/` 程式；第 1 點 (b) 與第 4 點 (d) 的讀法待風控確認，確認前一鍵檔不得在 CEO 本機執行；其餘 CEO 可推翻；來源 `work/reviews/2026-11-15-真實資料管線驗收一鍵檔設計-devops-sre.md`）。
 - 補充紀錄：2026-11-16 append 補充六附記（風控 RC-158～RC-165 與 CEO #150 的落實：第 1 點 (b) 的檔案操作限制與適用範圍、複本刪除失敗即停止、失敗種類格式、畫面白名單的機械保證、規則檔位元組綁定、`provisional_results_seen` 在 CG-2 的處理；解除第 8 點限制；tech-architect 裁示，收緊不放寬，不改使用者面字面、規則檔、定義物件與已登記雜湊；來源 `work/reviews/2026-11-15-真實資料一鍵檔Q1Q2確認-風控.md`、`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` #150）。
 - 補充紀錄：2026-11-16 append 補充六附記二（第 1 點 (c)「不得寫入複本」的讀法：WAL 複本的 `-shm` 與 `immutable=1` 條件式；tech-architect 裁示，只放寬複本 `-shm`，不動主 DB 三檔的限制，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/`；經風控審查（RC-167，附條件接受）；來源 `work/reviews/2026-11-16-一鍵檔取數函式交件-dev-lead.md`）。
+- 補充紀錄：2026-11-16 append 補充六附記三（第 6 點 (a)「三行 `copy_check=SAME`」的讀法：`-wal`、`-shm` 在主 DB 與複本都不存在時印 `absent_both`，也算通過；tech-architect 裁示，更正起草時寫得太窄的字面，判定強度不變，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/`，CEO 可推翻；來源 `work/reviews/2026-11-16-一鍵檔外層流程交件-devops-sre.md` 自定解讀第 1 點）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -745,3 +746,17 @@
 4. **適用範圍與主 DB（RC-167b）**：第 1 點的讀法只適用 `scripts/pipeline_acceptance_real.py` 在自己工作資料夾內建立的複本，與補充六附記第 2 點（RC-158b）同一個範圍。主 DB 的 `-shm` 仍受補充六附記第 1 點（RC-158a）約束：只能 `"rb"`，不得改寫。
 
 - **S-13d（逐條可檢查）**：有 `-wal` 的合成複本，讀取前後 `.db` 與 `-wal` 的 sha256 相同，結束後複本旁只多出 `-shm`；無 `-wal` 的合成複本，讀取後不產生任何側檔；AST 斷言連線只執行 `query_only` 與 `_SELECT_SQL`；e2e 斷言 `copy_check` 在第一次 `sqlite3.connect` 之前完成；清理後複本三檔都不存在。讀取前後主 DB 三檔的 sha256 與 mtime 都不變（RC-167b）。WAL 測試斷言讀出的列包含合成複本中還沒 checkpoint 的列，qa 親自重驗（RC-167c）。
+
+---
+
+## 補充六附記三：`copy_check` 的值域與第 6 點 (a) 的讀法（2026-11-16）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-16-一鍵檔外層流程交件-devops-sre.md`（自定解讀第 1、3、5 點）；另讀 `scripts/pipeline_acceptance_real.py` 的 `copy_db_files` 與白名單、`scripts/r2_first_run.py` 的 `compare_copy`、`work/reviews/2026-11-15-真實資料管線驗收一鍵檔設計-devops-sre.md`（「三檔各一行，同 r2」）。
+- 性質：更正補充六第 4 點 (a) 與第 6 點 (a) 起草時寫得太窄的字面，判定強度不變。與補充六、附記、附記二衝突時，以本附記為準。
+
+1. **值域**：`copy_check` 恰好三行，依序對應 `stock-desk.db`、`-wal`、`-shm`。每行的值只能是 `SAME`（兩邊都存在，且複製前、複本、複製後三個 sha256 相同）或 `absent_both`（主 DB 與複本兩邊都不存在）。存在與否不一致或位元組不同時，一律 STOP（`copy_changed`），不印成 `copy_check` 行。這是 r2 `compare_copy` 值域的子集。
+2. **第 6 點 (a) 的讀法**：「三行 `copy_check=SAME`」讀為：恰好三行，依上述順序；第 1 行必須是 `copy_check=SAME`；第 2、3 行各為 `copy_check=SAME` 或 `copy_check=absent_both`。主 DB 乾淨關閉時，回貼是一行 `SAME` 加兩行 `absent_both`，也算通過。
+3. **另兩項確認**：STOP 與 ERROR 時不產生回貼檔，視為「沒有通過證據」。上次殘留的 `p0`、`p1` 刪不掉時回貼 `cleanup=FAILED`，依補充六第 3 點處理。上次殘留的 `copy` 刪不掉時，依附記第 3 點 STOP。
+4. **CEO 可推翻**，推翻時改採：主 DB 必須三檔都存在，否則新增 STOP 種類，並重送風控修訂 STOP 對照表。
+
+- **S-13e（逐條可檢查）**：白名單的 `copy_check` 樣式只接受 `SAME|absent_both`（測試）；主 DB 只有 `.db` 時，三行依序為 `SAME`、`absent_both`、`absent_both`（測試）；`-wal`、`-shm` 都存在時三行都是 `SAME`（測試）；主 DB 缺 `.db` 時，在 `copy_check` 之前就 STOP（`test_stop_no_db`）；qa 依第 2 點判讀 CG-2 前的回貼。
