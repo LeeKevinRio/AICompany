@@ -46,8 +46,12 @@ only creates on a database holding no ledger object at all, and
 :func:`schema_status` compares ``sqlite_master`` with the DDL text here, so a
 missing table or trigger, an altered one, or any extra ``forecast_`` /
 ``plan_`` object (K-5) makes the schema incomplete and the store refuses to
-write. Nothing in this module runs on import, and nothing calls
-:func:`create_schema` outside the tests until the wiring PR (D-6 CG-3).
+write. Nothing in this module runs on import. :func:`create_objects` creates
+the objects inside a transaction its caller opened; in ``app/`` only
+``ForecastStore.bootstrap`` reaches it (ADR-0030 supplement 4 point 2: the
+production schema is created only by the one-transaction bootstrap, together
+with the two claim rows; supplement 7). :func:`create_schema` wraps it in a
+transaction of its own and has no caller in ``app/``.
 """
 
 from __future__ import annotations
@@ -381,19 +385,34 @@ def require_complete_schema(conn: sqlite3.Connection) -> None:
         )
 
 
+def create_objects(conn: sqlite3.Connection) -> None:
+    """Create every ledger object inside the caller's open transaction (supplement 7 point 1).
+
+    ``conn`` must already be in a transaction (``conn.in_transaction``); this
+    function issues no BEGIN, COMMIT or ROLLBACK, so the caller's transaction
+    decides whether the objects stay. Any ledger object already present raises
+    :class:`SchemaNotEmptyError` before anything is created: there is no
+    "create what is missing", because that is a migration (K-12).
+    """
+    if not conn.in_transaction:
+        raise RuntimeError("create_objects must run inside the caller's open transaction")
+    if _ledger_objects(conn):
+        raise SchemaNotEmptyError("forecast ledger objects already exist; nothing created")
+    for sql in EXPECTED_OBJECTS.values():
+        conn.execute(sql)
+
+
 def create_schema(conn: sqlite3.Connection) -> None:
     """Create every ledger object in one transaction, on a database that has none of them.
 
     ``conn`` must be in autocommit mode (``isolation_level=None``). Any ledger
     object already present raises :class:`SchemaNotEmptyError` and nothing is
     created: there is no "create what is missing", because that is a migration.
+    The transaction is BEGIN IMMEDIATE, :func:`create_objects`, COMMIT.
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
-        if _ledger_objects(conn):
-            raise SchemaNotEmptyError("forecast ledger objects already exist; nothing created")
-        for sql in EXPECTED_OBJECTS.values():
-            conn.execute(sql)
+        create_objects(conn)
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
