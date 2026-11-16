@@ -14,6 +14,7 @@
 - 補充紀錄：2026-11-16 append 補充六附記三（第 6 點 (a)「三行 `copy_check=SAME`」的讀法：`-wal`、`-shm` 在主 DB 與複本都不存在時印 `absent_both`，也算通過；tech-architect 裁示，更正起草時寫得太窄的字面，判定強度不變，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/`，CEO 可推翻；來源 `work/reviews/2026-11-16-一鍵檔外層流程交件-devops-sre.md` 自定解讀第 1 點）。
 - 補充紀錄：2026-11-16 append 補充七（CG-2 正式登記的 store／schema 介面、單一交易與提交後核對；store／schema 改動以前置 PR 在真實資料那一次之前落地；tech-architect 裁示，釐清與收緊，不放寬補充六第 6 點 (d)、K-4、K-5、K-12，不改使用者面字面、規則檔、定義物件與已登記雜湊；第 8 點待風控 Q-7a；其餘 CEO 可推翻；來源 `work/reviews/2026-11-16-CG2登記PR第一段交件-dev-lead.md`）。
 - 補充紀錄：2026-11-16 append 補充七附記（第 6 點 `create_objects` 呼叫點的字面更正、既有測試 `WRITE_METHODS` 加列 `bootstrap` 的容許、`bootstrap` 目標路徑檢查歸 CLI；tech-architect 裁示，字面更正與收緊，不放寬補充七其餘各點；CEO 可推翻；來源 `work/reviews/2026-11-16-CG2前置PR交件-dev-lead.md`）。
+- 補充紀錄：2026-11-16 append 補充七附記二（附記第 3 點 `mode=ro` 字面更正、claims.py 白名單與補充六第 6 點 (d) 範圍的確認、提交後例外、`git_blob` 環境、M-7 屬性位置、claims.py 模組 docstring；tech-architect 裁示，字面更正與釐清，第 1、5、6 點窄幅寬於字面已標明，不改 store.py、schema.py、harness 三檔、使用者面字面、規則檔、定義物件與已登記雜湊；CEO 可推翻；來源 `work/reviews/2026-11-16-CG2登記PR第二段交件-dev-lead.md`、`work/reviews/2026-11-16-CG2登記PR審查-qa-reviewer.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -855,3 +856,34 @@
   - 第 1 點：AST 測試，斷言 store.py 內呼叫 `create_objects` 的函式恰為 `{"_write"}`，schema.py 內恰為 `{"create_schema"}`。
   - 第 2 點：`tests/test_forecast_store.py` 的 diff 只有一行。
   - 第 3 點：CG-2 PR 測試，目標不存在時結束碼為 4，且該路徑仍不存在。
+
+---
+
+## 補充七附記二：`mode=ro` 字面更正、claims.py 的 (d) 範圍、提交後例外、`git_blob` 環境與 M-7（2026-11-16）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-16-CG2登記PR第二段交件-dev-lead.md`、`work/reviews/2026-11-16-CG2登記PR審查-qa-reviewer.md`；另讀 `feat/nm5-cg2-registration`（`2ce29a9c`）的 `app/forecast/claims.py`、`tests/forecast_pipeline_harness.py`、`tests/test_forecast_boundaries.py`、`apps/stock-desk/backend/.gitattributes`、`work/.gitignore`。
+- 性質：更正補充七附記第 3 點字面；釐清補充六第 6 點 (d)、補充四 M-7 與 R-2。第 1、5、6 點比原字面窄幅放寬，已逐點標明。與補充七、補充七附記衝突時以本附記為準。CEO 可推翻。
+
+1. **附記第 3 點更正（窄幅寬於字面）**：刪除「檢查 `forecast_`、`plan_` 表時只用 `mode=ro` 的唯讀 URI」。改為：claims.py 不自行開任何 SQLite 連線；這項條件只由交易內的 `create_objects` 判定，拋 `SchemaNotEmptyError` 時結束碼 4。提早停止只由登記一鍵檔的 R-4 做：`mode=ro` 連線，判定規則與補充七第 3 點相同（任何物件的名稱或所屬表，不分大小寫以兩個前綴開頭）。理由：K-4 測試與補充七第 6 點不放寬，store.py 不在 (d) 內；交易外的檢查本來就有 TOCTOU，以交易內為準。放寬處：被拒絕時，claims.py 會在主 DB 上開一次寫入交易再回滾；主 DB 若殘留 `-wal`，可能在這時被 checkpoint，邏輯內容不變。R-4 先執行，補充四第 4 點的備份也先取得，所以接受。「不寫入」讀為沒有任何邏輯寫入。
+2. **import 白名單**：`tests/test_forecast_boundaries.py` 的 claims.py import 白名單加列 `app.forecast.schema.SchemaNotEmptyError`，這是補充七第 5 點的直接結果，予以容許；性質同補充七附記第 2 點。限制：diff 恰好一行；只能 import 例外類別；同檔其他斷言不得改動。
+3. **(d) 的 claims.py 範圍**：harness 只呼叫 `production_path_refusal` 與 `register`。遞移集合為 `register`、`production_path_refusal`、`_phrase_scan_lines`、`_same_file`、`claim_id`、`count_m`、`m_eff`、`RegistrationRefused`，必須 AST 相同。`_parser` 與 `main` 不在集合內：它們內含的子命令分派屬「CLI 分支」，新增的頂層 import 屬「新增的頂層定義」。限制：`_parser` 只增 `_add_bootstrap_parser(commands)` 一行；`main` 只在 `parse_args` 之後增加 `bootstrap` 的分派；`register` 子命令的既有路徑 AST 不變。
+4. **提交後例外**：`store.bootstrap` 回傳之後，到印出成功輸出為止（核對與組輸出都算），任何 `Exception` 一律只印 `POST_COMMIT_CHECK_FAILED` 固定句，以結束碼 5 結束，不重試，不印例外文字。`BaseException` 不捕捉（同補充四第 1 點 (b)）；一鍵檔把任何非 0 結束碼都視為 STOP。commit 之前的預期外例外仍不捕捉，交易已回滾。本點屬 `bootstrap_main` 內的新增，在 (d) 範圍內。
+5. **M-7 屬性位置（釐清 (d)）**
+   - `apps/stock-desk/backend/.gitattributes` 加兩行：`/app/outlook/rules/h3.yaml text eol=lf`、`/app/outlook/rules/h5.yaml text eol=lf`。`uv.lock` 那一行不動。
+   - 新增 `work/research/.gitattributes`，只有一行 `/2026-10-15-3日5日方向判斷-事先宣告草案.md text eol=lf`。新增 `work/dispatch/.gitattributes`，只有一行 `/2026-11-15-C8決策紀錄-F2B.md text eol=lf`。這兩個資料夾已由 `!research/**`、`!dispatch/**` 放行，`work/.gitignore` 不改。
+   - repo 根目錄的 `.gitattributes` 不改。上述三檔只存在於產品分支。
+   - 四檔目前是 `i/lf`，加屬性不改它們的 blob，所以 M-2、M-3 的「沒有任何變更」仍然成立；`uv.lock` 維持零差異。這三個 `.gitattributes` 列入 (d) 允許的差異。
+6. **claims.py 模組 docstring（窄幅寬於 (d) 字面）**：CG-2 PR 可以改 claims.py 的模組 docstring（`tree.body[0]`），改成不依登記狀態的寫法：寫出 `bootstrap --production` 與結束碼 0、2、3、4、5；不寫任何雜湊、`claim_id` 或「已登記／未登記」字樣。理由：前置 PR 依補充七第 7 點要求 claims.py 零差異，所以這份 docstring 沒被一併改正。前置 PR 改過的四個 docstring 仍不得再改。
+7. **`git_blob`**：claims.py 呼叫 git 時，傳入的環境要先移除所有以 `GIT_` 開頭的變數，並加 `--no-replace-objects`；`cwd` 維持 `<backend>`。
+8. **`--frozen-commit`**：CLI 只驗格式，以及 prereg blob 的 sha256。規則檔位元組與 `frozen_commit` 的綁定，由一鍵檔負責：`--frozen-commit` 必須是同一次執行中 R-1 取得的 `HEAD`；R-2 的凍結檔包含 h3、h5 兩份 YAML。
+9. **R-2 的換行證據**：每個凍結檔都要核對三項：工作樹原始位元組 sha256 等於 blob sha256，也等於 M-8 常數；`git ls-files --eol` 為 `i/lf w/lf attr/text eol=lf`；`git check-attr eol` 為 `lf`。任一不符就 STOP，不改 git 設定，也不改檔；補救限 `git checkout HEAD -- <path>`。
+
+- **S-15b（逐條可檢查）**
+  - 第 1 點：claims.py 沒有 `connect`、`execute`（既有測試不改）；R-4 判定規則與交易內相同（一鍵檔測試）。
+  - 第 2 點：該測試檔對 product 的 diff 只有一行。
+  - 第 3 點：PR 附上遞移集合的 AST 比對輸出，以及 `_parser`、`main` 的 diff。
+  - 第 4 點：在核對中與組輸出中各注入 `sqlite3.OperationalError` 與 `RuntimeError`，結束碼 5，stderr 恰為固定句，stdout 為空（測試）。
+  - 第 5 點：PR 附上四檔加 `uv.lock` 的 `git ls-files --eol` 輸出，以及四檔 blob id 與 M-2、M-3、`git_head` 相同的證據；`git check-ignore` 對兩個新 `.gitattributes` 不命中。
+  - 第 6 點：AST 比對中，claims.py 除了第 3 點所列與新增的定義之外，只有 `body[0]` 不同。
+  - 第 7 點：設了 `GIT_DIR` 指向另一個 repo 時，`git_blob` 仍取得本 checkout 的 blob（測試）。
+  - 第 9 點：一鍵檔的 R-2 在 CRLF 工作樹判 STOP（測試）。
