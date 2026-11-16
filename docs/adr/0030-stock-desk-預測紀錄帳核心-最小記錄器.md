@@ -13,6 +13,7 @@
 - 補充紀錄：2026-11-16 append 補充六附記二（第 1 點 (c)「不得寫入複本」的讀法：WAL 複本的 `-shm` 與 `immutable=1` 條件式；tech-architect 裁示，只放寬複本 `-shm`，不動主 DB 三檔的限制，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/`；經風控審查（RC-167，附條件接受）；來源 `work/reviews/2026-11-16-一鍵檔取數函式交件-dev-lead.md`）。
 - 補充紀錄：2026-11-16 append 補充六附記三（第 6 點 (a)「三行 `copy_check=SAME`」的讀法：`-wal`、`-shm` 在主 DB 與複本都不存在時印 `absent_both`，也算通過；tech-architect 裁示，更正起草時寫得太窄的字面，判定強度不變，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/`，CEO 可推翻；來源 `work/reviews/2026-11-16-一鍵檔外層流程交件-devops-sre.md` 自定解讀第 1 點）。
 - 補充紀錄：2026-11-16 append 補充七（CG-2 正式登記的 store／schema 介面、單一交易與提交後核對；store／schema 改動以前置 PR 在真實資料那一次之前落地；tech-architect 裁示，釐清與收緊，不放寬補充六第 6 點 (d)、K-4、K-5、K-12，不改使用者面字面、規則檔、定義物件與已登記雜湊；第 8 點待風控 Q-7a；其餘 CEO 可推翻；來源 `work/reviews/2026-11-16-CG2登記PR第一段交件-dev-lead.md`）。
+- 補充紀錄：2026-11-16 append 補充七附記（第 6 點 `create_objects` 呼叫點的字面更正、既有測試 `WRITE_METHODS` 加列 `bootstrap` 的容許、`bootstrap` 目標路徑檢查歸 CLI；tech-architect 裁示，字面更正與收緊，不放寬補充七其餘各點；CEO 可推翻；來源 `work/reviews/2026-11-16-CG2前置PR交件-dev-lead.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -838,3 +839,19 @@
   - 第 5 點：每個結束碼各有一個測試。
   - 第 6 點：各項 AST 斷言。
   - 第 7 點：前置 PR 附零差異清單與新舊 `code_digest`；CG-2 PR 附 `git merge-base --is-ancestor <前置 PR 合併 commit> <git_head>` 的結果。
+
+---
+
+## 補充七附記：第 6 點字面更正、既有測試白名單與目標路徑檢查（2026-11-16）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-16-CG2前置PR交件-dev-lead.md`。
+- 性質：更正與收緊，不放寬補充七其餘各點。CEO 可推翻。
+
+1. 第 6 點第一項更正為：`app/` 中呼叫 `create_objects` 的地方恰為兩處，即 store.py 的 `ForecastStore._write` 與 schema.py 的 `create_schema`。原字面與第 1 點衝突，以本附記為準。「沒有任何模組呼叫 `create_schema`」的範圍是 `app/`，測試與 harness 不在此限。
+2. 第 1 點與 S-15 的「既有測試不改」，不含 store 寫入方法的列舉白名單（`tests/test_forecast_store.py` 的 `WRITE_METHODS`）。白名單加列 `bootstrap` 是第 2 點的直接結果，予以容許；同檔其他斷言不得改動。
+3. `ForecastStore.bootstrap` 不檢查目標檔。補充四第 2 點的目標與環境變數條件，以及 R-3 的「主 DB 存在於預設位置」，由 claims.py 在建立 `ForecastStore` 之前檢查：`<backend>` 由模組位置導出，不取自工作目錄；`Path.resolve(strict=True)` 成功，且等於 `<backend>/data/stock-desk.db`，且為一般檔案；檢查 `forecast_`、`plan_` 表時只用 `mode=ro` 的唯讀 URI。任一不成立就以結束碼 4 拒絕，且不得建立任何檔案。
+
+- **S-15a（逐條可檢查）**
+  - 第 1 點：AST 測試，斷言 store.py 內呼叫 `create_objects` 的函式恰為 `{"_write"}`，schema.py 內恰為 `{"create_schema"}`。
+  - 第 2 點：`tests/test_forecast_store.py` 的 diff 只有一行。
+  - 第 3 點：CG-2 PR 測試，目標不存在時結束碼為 4，且該路徑仍不存在。
