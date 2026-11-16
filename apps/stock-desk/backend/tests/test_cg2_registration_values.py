@@ -71,7 +71,11 @@ FREEZE_PACK_PATH: Final = "work/research/2026-11-14-NM5凍結包-大盤h3h5-quan
 #: Extraction rule: in the freeze pack blob (UTF-8, split into lines keeping their
 #: ``\n``), find the line equal to the heading; the block is every line strictly
 #: between the first following line equal to :data:`FENCE_OPEN` and the first
-#: line after that equal to :data:`FENCE_CLOSE`, joined unchanged.
+#: line after that equal to :data:`FENCE_CLOSE`, joined unchanged. It fails
+#: (:class:`FreezePackBlockError`) when the heading line occurs 0 times or more
+#: than once, when no opening fence follows the heading before the next heading
+#: (a line starting with ``#`` outside a fence) or the end, and when no closing
+#: fence follows the opening one (TA CG-2 checklist item 6).
 FREEZE_PACK_BLOCKS: Final = {3: "### 4.1 h3.yaml\n", 5: "### 4.2 h5.yaml\n"}
 FENCE_OPEN: Final = "```yaml\n"
 FENCE_CLOSE: Final = "```\n"
@@ -104,12 +108,28 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+class FreezePackBlockError(ValueError):
+    """The freeze pack does not hold exactly one well-fenced block under the heading."""
+
+
 def freeze_pack_block(text: str, heading: str) -> bytes:
     """The fenced YAML block under ``heading`` (the :data:`FREEZE_PACK_BLOCKS` rule)."""
     lines = text.splitlines(keepends=True)
-    start = lines.index(heading)
-    opening = next(i for i in range(start + 1, len(lines)) if lines[i] == FENCE_OPEN)
-    closing = next(i for i in range(opening + 1, len(lines)) if lines[i] == FENCE_CLOSE)
+    starts = [i for i, line in enumerate(lines) if line == heading]
+    if len(starts) != 1:
+        raise FreezePackBlockError(f"the heading occurs {len(starts)} times, not once")
+    opening = None
+    for i in range(starts[0] + 1, len(lines)):
+        if lines[i] == FENCE_OPEN:
+            opening = i
+            break
+        if lines[i].startswith("#"):
+            break
+    if opening is None:
+        raise FreezePackBlockError("no opening fence under the heading")
+    closing = next((i for i in range(opening + 1, len(lines)) if lines[i] == FENCE_CLOSE), None)
+    if closing is None:
+        raise FreezePackBlockError("no closing fence after the opening one")
     return "".join(lines[opening + 1 : closing]).encode("utf-8")
 
 
@@ -197,8 +217,32 @@ def test_rc163_the_rule_file_blob_is_the_freeze_pack_block(horizon: int) -> None
 def test_rc163_the_extraction_rule_has_teeth() -> None:
     text = "intro\n### 4.1 h3.yaml\n```yaml\na: 1\n\nb: 2\n```\n```yaml\nc: 3\n```\n"
     assert freeze_pack_block(text, "### 4.1 h3.yaml\n") == b"a: 1\n\nb: 2\n"
-    with pytest.raises(ValueError):
-        freeze_pack_block(text, "### 4.2 h5.yaml\n")
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("intro\n```yaml\na: 1\n```\n", "occurs 0 times"),
+        ("### 4.1 h3.yaml\n```yaml\na\n```\n### 4.1 h3.yaml\n```yaml\nb\n```\n", "2 times"),
+        ("### 4.1 h3.yaml\ntext\n", "no opening fence"),
+        ("### 4.1 h3.yaml\ntext\n### 4.2 h5.yaml\n```yaml\na\n```\n", "no opening fence"),
+        ("### 4.1 h3.yaml\n```\na\n```\n", "no opening fence"),
+        ("### 4.1 h3.yaml\n```yaml\na: 1\n", "no closing fence"),
+        ("### 4.1 h3.yaml\n```yaml\na: 1\n``` \n", "no closing fence"),
+    ],
+    ids=[
+        "heading_absent",
+        "heading_twice",
+        "no_fence",
+        "fence_under_the_next_heading",
+        "fence_without_yaml",
+        "no_closing_fence",
+        "closing_fence_with_trailing_space",
+    ],
+)
+def test_rc163_the_extraction_rule_fails_closed(text: str, message: str) -> None:
+    with pytest.raises(FreezePackBlockError, match=message):
+        freeze_pack_block(text, "### 4.1 h3.yaml\n")
 
 
 @pytest.mark.parametrize("version", sorted(RULESETS))
