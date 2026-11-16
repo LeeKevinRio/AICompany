@@ -15,6 +15,7 @@
 - 補充紀錄：2026-11-16 append 補充七（CG-2 正式登記的 store／schema 介面、單一交易與提交後核對；store／schema 改動以前置 PR 在真實資料那一次之前落地；tech-architect 裁示，釐清與收緊，不放寬補充六第 6 點 (d)、K-4、K-5、K-12，不改使用者面字面、規則檔、定義物件與已登記雜湊；第 8 點待風控 Q-7a；其餘 CEO 可推翻；來源 `work/reviews/2026-11-16-CG2登記PR第一段交件-dev-lead.md`）。
 - 補充紀錄：2026-11-16 append 補充七附記（第 6 點 `create_objects` 呼叫點的字面更正、既有測試 `WRITE_METHODS` 加列 `bootstrap` 的容許、`bootstrap` 目標路徑檢查歸 CLI；tech-architect 裁示，字面更正與收緊，不放寬補充七其餘各點；CEO 可推翻；來源 `work/reviews/2026-11-16-CG2前置PR交件-dev-lead.md`）。
 - 補充紀錄：2026-11-16 append 補充七附記二（附記第 3 點 `mode=ro` 字面更正、claims.py 白名單與補充六第 6 點 (d) 範圍的確認、提交後例外、`git_blob` 環境、M-7 屬性位置、claims.py 模組 docstring；tech-architect 裁示，字面更正與釐清，第 1、5、6 點窄幅寬於字面已標明，不改 store.py、schema.py、harness 三檔、使用者面字面、規則檔、定義物件與已登記雜湊；CEO 可推翻；來源 `work/reviews/2026-11-16-CG2登記PR第二段交件-dev-lead.md`、`work/reviews/2026-11-16-CG2登記PR審查-qa-reviewer.md`）。
+- 補充紀錄：2026-11-16 append 補充七附記二的風控審查紀錄（附記二第 1、5、6 點經風控審查，RC-179～RC-184，附條件接受；coordinator 依風控報告落檔，不改附記二原文；來源 `work/reviews/2026-11-16-補充七附記二三點判定RC179至RC184-風控.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -887,3 +888,17 @@
   - 第 6 點：AST 比對中，claims.py 除了第 3 點所列與新增的定義之外，只有 `body[0]` 不同。
   - 第 7 點：設了 `GIT_DIR` 指向另一個 repo 時，`git_blob` 仍取得本 checkout 的 blob（測試）。
   - 第 9 點：一鍵檔的 R-2 在 CRLF 工作樹判 STOP（測試）。
+
+---
+
+## 補充七附記二的風控審查紀錄（2026-11-16）
+
+- 落檔者：coordinator，依風控報告整理；條件原文見 `work/reviews/2026-11-16-補充七附記二三點判定RC179至RC184-風控.md`。本 ADR 只能追加，所以不改附記二的檔頭與「性質」，改以本紀錄註明審查出處（RC-179 的要求）。
+- 結論：補充七附記二第 1、5、6 點**經風控審查（RC-179～RC-184，附條件接受）**；沒有否決。
+- 條件摘要（以風控報告原文為準）：
+  - RC-179：「不寫入」讀成「沒有邏輯寫入」，只適用 `claims.py bootstrap` 在主 DB 上的兩條拒絕路徑（結束碼 4 的 `SchemaNotEmptyError`、結束碼 3 的 `ForecastStoreError`）；RC-158a、RC-167b 對主 DB 三檔的限制不變，不得延伸到其他路徑。
+  - RC-180：以測試證明被拒絕時沒有邏輯寫入（已有 `forecast_` 物件、另有 `plan_` 物件，各分有 `-wal` 與無 `-wal`），qa 親自重驗。
+  - RC-181：一鍵檔的 R-4 STOP 時絕不呼叫 `bootstrap`；備份在呼叫 `bootstrap` 之前完成；拒絕之後不得以主 DB 的檔案 sha256 或 mtime 當作「資料庫沒被動過」的證據，只能用邏輯比對。
+  - RC-182：CEO 的登記說明文件逐字加入風控定稿的一段，放在說明結束碼 3、4 的地方。
+  - RC-183：三個 `.gitattributes` 只限附記二第 5 點列出的行，屬性只有 `text eol=lf`；PR 附 blob id、`c8_decision_sha256` 重算值與 `uv.lock` 零差異的證據。
+  - RC-184（suggested）：之後再改這三個 `.gitattributes` 的那幾行，視同動到凍結檔，要回送風控。
