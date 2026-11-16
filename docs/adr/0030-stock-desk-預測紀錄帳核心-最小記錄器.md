@@ -10,6 +10,7 @@
 - 補充紀錄：2026-11-15 append 補充五附記（第 3 點 (c) missing code 白名單的唯一定義；tech-architect 裁示，釐清不放寬；來源 `work/reviews/2026-11-15-missing-code白名單裁示-tech-architect.md`）。
 - 補充紀錄：2026-11-15 append 補充六（D-7 真實資料那一次：取數方式、注入時間戳、完整輸出不落檔、回貼白名單、失敗後的診斷路徑、通過證據與 CG-2 的綁定、`uv.lock` 換行；tech-architect 裁示，釐清與收緊，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/` 程式；第 1 點 (b) 與第 4 點 (d) 的讀法待風控確認，確認前一鍵檔不得在 CEO 本機執行；其餘 CEO 可推翻；來源 `work/reviews/2026-11-15-真實資料管線驗收一鍵檔設計-devops-sre.md`）。
 - 補充紀錄：2026-11-16 append 補充六附記（風控 RC-158～RC-165 與 CEO #150 的落實：第 1 點 (b) 的檔案操作限制與適用範圍、複本刪除失敗即停止、失敗種類格式、畫面白名單的機械保證、規則檔位元組綁定、`provisional_results_seen` 在 CG-2 的處理；解除第 8 點限制；tech-architect 裁示，收緊不放寬，不改使用者面字面、規則檔、定義物件與已登記雜湊；來源 `work/reviews/2026-11-15-真實資料一鍵檔Q1Q2確認-風控.md`、`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` #150）。
+- 補充紀錄：2026-11-16 append 補充六附記二（第 1 點 (c)「不得寫入複本」的讀法：WAL 複本的 `-shm` 與 `immutable=1` 條件式；tech-architect 裁示，只放寬複本 `-shm`，不動主 DB 三檔的限制，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/`；經風控審查（RC-167，附條件接受）；來源 `work/reviews/2026-11-16-一鍵檔取數函式交件-dev-lead.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -726,3 +727,21 @@
    - 凍結包本身從 `git_head` 起要零差異。
 
 - **S-13c（逐條可檢查）**：第 1、3、4、5 點各款，各有上述對應的測試；第 2 點列進 qa 審查清單；第 7 點 (d) 與第 8 點列在 CG-2 PR 說明中，並附上測試名稱。
+
+---
+
+## 補充六附記二：WAL 複本的唯讀連線與 `-shm`（2026-11-16）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-16-一鍵檔取數函式交件-dev-lead.md`；另讀 `scripts/pipeline_acceptance_real.py` 的 `copy_uri`、`read_twii_bars`。
+- 性質：釐清補充六第 1 點 (c)「不得寫入複本」的讀法，只放寬複本 `-shm` 一項；補充六附記第 1 點（主 DB 三檔）不變。兩者衝突時以本附記為準。經風控審查（RC-167，附條件接受；`work/reviews/2026-11-16-WAL複本讀法判定RC167-風控.md`）；檔頭與本行的審查出處字樣、第 4 點與 S-13d 末兩條由 coordinator 依 RC-167a～RC-167c 補入，其餘為 tech-architect 原文。
+
+1. **讀法**：「不得寫入複本」指不得經 SQL 寫入，也不得改動複本 `stock-desk.db` 與 `-wal` 的位元組或讓它們被刪除。複本旁有 `-wal` 時，以 `mode=ro` 連線讀取，SQLite 因此建立或改寫複本的 `-shm`（wal-index），這不算寫入。除此之外，不得在複本旁產生任何其他檔案，含 `-journal`。
+2. **收緊**
+   - (a) 複本旁沒有 `-wal` 時，URI 必須加 `immutable=1`；有 `-wal` 時不得加。判斷依據是複本，不是主 DB。
+   - (b) 連線只能下 `PRAGMA query_only=ON` 與單一 SELECT，不得下 `wal_checkpoint`、`journal_mode` 或其他 PRAGMA。
+   - (c) 三行 `copy_check` 必須在開啟複本連線之前完成，比對範圍包含三檔是否存在。
+   - (d) 清理時連同複本的 `-shm` 一起刪除；刪除失敗依補充六附記第 3 點處理。
+3. **CEO 可推翻**，推翻時改採：複本旁有 `-wal` 就停止，新增停止種類，並重送風控修訂 STOP 對照表。
+4. **適用範圍與主 DB（RC-167b）**：第 1 點的讀法只適用 `scripts/pipeline_acceptance_real.py` 在自己工作資料夾內建立的複本，與補充六附記第 2 點（RC-158b）同一個範圍。主 DB 的 `-shm` 仍受補充六附記第 1 點（RC-158a）約束：只能 `"rb"`，不得改寫。
+
+- **S-13d（逐條可檢查）**：有 `-wal` 的合成複本，讀取前後 `.db` 與 `-wal` 的 sha256 相同，結束後複本旁只多出 `-shm`；無 `-wal` 的合成複本，讀取後不產生任何側檔；AST 斷言連線只執行 `query_only` 與 `_SELECT_SQL`；e2e 斷言 `copy_check` 在第一次 `sqlite3.connect` 之前完成；清理後複本三檔都不存在。讀取前後主 DB 三檔的 sha256 與 mtime 都不變（RC-167b）。WAL 測試斷言讀出的列包含合成複本中還沒 checkpoint 的列，qa 親自重驗（RC-167c）。
