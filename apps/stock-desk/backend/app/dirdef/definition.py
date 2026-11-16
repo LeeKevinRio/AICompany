@@ -21,9 +21,10 @@ object for a row's ``definition_version``. The type carries:
   ``SEASON_MONTHS`` (logic fields) and the risk R-1 deviation text
   ``MARKET_PRICE_INDEX_DEVIATION`` (a :data:`DEFINITION_NON_LOGIC_FIELDS` member).
 
-The values are not set here and nothing is registered: ``dirdef-v1.0`` is
-registered by the CG-2 registration batch, which also lands the C-8 decision
-record that ``c8_decision_ref`` / ``c8_decision_sha256`` point at. Validation
+The values are not set here: a definition version's object is registered by
+the batch that freezes it (``dirdef-v1.0``: ADR-0030 D-6 CG-2), and its
+``c8_decision_ref`` / ``c8_decision_sha256`` point at the C-8 decision record
+(the sha256 of its git blob, RC-152). Validation
 below only rejects values that no definition could hold (non-finite, out of
 range, unordered, repeated); it does not pin numbers.
 

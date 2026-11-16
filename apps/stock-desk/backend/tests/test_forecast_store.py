@@ -1374,6 +1374,7 @@ WRITE_METHODS = frozenset(
         "put_input_series",
         "write_run_records",
         "register_claim",
+        "bootstrap",
         "write_record",
     }
 )

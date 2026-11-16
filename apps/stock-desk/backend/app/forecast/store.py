@@ -43,12 +43,22 @@ them; it is the recorder's only write of a run's ledger rows (AST).
 ``put_input_series`` and ``write_record`` are the one-row forms of the same
 validation and INSERT.
 
+Claim registration (ADR-0030 supplement 7): ``register_claim`` and
+``bootstrap`` share one validation (``_prepare_claim``, which reads no ledger)
+and one in-transaction step (``_insert_claim``: store clock, registration
+order, chain rule, INSERT). ``provisional_results_seen`` is the read-only query
+of the post-registration check.
+
 Connections are opened per operation with ``foreign_keys`` and
 ``recursive_triggers`` on. The ``{table}_no_replace`` BEFORE INSERT triggers
 refuse an ``INSERT OR REPLACE`` on any connection (ADR-0030 supplement 1);
 ``recursive_triggers`` is the second layer: it makes the delete a REPLACE would
 perform fire the append-only DELETE trigger (SQLite skips delete triggers on
-REPLACE otherwise). The store does not create the schema. Every read-only
+REPLACE otherwise). The store creates the schema in one place only:
+``bootstrap`` creates every ledger object and registers the two core claims in
+one transaction (``_write(fresh=True)``; ADR-0030 supplement 4 point 2,
+supplement 7); every other write requires the complete schema and refuses
+otherwise, creating nothing. Every read-only
 query runs on a ``query_only`` connection (``_read``), so a write on it fails
 in SQLite itself; ``_connect`` -- the write-path connection -- is opened only
 by ``_write`` (ADR-0030 supplement 3 (revised) point 9).
@@ -77,6 +87,7 @@ import hashlib
 import json
 import secrets
 import sqlite3
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -115,6 +126,7 @@ from app.forecast.schema import (
     BASELINE_KEYS,
     SCHEMA_VERSION,
     SchemaStatus,
+    create_objects,
     require_complete_schema,
     schema_status,
 )
@@ -144,6 +156,10 @@ VOLATILITY_MISSING_PREFIX: Final = "E-VOL-"
 
 #: Milliseconds a connection waits for a concurrent writer before failing.
 BUSY_TIMEOUT_MS: Final = 5000
+#: ``bootstrap``: how long the store clock is re-read for a later ``registered_at``
+#: (supplement 7 point 4), and the pause between two reads.
+CLOCK_WAIT_SECONDS: Final = 1.0
+CLOCK_REREAD_INTERVAL_SECONDS: Final = 0.001
 
 _CROCKFORD: Final = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
@@ -468,6 +484,47 @@ class RegisteredMaterial:
     definition_json: str
 
 
+@dataclass(frozen=True)
+class ClaimInput:
+    """One claim to register: the fields of ``ForecastStore.register_claim`` (supplement 7)."""
+
+    horizon: Horizon
+    rules_version: str
+    rules_bytes: bytes
+    rules_logic_sha256: str
+    definition: DirectionDefinition
+    frozen_commit: str
+    prereg_doc_path: str
+    prereg_doc_blob: bytes
+    review_refs: str
+    replaces_claim_id: str | None
+    replace_reason: str | None
+    provisional_results_seen: bool
+
+
+@dataclass(frozen=True)
+class _PreparedClaim:
+    """A validated :class:`ClaimInput` with every derived registry column but ``registered_at``."""
+
+    claim_id: str
+    horizon: Horizon
+    rules_version: str
+    rules_bytes: bytes
+    rules_sha256: str
+    rules_logic_sha256: str
+    definition_version: str
+    definition_sha256: str
+    definition_logic_sha256: str
+    definition_json: str
+    frozen_commit: str
+    prereg_doc_path: str
+    prereg_doc_blob: bytes
+    review_refs: str
+    replaces_claim_id: str | None
+    replace_reason: str | None
+    provisional_results_seen: int
+
+
 def new_ulid(at: datetime, random_bytes: Callable[[int], bytes] = secrets.token_bytes) -> str:
     """A ULID: 48-bit Unix milliseconds of ``at`` and 80 random bits, Crockford base32."""
     millis = int(at.timestamp() * 1000)
@@ -502,6 +559,54 @@ def _json_text(name: str, value: object) -> str:
         raise ForecastStoreError(f"{name} is not canonical JSON ({type(exc).__name__})") from None
 
 
+def _prepare_claim(claim: ClaimInput) -> _PreparedClaim:
+    """Validate ``claim`` and derive its registry columns; reads no ledger (supplement 7)."""
+    definition = claim.definition
+    if not isinstance(definition, DirectionDefinition):
+        raise ForecastStoreError("definition must be a DirectionDefinition")
+    try:
+        new_id = claim_keys.claim_id(
+            scope_kind=SCOPE_KIND,
+            horizon=claim.horizon,
+            rules_version=claim.rules_version,
+            definition_version=definition.definition_version,
+            kind=CLAIM_KIND,
+        )
+    except ValueError as exc:
+        raise ForecastStoreError(str(exc)) from None
+    rules = _require_bytes("rules_bytes", claim.rules_bytes)
+    _require_sha256("rules_logic_sha256", claim.rules_logic_sha256)
+    _require_text("frozen_commit", claim.frozen_commit)
+    _require_text("prereg_doc_path", claim.prereg_doc_path)
+    _require_bytes("prereg_doc_blob", claim.prereg_doc_blob)
+    _require_text("review_refs", claim.review_refs)
+    if (claim.replaces_claim_id is None) != (claim.replace_reason is None):
+        raise ForecastStoreError("replace_reason is required exactly when replacing a claim")
+    if claim.replace_reason is not None:
+        _require_text("replace_reason", claim.replace_reason)
+    if not isinstance(claim.provisional_results_seen, bool):
+        raise ForecastStoreError("provisional_results_seen must be a bool")
+    return _PreparedClaim(
+        claim_id=new_id,
+        horizon=claim.horizon,
+        rules_version=claim.rules_version,
+        rules_bytes=rules,
+        rules_sha256=hashlib.sha256(rules).hexdigest(),
+        rules_logic_sha256=claim.rules_logic_sha256,
+        definition_version=definition.definition_version,
+        definition_sha256=definition_sha256(definition),
+        definition_logic_sha256=definition_logic_sha256(definition),
+        definition_json=canonical_json(definition.model_dump(mode="json")),
+        frozen_commit=claim.frozen_commit,
+        prereg_doc_path=claim.prereg_doc_path,
+        prereg_doc_blob=claim.prereg_doc_blob,
+        review_refs=claim.review_refs,
+        replaces_claim_id=claim.replaces_claim_id,
+        replace_reason=claim.replace_reason,
+        provisional_results_seen=int(claim.provisional_results_seen),
+    )
+
+
 class ForecastStore:
     """The ledger store on one SQLite file (the schema must already exist)."""
 
@@ -516,11 +621,18 @@ class ForecastStore:
         return _open_connection(self._db_path)
 
     @contextmanager
-    def _write(self) -> Iterator[sqlite3.Connection]:
-        """One write transaction on a complete schema; rolled back on any error."""
+    def _write(self, *, fresh: bool = False) -> Iterator[sqlite3.Connection]:
+        """One write transaction on a complete schema; rolled back on any error.
+
+        ``fresh``: the transaction first creates every ledger object
+        (``schema.create_objects``, which refuses when any exists) and then
+        checks the schema complete; only :meth:`bootstrap` passes it (AST).
+        """
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                if fresh:
+                    create_objects(conn)
                 require_complete_schema(conn)
                 yield conn
                 conn.execute("COMMIT")
@@ -733,91 +845,138 @@ class ForecastStore:
         other claim replaces yet (:func:`replacement_violations`; ADR-0030
         supplement 3 (revised) point 6), checked in the write transaction.
         """
-        if not isinstance(definition, DirectionDefinition):
-            raise ForecastStoreError("definition must be a DirectionDefinition")
-        try:
-            new_id = claim_keys.claim_id(
-                scope_kind=SCOPE_KIND,
+        prepared = _prepare_claim(
+            ClaimInput(
                 horizon=horizon,
                 rules_version=rules_version,
-                definition_version=definition.definition_version,
-                kind=CLAIM_KIND,
-            )
-        except ValueError as exc:
-            raise ForecastStoreError(str(exc)) from None
-        rules = _require_bytes("rules_bytes", rules_bytes)
-        _require_sha256("rules_logic_sha256", rules_logic_sha256)
-        _require_text("frozen_commit", frozen_commit)
-        _require_text("prereg_doc_path", prereg_doc_path)
-        _require_bytes("prereg_doc_blob", prereg_doc_blob)
-        _require_text("review_refs", review_refs)
-        if (replaces_claim_id is None) != (replace_reason is None):
-            raise ForecastStoreError("replace_reason is required exactly when replacing a claim")
-        if replace_reason is not None:
-            _require_text("replace_reason", replace_reason)
-        if not isinstance(provisional_results_seen, bool):
-            raise ForecastStoreError("provisional_results_seen must be a bool")
-        definition_json = canonical_json(definition.model_dump(mode="json"))
-        with self._write() as conn:
-            registered_at = self._now()
-            last = conn.execute("SELECT max(registered_at) FROM forecast_claim_registry").fetchone()
-            if last[0] is not None and canonical_timestamp(registered_at) <= str(last[0]):
-                raise ForecastStoreError("registered_at must be later than every registration")
-            if replaces_claim_id is not None:
-                replaced = self._claim(conn, replaces_claim_id)
-                if replaced is None or replaced.kind != CLAIM_KIND:
-                    raise ForecastStoreError("replaces_claim_id is not a registered forward claim")
-            # Supplement 3 (revised) point 6, over the registry as it would be.
-            candidate = ClaimRow(
-                claim_id=new_id,
-                scope_kind=SCOPE_KIND,
-                scope_key=SCOPE_KEY,
-                horizon=horizon,
-                kind=CLAIM_KIND,
-                rules_version=rules_version,
-                rules_sha256=hashlib.sha256(rules).hexdigest(),
+                rules_bytes=rules_bytes,
                 rules_logic_sha256=rules_logic_sha256,
-                definition_version=definition.definition_version,
-                definition_sha256=definition_sha256(definition),
-                definition_logic_sha256=definition_logic_sha256(definition),
+                definition=definition,
+                frozen_commit=frozen_commit,
+                prereg_doc_path=prereg_doc_path,
+                prereg_doc_blob=prereg_doc_blob,
+                review_refs=review_refs,
                 replaces_claim_id=replaces_claim_id,
-                registered_at=registered_at,
+                replace_reason=replace_reason,
+                provisional_results_seen=provisional_results_seen,
             )
-            violations = replacement_violations([*self._forward_claims(conn), candidate])
-            if violations:
-                raise ForecastStoreError("; ".join(violations))
-            conn.execute(
-                "INSERT INTO forecast_claim_registry (claim_id, scope_kind, scope_key, horizon,"
-                " kind, rules_version, rules_sha256, rules_logic_sha256, rules_bytes,"
-                " definition_version, definition_sha256, definition_logic_sha256,"
-                " definition_json, frozen_commit, prereg_doc_path, prereg_doc_blob, review_refs,"
-                " replaces_claim_id, replace_reason, provisional_results_seen, registered_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    new_id,
-                    SCOPE_KIND,
-                    SCOPE_KEY,
-                    horizon,
-                    CLAIM_KIND,
-                    rules_version,
-                    hashlib.sha256(rules).hexdigest(),
-                    rules_logic_sha256,
-                    rules,
-                    definition.definition_version,
-                    definition_sha256(definition),
-                    definition_logic_sha256(definition),
-                    definition_json,
-                    frozen_commit,
-                    prereg_doc_path,
-                    prereg_doc_blob,
-                    review_refs,
-                    replaces_claim_id,
-                    replace_reason,
-                    int(provisional_results_seen),
-                    canonical_timestamp(registered_at),
-                ),
-            )
-        return new_id
+        )
+        with self._write() as conn:
+            return self._insert_claim(conn, prepared, wait_for_later_clock=False)
+
+    def bootstrap(self, *, claims: Sequence[ClaimInput]) -> tuple[str, str]:
+        """Create the ledger schema and register the two core claims in one transaction.
+
+        ADR-0030 supplement 4 point 2 and supplement 7 points 2-4. Before any
+        connection is opened: exactly two :class:`ClaimInput`, horizons 3 then
+        5, neither replacing a claim, each passing :func:`_prepare_claim`.
+        Then, on one connection in one ``BEGIN IMMEDIATE`` (``_write(fresh=True)``):
+        no ledger object may exist (``schema.create_objects`` checks it inside
+        the transaction) -> every object is created -> the schema is checked
+        complete -> the h3 row -> the h5 row -> COMMIT. Any exception, a
+        ``BaseException`` included, rolls the whole transaction back, so the
+        database is left with no ledger object. When the store clock does not
+        give a ``registered_at`` later than the previous row's, it is re-read
+        for up to :data:`CLOCK_WAIT_SECONDS`; still not later is an error (and
+        a rollback). Returns the two ``claim_id`` values, h3 first.
+        """
+        given = tuple(claims)
+        if len(given) != 2 or not all(isinstance(claim, ClaimInput) for claim in given):
+            raise ForecastStoreError("bootstrap takes exactly two ClaimInput")
+        if tuple(claim.horizon for claim in given) != (3, 5):
+            raise ForecastStoreError("bootstrap registers horizon 3 then horizon 5")
+        if any(claim.replaces_claim_id is not None for claim in given):
+            raise ForecastStoreError("bootstrap claims replace no claim")
+        first, second = (_prepare_claim(claim) for claim in given)
+        with self._write(fresh=True) as conn:
+            h3 = self._insert_claim(conn, first, wait_for_later_clock=True)
+            h5 = self._insert_claim(conn, second, wait_for_later_clock=True)
+        return h3, h5
+
+    def _later_registration_time(
+        self, conn: sqlite3.Connection, *, wait_for_later_clock: bool
+    ) -> datetime:
+        """The store clock's time, later than every ``registered_at`` in the registry.
+
+        Not later: ``register_claim`` refuses at once; ``bootstrap`` re-reads
+        the store clock for up to :data:`CLOCK_WAIT_SECONDS` (supplement 7
+        point 4). The time is always the store clock's (S-2); the monotonic
+        timer only bounds the wait.
+        """
+        registered_at = self._now()
+        last = conn.execute("SELECT max(registered_at) FROM forecast_claim_registry").fetchone()
+        if last[0] is None:
+            return registered_at
+        deadline = time.monotonic() + CLOCK_WAIT_SECONDS
+        while canonical_timestamp(registered_at) <= str(last[0]):
+            if not wait_for_later_clock or time.monotonic() >= deadline:
+                raise ForecastStoreError("registered_at must be later than every registration")
+            time.sleep(CLOCK_REREAD_INTERVAL_SECONDS)
+            registered_at = self._now()
+        return registered_at
+
+    def _insert_claim(
+        self, conn: sqlite3.Connection, prepared: _PreparedClaim, *, wait_for_later_clock: bool
+    ) -> str:
+        """In the caller's write transaction: clock, registration order, chain rule, INSERT."""
+        registered_at = self._later_registration_time(
+            conn, wait_for_later_clock=wait_for_later_clock
+        )
+        if prepared.replaces_claim_id is not None:
+            replaced = self._claim(conn, prepared.replaces_claim_id)
+            if replaced is None or replaced.kind != CLAIM_KIND:
+                raise ForecastStoreError("replaces_claim_id is not a registered forward claim")
+        # Supplement 3 (revised) point 6, over the registry as it would be.
+        candidate = ClaimRow(
+            claim_id=prepared.claim_id,
+            scope_kind=SCOPE_KIND,
+            scope_key=SCOPE_KEY,
+            horizon=prepared.horizon,
+            kind=CLAIM_KIND,
+            rules_version=prepared.rules_version,
+            rules_sha256=prepared.rules_sha256,
+            rules_logic_sha256=prepared.rules_logic_sha256,
+            definition_version=prepared.definition_version,
+            definition_sha256=prepared.definition_sha256,
+            definition_logic_sha256=prepared.definition_logic_sha256,
+            replaces_claim_id=prepared.replaces_claim_id,
+            registered_at=registered_at,
+        )
+        violations = replacement_violations([*self._forward_claims(conn), candidate])
+        if violations:
+            raise ForecastStoreError("; ".join(violations))
+        conn.execute(
+            "INSERT INTO forecast_claim_registry (claim_id, scope_kind, scope_key, horizon,"
+            " kind, rules_version, rules_sha256, rules_logic_sha256, rules_bytes,"
+            " definition_version, definition_sha256, definition_logic_sha256,"
+            " definition_json, frozen_commit, prereg_doc_path, prereg_doc_blob, review_refs,"
+            " replaces_claim_id, replace_reason, provisional_results_seen, registered_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                prepared.claim_id,
+                SCOPE_KIND,
+                SCOPE_KEY,
+                prepared.horizon,
+                CLAIM_KIND,
+                prepared.rules_version,
+                prepared.rules_sha256,
+                prepared.rules_logic_sha256,
+                prepared.rules_bytes,
+                prepared.definition_version,
+                prepared.definition_sha256,
+                prepared.definition_logic_sha256,
+                prepared.definition_json,
+                prepared.frozen_commit,
+                prepared.prereg_doc_path,
+                prepared.prereg_doc_blob,
+                prepared.review_refs,
+                prepared.replaces_claim_id,
+                prepared.replace_reason,
+                prepared.provisional_results_seen,
+                canonical_timestamp(registered_at),
+            ),
+        )
+        return prepared.claim_id
 
     def write_record(
         self,
@@ -1314,6 +1473,25 @@ class ForecastStore:
         """``schema.schema_status`` on a read-only connection."""
         with self._read() as conn:
             return schema_status(conn)
+
+    def provisional_results_seen(self) -> list[tuple[str, int]]:
+        """``(claim_id, provisional_results_seen)`` of every registry row, in registration order.
+
+        For the post-commit check of ``bootstrap --production`` (supplement 7
+        point 5); a value other than the integer 0 or 1 is a
+        :class:`LedgerInconsistentError`.
+        """
+        with self._read() as conn:
+            rows = conn.execute(
+                "SELECT claim_id, provisional_results_seen FROM forecast_claim_registry"
+                " ORDER BY registered_at, rowid"
+            ).fetchall()
+        found: list[tuple[str, int]] = []
+        for claim_id, value in rows:
+            if isinstance(value, bool) or not isinstance(value, int) or value not in (0, 1):
+                raise LedgerInconsistentError("provisional_results_seen is not 0 or 1")
+            found.append((str(claim_id), value))
+        return found
 
     def latest_run(self) -> RunRow | None:
         """The run with the highest ``run_id`` and its end row, if any."""

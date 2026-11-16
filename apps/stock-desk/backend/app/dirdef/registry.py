@@ -1,8 +1,9 @@
 """The published registries (ADR-0027 D-1 ``app/dirdef/``, D-10 point 1, D-14 G-3).
 
-Both registries are **empty**: nothing is frozen yet, so G-3 does not hold and
-the write gate stays closed. A version is added only in the batch that
-registers it after the G-3 freeze.
+A version is added only by the batch that registers it after its freeze
+(ADR-0030 D-6 CG-2); a registered version's entry, object and hashes are never
+modified afterwards (risk R-4). A version that is not in its registry is not
+published, and every lookup of it raises.
 
 * the direction definition registry maps ``definition_version`` to the frozen
   definition object and its registered ``definition_logic_sha256`` and
