@@ -30,15 +30,30 @@ every string value of the rule set and the definition) and prints its result;
 a hit refuses the registration. It prints the ``claim_id`` and
 ``registered_at`` that D-1 point 2 has the operator record in ``work/``.
 
-Paths: the CLI refuses the production database (:func:`production_path_refusal`;
+Paths: ``register`` refuses the production database (:func:`production_path_refusal`;
 the file named ``stock-desk.db``, any file in the production data folder or the
 one ``STOCK_DESK_DB_PATH`` names -- read for comparison only -- the same rule as
 the read-only probes) and a file that does not exist; only a test or an
-explicitly named non-production ledger can be registered into. How production
-registration opens is the CG-2 registration PR's decision.
+explicitly named non-production ledger can be written by it.
 
-Exit codes: 0 registered, 2 usage (argparse), 3 refused (nothing written),
-4 path refused (nothing opened).
+The production database has one way in: ``python -m app.forecast.claims
+bootstrap --production`` (ADR-0030 supplement 4 point 2, supplement 7 and its
+addenda). Before any store exists it checks the target (``<backend>`` from this
+module's location; ``resolve(strict=True)`` equal to
+``<backend>/data/stock-desk.db``, a regular file), that neither the environment
+nor the app's ``.env`` sets ``STOCK_DESK_DB_PATH`` (key only), the typed
+``--provisional-results-seen`` (``0`` or ``1``, no default), the h3-then-h5
+rule sets, the repo-relative ``--prereg-doc-path`` and the sha256 of its git
+blob at ``--frozen-commit``, and the banned phrase scan. Then
+``ForecastStore.bootstrap`` creates the ledger objects and both claim rows in
+one transaction, and a read-only post-commit check follows. It opens no SQLite
+connection itself and prints fixed text, counts, hashes, the commit and times.
+
+Exit codes: 0 done (for ``bootstrap``: committed and checked), 2 usage
+(argparse), 3 refused (nothing written), 4 path refused (``register``: nothing
+opened; ``bootstrap``: a supplement 4 point 2 condition or ledger objects found
+in the transaction, nothing written), 5 ``bootstrap`` committed but the
+post-commit check or the output failed (fixed sentence only; do not retry).
 
 ``store.py`` imports this module for :func:`claim_id` and this module imports
 the store for the CLI: both use the other's names only at call time (module
@@ -404,11 +419,18 @@ def production_target(*, backend_dir: Path, env: Mapping[str, str]) -> Path:
 
 
 def git_blob(backend_dir: Path, commit: str, path: str) -> bytes | None:
-    """``git cat-file blob <commit>:<path>`` in the checkout of ``backend_dir``; else ``None``."""
+    """``git cat-file blob <commit>:<path>`` in the checkout of ``backend_dir``; else ``None``.
+
+    Every ``GIT_*`` variable is removed from git's environment and replace refs
+    are ignored (``--no-replace-objects``), so the blob is this checkout's
+    object (supplement 7 addendum 2 point 7).
+    """
+    clean_env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
     try:
         done = subprocess.run(
-            ["git", "cat-file", "blob", f"{commit}:{path}"],
+            ["git", "--no-replace-objects", "cat-file", "blob", f"{commit}:{path}"],
             cwd=backend_dir,
+            env=clean_env,
             capture_output=True,
             check=False,
             timeout=60,
@@ -536,9 +558,28 @@ def bootstrap_main(
     except ledger.ForecastStoreError:
         print(BOOTSTRAP_REFUSALS["store"], file=sys.stderr)
         return EXIT_REFUSED
-    if not post_commit_check(store, ids, seen=seen):
+    # Committed: from here to the success output, any Exception is exit 5 with the
+    # fixed sentence only (supplement 7 addendum 2 point 4); BaseException is not caught.
+    try:
+        if not post_commit_check(store, ids, seen=seen):
+            raise LookupError("post-commit check")
+        out = bootstrap_output(store, ids, args=args, seen=seen, lines=lines)
+    except Exception:
         print(POST_COMMIT_CHECK_FAILED, file=sys.stderr)
         return EXIT_POST_COMMIT_CHECK_FAILED
+    print("\n".join(out))
+    return EXIT_OK
+
+
+def bootstrap_output(
+    store: ledger.ForecastStore,
+    ids: tuple[str, str],
+    *,
+    args: argparse.Namespace,
+    seen: bool,
+    lines: list[str],
+) -> list[str]:
+    """The success lines: fixed text, counts, hashes, the commit and times (no path, no id)."""
     rows = {row.claim_id: row for row in store.forward_claims()}
     first = rows[ids[0]]
     out = [
@@ -557,8 +598,7 @@ def bootstrap_main(
         out.append(f"registered_at_h{row.horizon}={canonical_timestamp(row.registered_at)}")
     out.append(f"provisional_results_seen={int(seen)}")
     out.append("post_commit_check=ok")
-    print("\n".join(out))
-    return EXIT_OK
+    return out
 
 
 def main(

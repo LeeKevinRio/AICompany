@@ -37,6 +37,7 @@ from typing import Any, Final
 import pytest
 
 from app.forecast import claims, definitions
+from app.forecast import store as store_module
 from app.forecast.canonical import APP_ROOT
 from app.forecast.schema import SchemaStatus
 from app.forecast.store import ForecastStore, LedgerInconsistentError, RunRow
@@ -104,6 +105,28 @@ def _git(repo: Path, *args: str) -> str:
     return done.stdout.strip()
 
 
+#: ``iterdump`` lines and ``(journal_mode, user_version, application_id, page_size)``.
+LogicalState = tuple[tuple[str, ...], tuple[object, ...]]
+STATE_PRAGMAS: Final = ("journal_mode", "user_version", "application_id", "page_size")
+
+
+def wal_of(db: Path) -> Path:
+    return db.with_name(db.name + "-wal")
+
+
+def logical_state(db: Path) -> LogicalState:
+    """The database's logical content: its full dump and the four header pragmas (read-only)."""
+    with closing(sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)) as conn:
+        dump = tuple(conn.iterdump())
+        pragmas = tuple(conn.execute(f"PRAGMA {name}").fetchone()[0] for name in STATE_PRAGMAS)
+    return dump, pragmas
+
+
+def app_rows(db: Path) -> list[tuple[str, str]]:
+    with closing(sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)) as conn:
+        return [(str(k), str(v)) for k, v in conn.execute("SELECT k, v FROM app_settings")]
+
+
 class Desk:
     """A stand-in repository, backend folder and main database (all under ``tmp_path``)."""
 
@@ -116,6 +139,8 @@ class Desk:
         with closing(sqlite3.connect(self.db)) as conn:
             conn.execute("CREATE TABLE app_settings (k TEXT PRIMARY KEY, v TEXT)")
             conn.executemany("INSERT INTO app_settings VALUES (?, ?)", APP_ROWS)
+            conn.execute("PRAGMA user_version = 7")
+            conn.execute("PRAGMA application_id = 21316")
             conn.commit()
         prereg = root / PREREG_PATH
         prereg.parent.mkdir(parents=True)
@@ -149,13 +174,18 @@ class Desk:
     def main(self, argv: list[str], *, env: dict[str, str] | None = None) -> int:
         return claims.main(argv, env=env or {}, backend_dir=self.backend, clock=self.clock)
 
-    def state(self) -> tuple[str, list[str], list[tuple[str, str]], list[str]]:
-        """The main database's bytes, its objects, the non-ledger rows and the data folder."""
+    def state(self) -> tuple[LogicalState, str | None, list[str] | None]:
+        """The main database's logical state, plus its bytes and folder only without ``-wal``.
+
+        RC-180 / RC-181: the logical state (``iterdump`` and four pragmas) is the
+        evidence; the file hash and the folder listing are compared only when no
+        ``-wal`` sits next to the file, since SQLite may checkpoint one.
+        """
+        logical = logical_state(self.db)
+        if wal_of(self.db).exists():
+            return logical, None, None
         digest = hashlib.sha256(self.db.read_bytes()).hexdigest()
-        with closing(sqlite3.connect(f"{self.db.as_uri()}?mode=ro", uri=True)) as conn:
-            names = sorted(str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master"))
-            rows = [(str(k), str(v)) for k, v in conn.execute("SELECT k, v FROM app_settings")]
-        return digest, names, rows, sorted(p.name for p in self.data.iterdir())
+        return logical, digest, sorted(p.name for p in self.data.iterdir())
 
     def registry(self) -> list[tuple[str, int, bytes]]:
         with closing(sqlite3.connect(f"{self.db.as_uri()}?mode=ro", uri=True)) as conn:
@@ -206,7 +236,7 @@ def test_bootstrap_registers_both_claims_with_the_typed_value(
     _no_path_or_identifier(out, desk)
     store = ForecastStore(desk.db)
     assert store.ledger_schema_status().complete and store.runs() == []
-    assert desk.state()[2] == APP_ROWS
+    assert app_rows(desk.db) == APP_ROWS
 
 
 def test_the_stored_blob_is_the_commits_not_the_working_tree(desk: Desk) -> None:
@@ -354,6 +384,128 @@ def test_4_a_replacement_is_refused(desk: Desk, capsys: pytest.CaptureFixture[st
     sentence = claims.BOOTSTRAP_PATH_REFUSALS["replaces"]
     argv = desk.argv(replaces_claim_id=f"market|h3|{H3}|{DEFINITION}|forward")
     _refused(desk, argv, claims.EXIT_PATH_REFUSED, sentence, capsys)
+
+
+# --- RC-180: a refused bootstrap makes no logical write -------------------------------------
+
+#: Statements that would be a logical write (or change the journal mode) if run.
+WRITE_STATEMENT: Final = re.compile(
+    r"^\s*(CREATE|INSERT|UPDATE|DELETE|DROP|ALTER|VACUUM|REPLACE|PRAGMA\s+journal_mode)\b",
+    re.IGNORECASE,
+)
+
+
+def _trace_store_connections(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record every statement run on the store's connections (a trace callback; no app/ change)."""
+    statements: list[str] = []
+    real_open = store_module._open_connection
+
+    def traced(path: Path) -> sqlite3.Connection:
+        conn = real_open(path)
+        conn.set_trace_callback(statements.append)
+        statements.append("-- connection opened")
+        return conn
+
+    monkeypatch.setattr(store_module, "_open_connection", traced)
+    return statements
+
+
+@pytest.mark.parametrize("wal", [False, True], ids=["no_wal", "wal"])
+@pytest.mark.parametrize(
+    "ddl",
+    ["CREATE TABLE forecast_extra (a)", "CREATE TABLE plan_items (a)"],
+    ids=["forecast_object", "plan_object"],
+)
+def test_rc180_a_refused_bootstrap_makes_no_logical_write(
+    desk: Desk,
+    ddl: str,
+    wal: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    holder: sqlite3.Connection | None = None
+    if wal:
+        # A -wal with uncheckpointed rows stays next to the file while ``holder`` is open.
+        holder = sqlite3.connect(desk.db, isolation_level=None)
+        holder.execute("PRAGMA journal_mode = WAL")
+        holder.execute("PRAGMA wal_autocheckpoint = 0")
+        holder.execute(ddl)
+        holder.execute("INSERT INTO app_settings VALUES ('in_wal', 'yes')")
+        assert wal_of(desk.db).stat().st_size > 0
+    else:
+        with closing(sqlite3.connect(desk.db)) as conn:
+            conn.execute(ddl)
+            conn.commit()
+    try:
+        before = logical_state(desk.db)
+        digest = None if wal else hashlib.sha256(desk.db.read_bytes()).hexdigest()
+        statements = _trace_store_connections(monkeypatch)
+        assert desk.main(desk.argv()) == claims.EXIT_PATH_REFUSED
+        out, err = capsys.readouterr()
+        assert err.strip() == claims.BOOTSTRAP_PATH_REFUSALS["not_empty"] and out == ""
+        assert logical_state(desk.db) == before
+        assert before[1][0] == ("wal" if wal else "delete")
+        assert before[1][1:3] == (7, 21316)
+        assert any("in_wal" in line for line in before[0]) == wal  # the dump sees the -wal
+        # The trace has teeth: one connection, one transaction, rolled back.
+        assert statements.count("-- connection opened") == 1
+        assert "BEGIN IMMEDIATE" in statements and statements[-1] == "ROLLBACK"
+        assert "COMMIT" not in statements
+        assert [s for s in statements if WRITE_STATEMENT.match(s)] == []
+        if wal:
+            assert wal_of(desk.db).exists()  # no hash claim: SQLite may checkpoint
+        else:
+            assert hashlib.sha256(desk.db.read_bytes()).hexdigest() == digest
+            assert sorted(p.name for p in desk.data.iterdir()) == ["stock-desk.db"]
+    finally:
+        if holder is not None:
+            holder.close()
+
+
+def test_rc180_the_write_statement_pattern_has_teeth() -> None:
+    for statement in (
+        "CREATE TABLE x (a)",
+        "  insert into t values (1)",
+        "UPDATE t SET a = 1",
+        "DELETE FROM t",
+        "DROP TABLE t",
+        "ALTER TABLE t ADD b",
+        "VACUUM",
+        "REPLACE INTO t VALUES (1)",
+        "PRAGMA journal_mode = WAL",
+        "pragma JOURNAL_MODE",
+    ):
+        assert WRITE_STATEMENT.match(statement), statement
+    for statement in ("BEGIN IMMEDIATE", "ROLLBACK", "SELECT 1", "PRAGMA busy_timeout = 5000"):
+        assert not WRITE_STATEMENT.match(statement), statement
+
+
+def test_rc180_an_exit_3_store_refusal_makes_no_logical_write(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ForecastStoreError in the transaction (the store clock never gets later): the
+    # objects and the h3 row were created inside it and rolled back; nothing committed.
+    desk.clock = lambda: START  # type: ignore[assignment]
+    before = logical_state(desk.db)
+    digest = hashlib.sha256(desk.db.read_bytes()).hexdigest()
+    statements = _trace_store_connections(monkeypatch)
+    assert desk.main(desk.argv()) == claims.EXIT_REFUSED
+    assert capsys.readouterr().err.strip() == claims.BOOTSTRAP_REFUSALS["store"]
+    assert logical_state(desk.db) == before
+    assert statements[-1] == "ROLLBACK" and "COMMIT" not in statements
+    assert hashlib.sha256(desk.db.read_bytes()).hexdigest() == digest
+    assert sorted(p.name for p in desk.data.iterdir()) == ["stock-desk.db"]
+
+
+def test_rc180_an_exit_3_input_refusal_opens_no_connection(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    before = desk.state()
+    statements = _trace_store_connections(monkeypatch)
+    assert desk.main(desk.argv(provisional_results_seen="2")) == claims.EXIT_REFUSED
+    capsys.readouterr()
+    assert statements == []
+    assert desk.state() == before
 
 
 # --- exit 3 ---------------------------------------------------------------------------------
@@ -600,6 +752,109 @@ def test_the_post_commit_check_reads_only(desk: Desk, monkeypatch: pytest.Monkey
     assert writes == [True]  # the one bootstrap transaction, nothing after it
 
 
+# --- supplement 7 addendum 2 point 4: exceptions after the commit ---------------------------
+
+
+def _raise_in_check(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+    def fail(self: ForecastStore) -> list[RunRow]:
+        raise error
+
+    monkeypatch.setattr(ForecastStore, "runs", fail)  # the third post-commit check
+
+
+def _raise_in_output(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+    def fail(value: datetime) -> str:
+        raise error
+
+    monkeypatch.setattr(claims, "canonical_timestamp", fail)  # used only by the output
+
+
+@pytest.mark.parametrize("where", [_raise_in_check, _raise_in_output], ids=["check", "output"])
+@pytest.mark.parametrize(
+    "error",
+    [sqlite3.OperationalError("disk I/O error at /secret/path"), RuntimeError("boom")],
+    ids=["OperationalError", "RuntimeError"],
+)
+def test_5_an_exception_after_the_commit_is_the_fixed_sentence(
+    desk: Desk,
+    where: Callable[[pytest.MonkeyPatch, Exception], None],
+    error: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[int] = []
+    real_bootstrap = ForecastStore.bootstrap
+
+    def counted(self: ForecastStore, *, claims: Any) -> tuple[str, str]:
+        calls.append(1)
+        return real_bootstrap(self, claims=claims)
+
+    monkeypatch.setattr(ForecastStore, "bootstrap", counted)
+    where(monkeypatch, error)
+    assert desk.main(desk.argv()) == claims.EXIT_POST_COMMIT_CHECK_FAILED
+    out, err = capsys.readouterr()
+    assert err == claims.POST_COMMIT_CHECK_FAILED + "\n"
+    assert out == ""
+    assert calls == [1]
+    assert len(desk.registry()) == 2
+
+
+def test_a_base_exception_after_the_commit_is_not_caught(
+    desk: Desk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def interrupted(self: ForecastStore) -> list[RunRow]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ForecastStore, "runs", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        desk.main(desk.argv())
+
+
+# --- supplement 7 addendum 2 point 7: git_blob's environment --------------------------------
+
+
+def test_git_blob_ignores_git_variables_that_point_elsewhere(
+    desk: Desk, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = tmp_path_factory.mktemp("other-repo")
+    (other / "work" / "research").mkdir(parents=True)
+    (other / PREREG_PATH).write_bytes(b"another repository\n")
+    _git(other, "init", "-q")
+    _git(other, "add", PREREG_PATH)
+    _git(other, "commit", "-q", "-m", "other")
+    other_commit = _git(other, "rev-parse", "HEAD")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    assert claims.git_blob(desk.backend, desk.commit, PREREG_PATH) == PREREG
+    assert claims.git_blob(desk.backend, other_commit, PREREG_PATH) is None
+    assert desk.main(desk.argv()) == claims.EXIT_OK
+
+
+def test_git_blob_ignores_replace_refs(desk: Desk) -> None:
+    original = _git(desk.root, "rev-parse", f"HEAD:{PREREG_PATH}")
+    swapped = desk.root / "swap.txt"
+    swapped.write_bytes(b"replacement bytes\n")
+    replacement = _git(desk.root, "hash-object", "-w", str(swapped))
+    _git(desk.root, "replace", original, replacement)
+    assert _git(desk.root, "cat-file", "blob", f"HEAD:{PREREG_PATH}") == "replacement bytes"
+    assert claims.git_blob(desk.backend, desk.commit, PREREG_PATH) == PREREG
+
+
+# --- supplement 7 addendum 2 point 6: the module docstring ----------------------------------
+
+
+def test_the_module_docstring_names_bootstrap_and_every_exit_code() -> None:
+    doc = ast.get_docstring(ast.parse((APP_ROOT / "forecast" / "claims.py").read_text("utf-8")))
+    assert doc is not None
+    assert "bootstrap --production" in " ".join(doc.split())
+    for code in ("0 done", "2 usage", "3 refused", "4 path refused", "5 ``bootstrap``"):
+        assert code in " ".join(doc.split()), code
+    assert re.search(r"[0-9a-f]{40}", doc) is None
+    assert "market|h" not in doc and "dirdef-v1" not in doc
+    for word in ("already registered", "not registered", "is registered", "unregistered"):
+        assert word not in doc.lower(), word
+
+
 # --- the stand-in paths and the AST boundaries ----------------------------------------------
 
 
@@ -629,6 +884,7 @@ BOOTSTRAP_FUNCTIONS: Final = {
     "bootstrap_claim_inputs",
     "post_commit_check",
     "bootstrap_main",
+    "bootstrap_output",
 }
 #: What the branch may call on the store: ``bootstrap`` and read-only queries.
 STORE_CALLS: Final = {
@@ -726,6 +982,12 @@ def test_the_typed_value_has_no_default_and_no_other_source() -> None:
     keywords = {k.arg: ast.unparse(k.value) for k in argument.keywords}
     assert keywords.get("required") == "True"
     assert "default" not in keywords and "choices" not in keywords
-    for name in BOOTSTRAP_FUNCTIONS - {"env_file_sets_db_path", "production_target"}:
+    # production_target / env_file_sets_db_path read the key only; git_blob passes the
+    # process environment, minus every GIT_* variable, to git.
+    exempt = {"env_file_sets_db_path", "production_target", "git_blob"}
+    for name in BOOTSTRAP_FUNCTIONS - exempt:
         text = ast.unparse(_claims_functions()[name])
         assert "environ" not in text and "getenv" not in text and "open(" not in text, name
+    git_blob = ast.unparse(_claims_functions()["git_blob"])
+    assert "getenv" not in git_blob and "open(" not in git_blob
+    assert "if not k.upper().startswith('GIT_')" in git_blob
