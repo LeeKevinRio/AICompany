@@ -758,6 +758,19 @@ class State:
     """What the cleanup of an abnormal end needs to know."""
 
     work: Path | None = None
+    root: Path | None = None
+
+
+def copy_left_behind(root: Path | None) -> bool:
+    """True when a run folder of ``root`` (this run or an earlier one) still has a ``copy``."""
+    if root is None or not root.is_dir():
+        return False
+    return any(
+        RUN_FOLDER_PATTERN.fullmatch(folder.name)
+        and not folder.is_symlink()
+        and (folder / COPY_DIR).exists()
+        for folder in root.iterdir()
+    )
 
 
 def cleanup(state: State, remover: Remover, pause: Callable[[float], None]) -> None:
@@ -800,6 +813,7 @@ def flow(
     reader = read_bars if read_bars is not None else read_twii_bars
     root = home / WORK_ROOT_NAME
     work = root / now().strftime("%Y%m%d-%H%M%S")
+    state.root = root
     wait(PROMPT)
 
     found = preflight(backend_dir=backend_dir, work=work, env=env, port_check=port_check, git=git)
@@ -951,7 +965,7 @@ def main(argv: Sequence[str] | None = None, **injected: Any) -> int:
         pass
     # RC-158c: a copy that is still there after the last cleanup is never silent, whichever
     # path led here. The sentence is shown once, after the sentence the run ended with.
-    if state.work is not None and (state.work / COPY_DIR).exists():
+    if copy_left_behind(state.root):
         if code != 3 or not copy_stop_shown:
             say(OUTER_STOP_SENTENCES["copy_not_deleted"])
         code = 3

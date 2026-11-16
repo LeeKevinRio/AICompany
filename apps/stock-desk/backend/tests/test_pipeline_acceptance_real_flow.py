@@ -1586,3 +1586,108 @@ def test_the_real_port_check_returns_true_when_it_connects_and_only_to_loopback(
     monkeypatch.setattr(socket, "create_connection", accept)
     assert real.port_is_listening() is True
     assert seen == [("127.0.0.1", 8000)]
+
+
+# --- qa M-1: a copy left by an earlier run is never silent ---
+
+
+def _old_run(world: World, *subs: str) -> Path:
+    old = world.home / real.WORK_ROOT_NAME / "20260101-000000"
+    for sub in subs:
+        (old / sub).mkdir(parents=True)
+        (old / sub / "stock-desk.db").write_bytes(b"old")
+    return Path(old)
+
+
+def _sweep_raises(error: type[BaseException]) -> Callable[[Path], None]:
+    def remover(path: Path) -> None:
+        if path.name == "stock-desk.db" and "20260101-000000" in str(path):
+            raise error("secret")
+        real.remove_path(path)
+
+    return remover
+
+
+@pytest.mark.parametrize(
+    ("error", "first"), [(KeyboardInterrupt, INTERRUPTED), (RuntimeError, UNEXPECTED)]
+)
+def test_m1_a_sweep_that_fails_and_leaves_an_old_copy_shows_the_copy_stop(
+    tmp_path: Path, capsys: Any, spy: Any, error: type[BaseException], first: str
+) -> None:
+    world = make_world(tmp_path)
+    old = _old_run(world, "copy")
+    code, out, err = world.run(capsys, remover=_sweep_raises(error), acceptance=spy[1])
+    assert code == 3
+    assert out == [first, real.OUTER_STOP_SENTENCES["copy_not_deleted"]]
+    assert_screen_is_closed(out, err)
+    assert spy[0] == []
+    assert (old / "copy").exists()  # it really is still there; the screen says so
+
+
+def test_m1_an_old_run_with_only_ledger_folders_does_not_show_the_copy_stop(
+    tmp_path: Path, capsys: Any
+) -> None:
+    world = make_world(tmp_path)
+    old = _old_run(world, "p0", "p1")
+    bars = yfinance_bars()
+
+    def fake(folder: Path, **kwargs: Any) -> Any:
+        return AcceptanceResult(rules=kwargs["rules"].name, window=(), ledger_sha256="a" * 64)
+
+    code, out, err = world.run(capsys, read_bars=lambda _p: bars, acceptance=fake)
+    assert code == 0
+    assert real.OUTER_STOP_SENTENCES["copy_not_deleted"] not in out
+    assert not (old / "p0").exists()
+
+
+def test_m1_the_check_looks_only_at_run_folders_with_a_copy(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    (root / "notes" / "copy").mkdir(parents=True)
+    (root / "20260101" / "copy").mkdir(parents=True)
+    assert real.copy_left_behind(root) is False
+    assert real.copy_left_behind(None) is False
+    assert real.copy_left_behind(tmp_path / "absent") is False
+    (root / "20260101-000000" / "copy").mkdir(parents=True)
+    assert real.copy_left_behind(root) is True
+
+
+def test_qa_cleanup_raising_an_unexpected_error_is_the_fixed_error_sentence(
+    tmp_path: Path, capsys: Any
+) -> None:
+    world = make_world(tmp_path)
+    bars = yfinance_bars()
+    fired: list[int] = []
+
+    def fake(folder: Path, **kwargs: Any) -> Any:
+        return AcceptanceResult(rules=kwargs["rules"].name, window=(), ledger_sha256="a" * 64)
+
+    def remover(path: Path) -> None:
+        if path.name == "p0" and not fired:
+            fired.append(1)
+            raise RuntimeError("secret")
+        real.remove_path(path)
+
+    code, out, err = world.run(capsys, read_bars=lambda _p: bars, acceptance=fake, remover=remover)
+    assert (code, out, err) == (1, [UNEXPECTED], "")
+    no_residue(world)
+
+
+def test_qa_cleanup_interrupted_between_the_two_ledgers_leaves_nothing(
+    tmp_path: Path, capsys: Any
+) -> None:
+    world = make_world(tmp_path)
+    bars = yfinance_bars()
+    fired: list[int] = []
+
+    def fake(folder: Path, **kwargs: Any) -> Any:
+        return AcceptanceResult(rules=kwargs["rules"].name, window=(), ledger_sha256="a" * 64)
+
+    def remover(path: Path) -> None:
+        if path.name == "p1" and not fired:
+            fired.append(1)
+            raise KeyboardInterrupt
+        real.remove_path(path)
+
+    code, out, err = world.run(capsys, read_bars=lambda _p: bars, acceptance=fake, remover=remover)
+    assert (code, out, err) == (2, [INTERRUPTED], "")
+    no_residue(world)
