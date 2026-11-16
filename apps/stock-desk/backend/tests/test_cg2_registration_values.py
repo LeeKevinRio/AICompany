@@ -252,3 +252,39 @@ def test_m6_the_registration_phrase_scan_has_no_hit(version: str) -> None:
     )
     assert scan.hits == ()
     assert (scan.rules_strings, scan.definition_strings, scan.phrases) == (159, 12, 10)
+
+
+# --- M-7 / RC-183: the three .gitattributes files -------------------------------------------
+
+#: Repo-relative path -> its exact lines (supplement 7 addendum 2 point 5; RC-183): only
+#: ``text eol=lf``, no wildcard, no other attribute. The ``uv.lock`` line predates CG-2.
+GITATTRIBUTES: Final = {
+    "apps/stock-desk/backend/.gitattributes": [
+        "uv.lock text eol=lf",
+        "/app/outlook/rules/h3.yaml text eol=lf",
+        "/app/outlook/rules/h5.yaml text eol=lf",
+    ],
+    "work/research/.gitattributes": [f"/{Path(PREREG_DOC_PATH).name} text eol=lf"],
+    "work/dispatch/.gitattributes": [f"/{Path(C8_RECORD_PATH).name} text eol=lf"],
+}
+
+
+@pytest.mark.parametrize("path", sorted(GITATTRIBUTES))
+def test_rc183_each_gitattributes_file_holds_exactly_its_lines(path: str) -> None:
+    data = (_repo_root() / path).read_bytes()
+    assert data.endswith(b"\n") and b"\r" not in data
+    assert data.decode("utf-8").split("\n")[:-1] == GITATTRIBUTES[path]
+
+
+def test_rc183_the_lines_use_no_wildcard_and_only_text_eol_lf() -> None:
+    for lines in GITATTRIBUTES.values():
+        for line in lines:
+            pattern, *attributes = line.split(" ")
+            assert attributes == ["text", "eol=lf"], line
+            assert not set(pattern) & set("*?[]!"), line
+    assert GITATTRIBUTES["work/research/.gitattributes"] == [
+        "/2026-10-15-3日5日方向判斷-事先宣告草案.md text eol=lf"
+    ]
+    assert GITATTRIBUTES["work/dispatch/.gitattributes"] == [
+        "/2026-11-15-C8決策紀錄-F2B.md text eol=lf"
+    ]
