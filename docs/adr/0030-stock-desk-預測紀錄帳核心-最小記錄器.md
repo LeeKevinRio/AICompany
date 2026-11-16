@@ -12,6 +12,7 @@
 - 補充紀錄：2026-11-16 append 補充六附記（風控 RC-158～RC-165 與 CEO #150 的落實：第 1 點 (b) 的檔案操作限制與適用範圍、複本刪除失敗即停止、失敗種類格式、畫面白名單的機械保證、規則檔位元組綁定、`provisional_results_seen` 在 CG-2 的處理；解除第 8 點限制；tech-architect 裁示，收緊不放寬，不改使用者面字面、規則檔、定義物件與已登記雜湊；來源 `work/reviews/2026-11-15-真實資料一鍵檔Q1Q2確認-風控.md`、`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` #150）。
 - 補充紀錄：2026-11-16 append 補充六附記二（第 1 點 (c)「不得寫入複本」的讀法：WAL 複本的 `-shm` 與 `immutable=1` 條件式；tech-architect 裁示，只放寬複本 `-shm`，不動主 DB 三檔的限制，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/`；經風控審查（RC-167，附條件接受）；來源 `work/reviews/2026-11-16-一鍵檔取數函式交件-dev-lead.md`）。
 - 補充紀錄：2026-11-16 append 補充六附記三（第 6 點 (a)「三行 `copy_check=SAME`」的讀法：`-wal`、`-shm` 在主 DB 與複本都不存在時印 `absent_both`，也算通過；tech-architect 裁示，更正起草時寫得太窄的字面，判定強度不變，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/`，CEO 可推翻；來源 `work/reviews/2026-11-16-一鍵檔外層流程交件-devops-sre.md` 自定解讀第 1 點）。
+- 補充紀錄：2026-11-16 append 補充七（CG-2 正式登記的 store／schema 介面、單一交易與提交後核對；store／schema 改動以前置 PR 在真實資料那一次之前落地；tech-architect 裁示，釐清與收緊，不放寬補充六第 6 點 (d)、K-4、K-5、K-12，不改使用者面字面、規則檔、定義物件與已登記雜湊；第 8 點待風控 Q-7a；其餘 CEO 可推翻；來源 `work/reviews/2026-11-16-CG2登記PR第一段交件-dev-lead.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -760,3 +761,80 @@
 4. **CEO 可推翻**，推翻時改採：主 DB 必須三檔都存在，否則新增 STOP 種類，並重送風控修訂 STOP 對照表。
 
 - **S-13e（逐條可檢查）**：白名單的 `copy_check` 樣式只接受 `SAME|absent_both`（測試）；主 DB 只有 `.db` 時，三行依序為 `SAME`、`absent_both`、`absent_both`（測試）；`-wal`、`-shm` 都存在時三行都是 `SAME`（測試）；主 DB 缺 `.db` 時，在 `copy_check` 之前就 STOP（`test_stop_no_db`）；qa 依第 2 點判讀 CG-2 前的回貼。
+
+---
+
+## 補充七：CG-2 正式登記的 store／schema 介面與前置 PR（2026-11-16）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-16-CG2登記PR第一段交件-dev-lead.md`。另讀 `feat/nm5-cg2-registration`（`c79e8313`）的 `app/forecast/store.py`、`schema.py`、`claims.py`、`canonical.py`、`tests/forecast_pipeline_harness.py`、`tests/test_forecast_boundaries.py`。
+- 性質：釐清補充四第 2、6 點與 K-4 的實作方式，收緊 bootstrap 的交易與核對。不放寬補充六第 6 點 (d)、K-4、K-5、K-12。不改使用者面字面、規則檔、定義物件與已登記雜湊。第 8 點待風控 Q-7a；其餘 CEO 可推翻。
+
+1. **schema.py**
+   - 新增 `create_objects(conn)`。它只在呼叫者已開的交易內執行：`conn.in_transaction` 為否時拋例外。
+   - 執行內容：先確認沒有任何 `_ledger_objects`，有就拋 `SchemaNotEmptyError`；再依序執行 `EXPECTED_OBJECTS`（5 張表、15 個 trigger，含補充一）。
+   - 本身不下 BEGIN、COMMIT、ROLLBACK。
+   - `create_schema` 改為 BEGIN IMMEDIATE、`create_objects`、COMMIT，失敗時回滾。名稱、簽章、行為不變。
+   - `EXPECTED_OBJECTS` 的 DDL 文字零差異。不提供補建缺少物件的方式（K-12）。
+2. **store.py**
+   - `ClaimInput`：欄位與 `register_claim` 的參數相同。
+   - `_prepare_claim`：不讀帳的驗證與導出。
+   - `ForecastStore._insert_claim(conn, prepared, *, wait_for_later_clock)`：在交易內處理時鐘、時序、取代鏈與 INSERT。
+   - `register_claim` 改走上面兩者，簽章與行為不變。
+   - `_write(*, fresh=False)`：`fresh` 為真時，BEGIN IMMEDIATE 之後先執行 `create_objects`，再 `require_complete_schema`。`_connect` 仍只由 `_write` 開啟。
+   - `bootstrap(*, claims) -> tuple[str, str]`：
+     - 開連線前先驗證：恰好兩個 `ClaimInput`，horizon 依序為 3、5，`replaces_claim_id` 都為空；
+     - 在 `_write(fresh=True)` 內依序寫入兩列；
+     - 它是唯一以 `fresh=True` 呼叫 `_write` 的方法。
+   - 唯讀查詢 `provisional_results_seen() -> list[tuple[str, int]]`：經 `_read()` 執行，依 `registered_at, rowid` 排序；值不是 0 或 1 時拋 `LedgerInconsistentError`。
+3. **交易**
+   - 同一連線、同一 BEGIN IMMEDIATE，依序：確認沒有帳本物件 → 建立全部物件 → 完整性核對 → h3 列 → h5 列 → COMMIT。
+   - 任何 `BaseException` 都先 ROLLBACK 再往外拋。
+   - 「沒有 `forecast_`、`plan_` 表」以交易內的檢查為準；交易外的檢查（R-4）只用來提早停止。
+   - 只要有任何物件的名稱或所屬表以這兩個前綴開頭（不分大小寫），就判為不成立。
+4. **時鐘**
+   - 第二列的 `registered_at` 必須晚於第一列。
+   - bootstrap 讀到的時鐘值不晚於前一列時，重讀 store 時鐘，最多 1 秒；仍不晚於就拋例外，整筆回滾。
+   - `register_claim` 維持立即拒絕。時間只取自 store 時鐘（S-2）。
+5. **claims.py（CG-2 PR）**
+   - `bootstrap --production` 只呼叫 `store.bootstrap` 與唯讀查詢。
+   - 結束碼：
+     - 補充四第 2 點的拒絕條件，以及交易內的 `SchemaNotEmptyError`：4；
+     - 其他拒絕：3；
+     - 以上都不寫入。
+   - 提交後的核對：
+     - `ledger_schema_status()` 完整；
+     - `forward_claims()` 恰好是回傳的兩個 `claim_id`；
+     - `runs()` 為空；
+     - `provisional_results_seen()` 兩列都等於鍵入值。
+   - 核對不成立時，印固定句並以結束碼 5 結束，不重試。一鍵檔隨之 STOP，由 coordinator 升級 tech-architect。
+6. **K-4 邊界**
+   - 既有的 claims.py 測試不放寬；CG-2 PR 起，另加斷言：`claims.py` 呼叫了 `bootstrap`。
+   - 另加以下 AST 斷言：
+     - `app/` 中只有 store.py 呼叫 `create_objects`；
+     - 沒有任何模組呼叫 `create_schema`；
+     - `_write(fresh=True)` 只出現在 `ForecastStore.bootstrap`；
+     - 呼叫 `bootstrap` 的模組：前置 PR 時沒有；CG-2 PR 起只有 claims.py；
+     - recorder.py 與 report.py 都不呼叫上述任何一個。
+   - schema.py 不含 INSERT。
+7. **前置 PR 與順序**
+   - 第 1～4、6 點的改動不含 claims.py，以獨立 PR 合併。
+   - 補充四第 6 點的順序讀為：第五批 → 前置 PR → 真實資料一鍵檔 → CG-2 登記 PR → 第 4 點 (2)、(3) → 接線 PR。
+   - 補充六第 6 點 (d) 不變。「harness 通過」的 `git_head`，必須能到達前置 PR 的合併 commit。
+   - 前置 PR 中，以下檔案零差異：claims.py、補充六第 6 點 (d) 所列的 harness 三檔與 `scripts/pipeline_acceptance_real.py`、`uv.lock`、規則檔、凍結包。
+   - 前置 PR 將 `app/` 內隨登記狀態過時的 docstring，改成不依狀態的寫法；之後到 CG-2 合併為止，不得再改。
+8. **試跑**
+   - 前置 PR 合併前，CEO 可以用當時的 head 執行一鍵檔一次作為試跑。前提有兩項：補充六附記第 6 點的四項成立，且風控 Q-7a 判定可行。
+   - 試跑的回貼依補充六第 6 點 (b) 記錄，並標明「試跑」，不得作為 CG-2 的證據。
+   - 試跑失敗依補充六第 5 點處理。
+
+- **S-15（逐條可檢查）**
+  - 第 1 點：DDL 零差異（diff）；既有 schema 測試不改就全過。
+  - 第 2、3 點：
+    - 0 與 1 各登記成功一次；
+    - 表、trigger、索引、view、`plan_` 表、名稱大小寫不同的物件，6 種各被拒絕，且沒有建立任何物件；
+    - 時鐘拋例外與 `KeyboardInterrupt` 時，回滾後沒有任何帳本物件，非帳本的表內容不變；
+    - 成功後恰好 15 個 trigger（以上皆為測試）。
+  - 第 4 點：注入時鐘先回傳相同值、之後才變晚時，登記成功；一直相同時，回滾（測試）。
+  - 第 5 點：每個結束碼各有一個測試。
+  - 第 6 點：各項 AST 斷言。
+  - 第 7 點：前置 PR 附零差異清單與新舊 `code_digest`；CG-2 PR 附 `git merge-base --is-ancestor <前置 PR 合併 commit> <git_head>` 的結果。
