@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import importlib.util
 import re
 import shutil
 import socket
@@ -35,7 +34,6 @@ from contextlib import closing
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
@@ -53,6 +51,7 @@ from tests.forecast_pipeline_harness import (
     synthetic_series,
 )
 from tests.outlook_helpers import TAIPEI, definition
+from tests.pipeline_real_loader import load_script
 
 BACKEND = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = BACKEND / "scripts" / "pipeline_acceptance_real.py"
@@ -62,16 +61,7 @@ NETWORK_MODULES = ("socket", "urllib", "requests", "httpx", "yfinance")
 SIDE_SUFFIXES = ("-wal", "-shm", "-journal")
 
 
-def _load() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("pipeline_acceptance_real", SCRIPT_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-real = _load()
+real = load_script()  # the script's RC-162 hooks are not left on this process
 
 
 # --- fixtures ---------------------------------------------------------------------------------
@@ -449,13 +439,34 @@ def test_the_script_opens_one_connection_and_runs_two_statements() -> None:
     assert attrs.count("execute") == 2
     for name in ("executescript", "executemany", "backup", "iterdump", "commit"):
         assert name not in attrs
-    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
-    assert not names & {"open", "PriceBarCache"}
+    assert "PriceBarCache" not in {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    # The reader part (above the outer flow) opens no file of its own: the outer flow's byte
+    # copy is the only ``open`` of the script, and it is outside this part.
+    reader = ast.Module(
+        body=[n for n in tree.body if n.lineno < _outer_flow_line()], type_ignores=[]
+    )
+    assert "open" not in {n.id for n in ast.walk(reader) if isinstance(n, ast.Name)}
 
 
-def _script_imports() -> set[str]:
+def _outer_flow_line() -> int:
+    """The line of the marker comment that starts the outer flow."""
+    for number, line in enumerate(SCRIPT_PATH.read_text(encoding="utf-8").splitlines(), 1):
+        if line.startswith("# === the outer flow"):
+            return number
+    raise AssertionError("the outer flow marker is missing")
+
+
+def _script_imports(*, without: str | None = None) -> set[str]:
+    """Every module the script imports; ``without`` names a function whose body is skipped."""
+    tree = _script_tree()
+    skipped: set[int] = set()
+    for function in ast.walk(tree):
+        if isinstance(function, ast.FunctionDef) and function.name == without:
+            skipped.update(id(n) for n in ast.walk(function))
     found: set[str] = set()
-    for node in ast.walk(_script_tree()):
+    for node in ast.walk(tree):
+        if id(node) in skipped:
+            continue
         if isinstance(node, ast.Import):
             found.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -474,7 +485,9 @@ def test_the_script_imports_no_forbidden_module() -> None:
     imports = _script_imports()
     assert "app.forecast.canonical" in imports  # the scan sees the real imports
     assert _hits(imports, FORBIDDEN_APP_MODULES) == set()
-    assert _hits(imports, NETWORK_MODULES) == set()
+    # The one socket use is the loopback port check, a function-local import.
+    assert _hits(_script_imports(without="port_is_listening"), NETWORK_MODULES) == set()
+    assert _hits(imports, NETWORK_MODULES) == {"socket"}
     assert "importlib" not in imports and "__import__" not in {
         n.id for n in ast.walk(_script_tree()) if isinstance(n, ast.Name)
     }
