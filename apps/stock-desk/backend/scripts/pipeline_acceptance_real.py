@@ -36,6 +36,7 @@ before anything of ``app`` or the harness is imported; ``main`` catches
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 import warnings
@@ -52,6 +53,7 @@ sys.excepthook = _fixed_hook
 threading.excepthook = _fixed_hook
 sys.unraisablehook = _fixed_hook
 warnings.simplefilter("ignore")
+logging.disable(logging.CRITICAL)
 
 from pathlib import Path
 
@@ -902,6 +904,7 @@ def main(argv: Sequence[str] | None = None, **injected: Any) -> int:
     """
     state = State()
     code = 1
+    copy_stop_shown = False
     remover: Remover = injected.get("remover", remove_path)
     pause: Callable[[float], None] = injected.get("pause", _sleep)
     try:
@@ -934,6 +937,7 @@ def main(argv: Sequence[str] | None = None, **injected: Any) -> int:
             cleanup(state, remover, pause)
     except (RunStop, AcceptanceStop) as stop:
         say(str(stop))
+        copy_stop_shown = str(stop) == OUTER_STOP_SENTENCES["copy_not_deleted"]
         code = 3
     except KeyboardInterrupt:
         say(INTERRUPTED)
@@ -945,6 +949,12 @@ def main(argv: Sequence[str] | None = None, **injected: Any) -> int:
         cleanup(state, remover, pause)
     except BaseException:  # noqa: BLE001 - best effort; the next start sweeps what is left
         pass
+    # RC-158c: a copy that is still there after the last cleanup is never silent, whichever
+    # path led here. The sentence is shown once, after the sentence the run ended with.
+    if state.work is not None and (state.work / COPY_DIR).exists():
+        if code != 3 or not copy_stop_shown:
+            say(OUTER_STOP_SENTENCES["copy_not_deleted"])
+        code = 3
     return code
 
 

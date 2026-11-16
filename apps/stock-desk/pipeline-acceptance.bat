@@ -13,7 +13,7 @@ set "UV_ENV_FILE="
 set "APP_DIR=%~dp0"
 set "BACKEND_DIR=%APP_DIR%backend"
 
-where uv >/dev/null 2>nul
+where uv >nul 2>nul
 if errorlevel 1 (
   echo [MISSING] uv - install from https://docs.astral.sh/uv/getting-started/installation/
   echo After installing, run this script again.

@@ -3,13 +3,15 @@
 The script's first statements replace ``sys.excepthook``, ``threading.excepthook`` and
 ``sys.unraisablehook`` and call ``warnings.simplefilter("ignore")`` (ADR-0030 supplement 6
 addendum point 5, RC-162). Loaded in a pytest process that would leave the test run with
-silenced hooks and filters, so the hooks and the warnings filter are saved before the load
+silenced hooks and filters, so the hooks, the warnings filter and ``logging.disable`` are saved
+before the load
 and put back after it. The module is loaded once and cached.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
 import threading
 import warnings
@@ -26,6 +28,7 @@ def load_script() -> ModuleType:
     if _cache:
         return _cache[0]
     saved = (sys.excepthook, threading.excepthook, sys.unraisablehook)
+    logging_disabled = logging.root.manager.disable
     spec = importlib.util.spec_from_file_location(MODULE_NAME, SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -35,5 +38,6 @@ def load_script() -> ModuleType:
             spec.loader.exec_module(module)
     finally:
         sys.excepthook, threading.excepthook, sys.unraisablehook = saved
+        logging.disable(logging_disabled)
     _cache.append(module)
     return module

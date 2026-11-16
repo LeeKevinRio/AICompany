@@ -1294,11 +1294,12 @@ def test_ast_the_hooks_are_the_first_effective_statements() -> None:
             in ("sys.excepthook", "threading.excepthook", "sys.unraisablehook")
         ) or (
             isinstance(node, ast.Expr)
-            and ast.unparse(node.value) == "warnings.simplefilter('ignore')"
+            and ast.unparse(node.value)
+            in ("warnings.simplefilter('ignore')", "logging.disable(logging.CRITICAL)")
         )
 
     hook_positions = [i for i, node in enumerate(body) if is_hook(node)]
-    assert len(hook_positions) == 4
+    assert len(hook_positions) == 5
     first_use = next(
         i
         for i, node in enumerate(body)
@@ -1312,12 +1313,13 @@ def test_ast_the_hooks_are_the_first_effective_statements() -> None:
     assert kinds[0] == "Expr"  # the module docstring
     assert [ast.unparse(n) for n in before if isinstance(n, ast.ImportFrom | ast.Import)] == [
         "from __future__ import annotations",
+        "import logging",
         "import sys",
         "import threading",
         "import warnings",
     ]
     assert [n.name for n in before if isinstance(n, ast.FunctionDef)] == ["_fixed_hook"]
-    assert len(before) == 1 + 4 + 1
+    assert len(before) == 1 + 5 + 1
 
 
 def test_the_hook_sentence_is_the_error_sentence(capsys: Any) -> None:
@@ -1415,3 +1417,172 @@ def test_the_bat_is_a_crlf_launcher_that_clears_uv_env_file_first() -> None:
     assert lines.index(COMMAND) < max(i for i, x in enumerate(lines) if x == "pause")
     assert 'cd /d "%BACKEND_DIR%"' in lines
     assert not any("STOCK_DESK" in x or ".env" in x for x in lines if not x.startswith("REM"))
+
+
+# --- qa B-1 / B-2 / S-13e / logging / port check ---
+
+
+def test_the_bat_has_no_non_cmd_redirect_and_matches_the_r2_launcher() -> None:
+    lines = BAT.read_bytes().decode("ascii").split("\r\n")
+    commands = [x for x in lines if not x.startswith("REM")]
+    assert not any("/dev/null" in x for x in commands)
+    assert "where uv >nul 2>nul" in lines
+    r2 = (BAT.parent / "r2-probe.bat").read_bytes().decode("ascii").split("\r\n")
+    # Every command line of the launcher, except those naming this tool, is an r2 line.
+    own = {"title stock-desk pipeline-acceptance", 'set "UV_ENV_FILE="', COMMAND, ""}
+    r2_commands = {x for x in r2 if not x.startswith("REM")}
+    assert [x for x in commands if x not in r2_commands and x not in own] == []
+
+
+def _stuck_copy_run(world: World, capsys: Any, spy: Any) -> tuple[int, list[str]]:
+    code, out, err = world.run(
+        capsys, remover=_failing_remover(("stock-desk.db",)), acceptance=spy[1]
+    )
+    assert err == ""
+    assert_screen_is_closed(out, err)
+    assert spy[0] == []
+    return code, out
+
+
+def test_b2_copy_changed_and_the_copy_cannot_be_deleted_shows_the_copy_stop(
+    tmp_path: Path, capsys: Any, spy: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = make_world(tmp_path)
+    original = real._copy_bytes
+
+    def tamper(source: Path, target: Path) -> None:
+        original(source, target)
+        with open(target, "ab") as handle:
+            handle.write(b"x")
+
+    monkeypatch.setattr(real, "_copy_bytes", tamper)
+    code, out = _stuck_copy_run(world, capsys, spy)
+    assert code == 3
+    assert out == [
+        real.OUTER_STOP_SENTENCES["copy_changed"],
+        real.OUTER_STOP_SENTENCES["copy_not_deleted"],
+    ]
+
+
+def test_b2_guard_failed_and_the_copy_cannot_be_deleted_shows_the_copy_stop(
+    tmp_path: Path, capsys: Any, spy: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = make_world(tmp_path)
+    monkeypatch.setattr(real, "refuse_production", lambda *a, **k: None)
+    code, out = _stuck_copy_run(world, capsys, spy)
+    assert code == 3
+    assert out == [
+        real.OUTER_STOP_SENTENCES["guard_failed"],
+        real.OUTER_STOP_SENTENCES["copy_not_deleted"],
+    ]
+
+
+@pytest.mark.parametrize("raised", [KeyboardInterrupt, RuntimeError])
+def test_b2_an_interrupt_or_error_before_the_reader_and_a_stuck_copy_shows_the_copy_stop(
+    tmp_path: Path, capsys: Any, spy: Any, monkeypatch: pytest.MonkeyPatch, raised: type
+) -> None:
+    world = make_world(tmp_path)
+
+    def boom(*args: object, **kwargs: object) -> bool:
+        raise raised("secret")
+
+    monkeypatch.setattr(real, "refusal_guard_holds", boom)
+    code, out = _stuck_copy_run(world, capsys, spy)
+    first = INTERRUPTED if raised is KeyboardInterrupt else UNEXPECTED
+    assert code == 3
+    assert out == [first, real.OUTER_STOP_SENTENCES["copy_not_deleted"]]
+
+
+def test_b2_the_copy_stop_is_shown_once_when_the_flow_already_raised_it(
+    tmp_path: Path, capsys: Any, spy: Any
+) -> None:
+    world = make_world(tmp_path)
+    code, out = _stuck_copy_run(world, capsys, spy)
+    assert (code, out) == (3, [real.OUTER_STOP_SENTENCES["copy_not_deleted"]])
+
+
+def test_s13e_a_main_database_with_only_the_db_file_gives_same_then_absent_twice(
+    happy: Happy,
+) -> None:
+    assert [x for x in happy.paste_back if x.startswith("copy_check=")] == [
+        "copy_check=SAME",
+        "copy_check=absent_both",
+        "copy_check=absent_both",
+    ]
+
+
+def test_logging_is_disabled_and_nothing_a_logger_says_reaches_the_screen() -> None:
+    driver = (
+        "import logging, runpy, sys\n"
+        f"runpy.run_path({str(SCRIPT_PATH)!r}, run_name='loaded')\n"
+        "from app.forecast import recorder\n"
+        "logging.getLogger('app.forecast.recorder').warning(recorder.DISK_DIFFERS_WARNING)\n"
+        "recorder.logger.warning('secret label')\n"
+        "logging.getLogger('anything').critical('secret')\n"
+        "logging.getLogger('anything').error('secret')\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", driver], capture_output=True, text=True, timeout=120
+    )
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+
+
+def test_the_flow_with_a_logger_warning_keeps_every_screen_line_fixed(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import logging
+
+    # The loader restored logging in this process; switch it off the way the script does.
+    monkeypatch.setattr(logging.root.manager, "disable", logging.CRITICAL)
+    world = make_world(tmp_path)
+    bars = yfinance_bars()
+
+    def noisy(folder: Path, **kwargs: Any) -> Any:
+        logging.getLogger("app.forecast.recorder").warning(recorder.DISK_DIFFERS_WARNING)
+        return AcceptanceResult(rules=kwargs["rules"].name, window=(), ledger_sha256="a" * 64)
+
+    code, out, err = world.run(capsys, read_bars=lambda _p: bars, acceptance=noisy)
+    assert code == 0 and err == ""
+    for line in out:
+        assert on_whitelist(decode(line)), line
+
+
+def test_the_loader_leaves_logging_enabled_in_the_test_process() -> None:
+    import logging
+
+    assert logging.root.manager.disable == 0
+
+
+def test_the_real_port_check_returns_false_when_the_connect_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[Any] = []
+
+    def refuse(address: Any, *args: Any, **kwargs: Any) -> None:
+        seen.append(address)
+        raise OSError("refused")
+
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    assert real.port_is_listening() is False
+    assert seen == [("127.0.0.1", real.PORT)]
+
+
+def test_the_real_port_check_returns_true_when_it_connects_and_only_to_loopback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[Any] = []
+
+    class Connected:
+        def __enter__(self) -> Connected:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    def accept(address: Any, *args: Any, **kwargs: Any) -> Connected:
+        seen.append(address)
+        return Connected()
+
+    monkeypatch.setattr(socket, "create_connection", accept)
+    assert real.port_is_listening() is True
+    assert seen == [("127.0.0.1", 8000)]
