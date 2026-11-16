@@ -6,8 +6,8 @@ return the registered object or raise; there is no default and no fallback.
 ``rules_sha256``) of a version ``get_ruleset`` accepts, for the recorder's CG-2
 run-time check (ADR-0030 D-6: a recording claim's hashes equal what this module
 returns).
-The registries are empty while the G-3 freeze is pending, so in production both
-always raise. ``claims.py``, the recorder, on-demand, the D-14 gate, the replay
+A version absent from its registry raises ``UnpublishedVersionError``; there is
+no default and no fallback. ``claims.py``, the recorder, on-demand, the D-14 gate, the replay
 runner and the store's write validation get their definitions and rule sets
 here and nowhere else.
 

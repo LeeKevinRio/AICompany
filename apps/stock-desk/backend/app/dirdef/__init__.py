@@ -18,9 +18,10 @@ Modules:
   ``definition_sha256``;
 * ``rules.py`` -- the outlook rule set models, ``OUTLOOK_RULE_FIELDS``,
   ``rules_logic_sha256`` and the rule set loader;
-* ``registry.py`` -- the two published registries (empty: the G-3 freeze has
-  not happened, so the write gate stays closed).
+* ``registry.py`` -- the two published registries (only the versions
+  registered after their freeze; ADR-0030 D-6 CG-2).
 
-Constant values are not set here: they are frozen by quant at G-3 and land with
-the first registration.
+Constant values are not set by the type modules: a registered definition object
+is a constant in ``registry.py`` or in a module of this package holding only
+that constant, landed with its registration.
 """
