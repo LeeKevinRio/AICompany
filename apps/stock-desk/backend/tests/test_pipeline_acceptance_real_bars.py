@@ -57,7 +57,29 @@ BACKEND = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = BACKEND / "scripts" / "pipeline_acceptance_real.py"
 LAST = date(2026, 11, 13)
 FORBIDDEN_APP_MODULES = ("app.services", "app.data.cache", "app.data.service", "app.data.providers")
+# AST level: the script source must not import any of these (any submodule included). The one
+# allowed hit is the function-local ``socket`` of the loopback port check.
 NETWORK_MODULES = ("socket", "urllib", "requests", "httpx", "yfinance")
+# Run time: modules that must not be in ``sys.modules`` after the script was loaded. Only modules
+# that do network I/O belong here, and each must stay absent on every CI Python (3.12 and 3.13):
+# - ``urllib`` / ``urllib.parse`` are allowed: Python 3.12's ``pathlib`` imports ``urllib.parse``
+#   at module level (3.13 does not), and it only parses strings. ``urllib.request`` is banned.
+# - ``socket`` is allowed at run time: on Python 3.12 ``email.utils`` (pulled in through
+#   ``importlib.metadata`` by a third-party import) imports it, 3.13 does not. The AST check
+#   above still pins the script's own ``socket`` use to the loopback port check.
+RUNTIME_NETWORK_MODULES = (
+    "urllib.request",
+    "http.client",
+    "ssl",
+    "ftplib",
+    "smtplib",
+    "poplib",
+    "imaplib",
+    "xmlrpc.client",
+    "requests",
+    "httpx",
+    "yfinance",
+)
 SIDE_SUFFIXES = ("-wal", "-shm", "-journal")
 
 
@@ -495,7 +517,7 @@ def test_the_script_imports_no_forbidden_module() -> None:
 
 def test_the_isolated_import_is_silent_and_loads_no_forbidden_module(tmp_path: Path) -> None:
     # The way the one-click file will run it: ``python -I`` from an unrelated folder.
-    banned = FORBIDDEN_APP_MODULES + NETWORK_MODULES
+    banned = FORBIDDEN_APP_MODULES + RUNTIME_NETWORK_MODULES
     code = (
         "import runpy, sys\n"
         f"runpy.run_path({str(SCRIPT_PATH)!r})\n"
