@@ -584,3 +584,89 @@ def test_the_acceptance_script_is_unchanged_in_its_interface_by_this_script() ->
     # This script copies; it never imports the acceptance script.
     text = SCRIPT_PATH.read_text(encoding="utf-8")
     assert "import pipeline_acceptance_real" not in text and "from scripts" not in text
+
+
+# === the CEO instruction (RC-164, RC-182) ========================================================
+
+
+def _verifier() -> dict[str, Any]:
+    import runpy
+
+    return runpy.run_path(str(BACKEND / "scripts" / "verify_cg2_instruction.py"), run_name="v")
+
+
+def _sentences() -> list[str]:
+    stops = [sentence for _code, sentence in real.STOPS.values()]
+    fixed = [
+        real.INTERRUPTED_SAFE,
+        real.INTERRUPTED_LATE,
+        real.UNEXPECTED_SAFE,
+        real.UNEXPECTED_LATE,
+        real.HOOK_SENTENCE,
+        real.PROMPT_CLOSE.strip(),
+        real.PROMPT_SEEN.strip(),
+    ]
+    return [*stops, *fixed]
+
+
+def test_the_ceo_instruction_quotes_the_risk_text_verbatim_and_lists_every_sentence() -> None:
+    v = _verifier()
+    results = v["check"](
+        v["DOC"].read_text(encoding="utf-8"),
+        rc182_report=v["RC182_REPORT"].read_text(encoding="utf-8"),
+        block5_report=v["BLOCK5_REPORT"].read_text(encoding="utf-8"),
+        sentences=_sentences(),
+    )
+    assert [text for ok, text in results if not ok] == []
+    assert len(results) == 6
+
+
+def test_the_verifier_has_teeth() -> None:
+    v = _verifier()
+    doc = v["DOC"].read_text(encoding="utf-8")
+    rc182 = v["RC182_REPORT"].read_text(encoding="utf-8")
+    block5 = v["BLOCK5_REPORT"].read_text(encoding="utf-8")
+    quote = v["extract_rc182"](rc182)
+    assert quote in doc and "登記指令不會在資料庫裡新增、修改或刪除任何資料" in quote
+    for tampered in (
+        doc.replace(quote, quote.replace("不會", "可能不會")),  # a softened quote
+        doc.replace(quote, quote[:-5]),  # a cut quote
+        doc.replace(v["extract_block5"](block5), "x"),  # a missing block
+        doc + "\n這一步保證不會出事。\n",  # a guarantee word in own text
+        doc.replace("待風控定稿", "已定稿"),
+        doc.replace("不要自己修改任何設定或檔案。", "", 1),  # a row without the warning
+    ):
+        results = v["check"](
+            tampered, rc182_report=rc182, block5_report=block5, sentences=_sentences()
+        )
+        assert any(not ok for ok, _t in results)
+    results = v["check"](
+        doc, rc182_report=rc182, block5_report=block5, sentences=[*_sentences(), "STOP: x"]
+    )
+    assert any(not ok for ok, _t in results)
+
+
+def test_the_extraction_rules_fail_closed() -> None:
+    v = _verifier()
+    with pytest.raises(ValueError):
+        v["extract_rc182"]("no bullet here\n")
+    with pytest.raises(ValueError):
+        v["extract_block5"]("**區塊五：登記時「是否看過暫定對照」**\n\nnot a quote\n")
+    two = v["RC182_REPORT"].read_text(encoding="utf-8")
+    with pytest.raises(ValueError):
+        v["extract_rc182"](two + "\n" + two)
+
+
+def test_the_instruction_names_the_backup_place_and_both_launchers() -> None:
+    doc = _verifier()["DOC"].read_text(encoding="utf-8")
+    for needle in (
+        "cg2-preflight.bat",
+        "cg2-register.bat",
+        r"stock-desk-cg2-registration\backups",
+        "stock-desk-before-cg2-",
+        "還原方式（只描述；請不要自己動手）",
+        "待風控定稿",
+        "不要再執行登記檔",
+    ):
+        assert needle in doc, needle
+    assert str(real.WORK_ROOT_NAME) in doc and real.BACKUP_DIR_NAME in doc
