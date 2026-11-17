@@ -424,7 +424,7 @@ def test_ast_the_order_probe_backup_typed_answer_child() -> None:
         for node in ast.walk(flow)
         if isinstance(node, ast.Call)
     ]
-    first = {}
+    first: dict[str, int] = {}
     for line, name in sorted(calls):
         first.setdefault(name, line)
     order = [

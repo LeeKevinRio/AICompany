@@ -350,7 +350,8 @@ def status_is_blind(cwd: Path, args: Any) -> tuple[int, bytes]:
     """Real tooling, except ``status`` which reports a clean tree (so R-2 must catch it)."""
     if "status" in args:
         return 0, b""
-    return real.run_git(cwd, args)
+    code, out = real.run_git(cwd, args)
+    return int(code), bytes(out)
 
 
 @pytest.mark.parametrize("role", ["prereg", "c8", "h3", "h5"])
@@ -1129,7 +1130,12 @@ def test_rc181_3_no_file_hash_of_the_main_database_is_taken_or_shown(
 ) -> None:
     hashed: list[Path] = []
     original = real.sha256_file
-    monkeypatch.setattr(real, "sha256_file", lambda p: (hashed.append(Path(p)), original(p))[1])
+
+    def recording(path: Path) -> str:
+        hashed.append(Path(path))
+        return str(original(path))
+
+    monkeypatch.setattr(real, "sha256_file", recording)
     world.runner.override = real.CliResult(4, "", "")
     code, lines = run(world, capsys, "register")
     assert code == 3

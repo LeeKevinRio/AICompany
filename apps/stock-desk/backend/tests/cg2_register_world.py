@@ -116,7 +116,7 @@ class InProcessClaims:
                 list(args),
                 env=self.env,
                 backend_dir=self.world.backend,
-                clock=self.clock,  # type: ignore[arg-type]
+                clock=self.clock,
             )
         return real.CliResult(code, out.getvalue(), err.getvalue())
 
@@ -232,7 +232,7 @@ class World:
 
     @property
     def work(self) -> Path:
-        return self.home / real.WORK_ROOT_NAME
+        return Path(self.home / real.WORK_ROOT_NAME)
 
     def backups(self) -> list[Path]:
         folder = self.work / real.BACKUP_DIR_NAME
