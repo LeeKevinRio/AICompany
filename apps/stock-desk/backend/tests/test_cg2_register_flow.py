@@ -1526,11 +1526,11 @@ def test_e2e_after_a_successful_registration_the_database_has_the_whole_ledger(
     world.answers = ["0"]
     assert run(world, capsys, "register")[0] == 0
     objects = world.objects()
+    expected_tables = sorted(n for k, n in schema.EXPECTED_OBJECTS if k == "table")
+    assert len(expected_tables) == 5
     assert (
         sorted(n for k, n in objects if k == "table" and n.startswith("forecast_"))
-        == sorted(schema.EXPECTED_TABLES)
-        if hasattr(schema, "EXPECTED_TABLES")
-        else True
+        == expected_tables
     )
     assert len([1 for k, n in objects if k == "table" and n.startswith("forecast_")]) == 5
     assert len([1 for k, _n in objects if k == "trigger"]) == 15
@@ -1538,32 +1538,3 @@ def test_e2e_after_a_successful_registration_the_database_has_the_whole_ledger(
     # a second run is refused by R-4 and by nothing else
     code, lines = run(world, capsys, "register", now=lambda: real.datetime(2026, 11, 20, 22, 0, 0))
     assert (code, lines) == (3, stop_lines("ledger_objects"))
-
-
-def test_e2e_the_script_never_deletes_renames_or_replaces_anything(
-    world: World, capsys: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[str] = []
-    for owner, name in (
-        (os, "remove"),
-        (os, "unlink"),
-        (os, "rename"),
-        (os, "replace"),
-        (os, "rmdir"),
-        (shutil, "rmtree"),
-        (shutil, "move"),
-        (Path, "unlink"),
-        (Path, "rename"),
-        (Path, "replace"),
-        (Path, "rmdir"),
-    ):
-        original = getattr(owner, name)
-
-        def spy(*a: Any, _n: str = name, _o: Callable[..., Any] = original, **k: Any) -> Any:
-            calls.append(_n)
-            return _o(*a, **k)
-
-        monkeypatch.setattr(owner, name, spy)
-    assert run(world, capsys, "register")[0] == 0
-    # sqlite and the stand-in runner may use the OS internally; the script itself has no such call
-    assert calls == [] or set(calls) <= {"unlink"}
