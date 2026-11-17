@@ -640,6 +640,7 @@ def _inputs(v: dict[str, Any]) -> dict[str, Any]:
         "block5_report": v["BLOCK5_REPORT"].read_text(encoding="utf-8"),
         "old_report": v["RC185_REPORT"].read_text(encoding="utf-8"),
         "new_report": v["RC199_REPORT"].read_text(encoding="utf-8"),
+        "final_report": v["RC213_REPORT"].read_text(encoding="utf-8"),
         "sentences": v["script_sentences"](
             {**ns, **{k: getattr(real, k) for k in _SENTENCE_NAMES}}
         ),
@@ -670,16 +671,23 @@ def test_the_verifier_has_teeth() -> None:
     inputs = _inputs(v)
     rc182 = v["extract_rc182"](inputs["rc182_report"])
     rc207 = v["block_after"](inputs["new_report"], "**RC-207")
-    rc209 = v["block_after"](inputs["new_report"], "**RC-209")
+    rc213 = v["block_after"](inputs["final_report"], "**RC-213")
+    rc214 = v["block_after"](inputs["final_report"], "**RC-214")
+    rc215 = v["block_after"](inputs["final_report"], "**RC-215")
+    rc216 = v["block_after"](inputs["final_report"], "**RC-216")
     row = v["new_stop_row_lines"](inputs["new_report"])[0]
     for tampered in (
         doc.replace(rc182, rc182.replace("不會", "可能不會")),  # a softened quote
         doc.replace(rc182, rc182[:-5]),  # a cut quote
         doc.replace(rc207, rc207.replace("不要再執行登記檔", "不要執行登記檔")),
-        doc.replace(rc209, rc209.replace("-verify.db", "-second.db")),  # a file name that differs
+        doc.replace(rc213, rc213.replace("-verify.db", "-second.db")),  # a file name that differs
+        doc.replace(rc214, rc214.replace("不要自己重跑", "可以重跑")),
+        doc.replace(rc215, ""),  # the added line is missing
+        doc.replace(rc216, "待風控單項確認後才交給 CEO"),  # the old status
+        doc.replace(rc213, ""),  # the replaced block is gone
         doc.replace(row, row.replace("Nothing was registered", "All good")),
         doc + "\n這一步保證不會出事。\n",  # a guarantee word in own text
-        doc.replace("已套用風控 RC-185～RC-211", "待風控定稿"),
+        doc.replace("風控單項確認通過", "待風控定稿"),
         doc.replace("不要自己修改任何設定或檔案。", "", 1),  # a row without the warning
     ):
         results = v["check"](tampered, **inputs)
@@ -714,7 +722,7 @@ def test_the_instruction_names_the_backup_place_both_launchers_and_the_applied_s
         real.backup_file_name("<時間戳>"),
         real.verify_file_name("<時間戳>"),
         "還原方式（只描述；請不要自己動手）",
-        "已套用風控 RC-185～RC-211",
+        "已套用風控 RC-185～RC-216，風控單項確認通過",
         "不要再執行登記檔",
     ):
         assert needle in doc, needle

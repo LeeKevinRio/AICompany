@@ -1,4 +1,4 @@
-"""Checks the CEO instruction of the CG-2 one-click files against its sources (RC-164 to RC-211).
+"""Checks the CEO instruction of the CG-2 one-click files against its sources (RC-164 to RC-216).
 
 Prints one ``OK ...`` or ``FAIL ...`` line per check and exits 0 only when every check is OK.
 
@@ -37,6 +37,9 @@ RC185_REPORT = (
     REPO / "work" / "reviews" / "2026-11-17-正式登記說明與畫面字句判定RC185至RC198-風控.md"
 )
 RC199_REPORT = REPO / "work" / "reviews" / "2026-11-17-附記三新增字面定稿RC199至RC212-風控.md"
+RC213_REPORT = (
+    REPO / "work" / "reviews" / "2026-11-17-正式登記說明套用後單項確認RC213至RC216-風控.md"
+)
 SCRIPT = Path(__file__).resolve().with_name("cg2_register.py")
 
 RC182_MARKER = "- **RC-182（required）：CEO 登記說明文件要逐字加入下面這段**"
@@ -47,7 +50,9 @@ GUARANTEE_WORDS = ("保證", "一定會", "絕對", "確保", "必然", "百分�
 NO_SELF_FIX = "不要自己"
 #: (marker, report) of every plain-text risk-final block of the instruction.
 OLD_BLOCKS = ("【區塊 RC-186b", "【區塊 RC-187", "【區塊 RC-195")
-NEW_BLOCKS = tuple(f"**RC-{n}" for n in range(202, 212))
+NEW_BLOCKS = tuple(f"**RC-{n}" for n in (202, 203, 204, 205, 206, 207, 208, 210, 211))
+#: The post-application blocks (RC-213 replaces RC-209; RC-216 is the header status).
+FINAL_BLOCKS = tuple(f"**RC-{n}" for n in (213, 214, 215, 216))
 #: Literal strings the risk reports prescribe (checked in the report and in the instruction).
 OLD_LITERALS = (
     "## 六、登記被拒絕（結束碼 3 或 4）",
@@ -56,7 +61,7 @@ OLD_LITERALS = (
     "登記程式回報已經寫入，但寫入之後的自我核對沒有通過（結束碼 5）。見本節下方說明。",
     "見本節下方引文。",
 )
-STATUS_LINE = "已套用風控 RC-185～RC-211"
+STALE_STATUS = "待風控單項確認後才交給 CEO"
 
 
 def _unquote(line: str) -> str:
@@ -190,6 +195,7 @@ def check(
     block5_report: str,
     old_report: str,
     new_report: str,
+    final_report: str,
     sentences: Iterable[str],
     script: Mapping[str, Any],
 ) -> list[tuple[bool, str]]:
@@ -203,7 +209,11 @@ def check(
         count = blocks.count(expected)
         results.append((count == 1, f"{name} verbatim, exactly once as a quote block ({count})"))
     verified: list[str] = []
-    for report, markers in ((old_report, OLD_BLOCKS), (new_report, NEW_BLOCKS)):
+    for report, markers in (
+        (old_report, OLD_BLOCKS),
+        (new_report, NEW_BLOCKS),
+        (final_report, FINAL_BLOCKS),
+    ):
         for marker in markers:
             expected = block_after(report, marker)
             verified.append(expected)
@@ -255,7 +265,10 @@ def check(
     found = [word for word in GUARANTEE_WORDS if word in own]
     results.append((not found, f"no guarantee wording in the own text (found {found})"))
     results.append(("待風控定稿" not in doc, "no awaiting-risk marker is left"))
-    results.append((STATUS_LINE in doc, "the status line names the applied risk conditions"))
+    results.append((STALE_STATUS not in doc, "the old status wording is gone"))
+    results.append(
+        ("RC-209" not in own, "the replaced RC-209 block is not named or left in the own text")
+    )
     return results
 
 
@@ -286,6 +299,7 @@ def main() -> int:
         block5_report=BLOCK5_REPORT.read_text(encoding="utf-8"),
         old_report=RC185_REPORT.read_text(encoding="utf-8"),
         new_report=RC199_REPORT.read_text(encoding="utf-8"),
+        final_report=RC213_REPORT.read_text(encoding="utf-8"),
         sentences=script_sentences(ns),
         script=ns,
     )
