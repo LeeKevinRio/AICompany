@@ -295,25 +295,25 @@ def test_p3_an_error_that_is_not_oserror_while_starting_is_still_before_the_regi
     assert world.paste_backs() == []
 
 
-def test_p3_late_starts_only_after_the_child_exists(world: World, capsys: Any) -> None:
+def test_p3_late_starts_only_after_the_child_exists(
+    world: World, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seen: dict[str, bool] = {}
-    state_holder: dict[str, Any] = {}
-    original = real.State
+    holder: dict[str, Any] = {}
+    original = real.flow
 
-    class Spy(original):  # type: ignore[valid-type, misc]
-        def __init__(self) -> None:
-            super().__init__()
-            state_holder["state"] = self
+    def spy_flow(state: Any, *args: Any, **kwargs: Any) -> int:
+        holder["state"] = state
+        return int(original(state, *args, **kwargs))
 
-    real.State = Spy  # type: ignore[misc]
-    try:
-        world.runner.before_run = lambda: seen.setdefault(
-            "late_at_start", state_holder["state"].late
-        )
-        assert run(world, capsys, "register")[0] == 0
-    finally:
-        real.State = original
-    assert seen == {"late_at_start": False}
+    monkeypatch.setattr(real, "flow", spy_flow)
+
+    def at_start() -> None:
+        seen.setdefault("late_at_start", holder["state"].late)
+
+    world.runner.before_run = at_start
+    assert run(world, capsys, "register")[0] == 0
+    assert seen == {"late_at_start": False} and holder["state"].late is True
 
 
 def test_p3_a_child_that_times_out_is_unconfirmed_exit_5(world: World, capsys: Any) -> None:

@@ -72,7 +72,10 @@ def block_after(report: str, marker: str) -> str:
     if len(starts) != 1:
         raise ValueError(f"the marker {marker!r} occurs {len(starts)} times, not once")
     i = starts[0] + 1
-    while i < len(lines) and lines[i].strip() == "":
+    # Skip the lead-in lines (blank or prose) up to the first quote line of this block.
+    while i < len(lines) and not lines[i].lstrip().startswith(">"):
+        if lines[i].lstrip().startswith(("**RC-", "【區塊", "- **RC-")):
+            raise ValueError(f"no quote after {marker!r}")
         i += 1
     block: list[str] = []
     while i < len(lines) and lines[i].lstrip().startswith(">"):

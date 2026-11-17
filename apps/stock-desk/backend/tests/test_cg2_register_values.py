@@ -612,3 +612,118 @@ def test_the_acceptance_script_is_unchanged_in_its_interface_by_this_script() ->
     # This script copies; it never imports the acceptance script.
     text = SCRIPT_PATH.read_text(encoding="utf-8")
     assert "import pipeline_acceptance_real" not in text and "from scripts" not in text
+
+
+# === the CEO instruction (RC-164, RC-182, RC-185 to RC-211) ======================================
+
+
+def _verifier() -> dict[str, Any]:
+    import runpy
+
+    return runpy.run_path(str(BACKEND / "scripts" / "verify_cg2_instruction.py"), run_name="v")
+
+
+def _inputs(v: dict[str, Any]) -> dict[str, Any]:
+    ns = {
+        name: getattr(real, name)
+        for name in (
+            "STOPS",
+            "NEW_STOP_KEYS",
+            "PROMPT_SEEN",
+            "_TELL",
+            "backup_file_name",
+            "verify_file_name",
+        )
+    }
+    return {
+        "rc182_report": v["RC182_REPORT"].read_text(encoding="utf-8"),
+        "block5_report": v["BLOCK5_REPORT"].read_text(encoding="utf-8"),
+        "old_report": v["RC185_REPORT"].read_text(encoding="utf-8"),
+        "new_report": v["RC199_REPORT"].read_text(encoding="utf-8"),
+        "sentences": v["script_sentences"](
+            {**ns, **{k: getattr(real, k) for k in _SENTENCE_NAMES}}
+        ),
+        "script": ns,
+    }
+
+
+_SENTENCE_NAMES = (
+    "INTERRUPTED_SAFE",
+    "INTERRUPTED_LATE",
+    "UNEXPECTED_SAFE",
+    "UNEXPECTED_LATE",
+    "HOOK_SENTENCE",
+    "PROMPT_CLOSE",
+)
+
+
+def test_the_ceo_instruction_quotes_every_risk_text_verbatim_and_lists_every_sentence() -> None:
+    v = _verifier()
+    results = v["check"](v["DOC"].read_text(encoding="utf-8"), **_inputs(v))
+    assert [text for ok, text in results if not ok] == []
+    assert len(results) >= 30
+
+
+def test_the_verifier_has_teeth() -> None:
+    v = _verifier()
+    doc = v["DOC"].read_text(encoding="utf-8")
+    inputs = _inputs(v)
+    rc182 = v["extract_rc182"](inputs["rc182_report"])
+    rc207 = v["block_after"](inputs["new_report"], "**RC-207")
+    rc209 = v["block_after"](inputs["new_report"], "**RC-209")
+    row = v["new_stop_row_lines"](inputs["new_report"])[0]
+    for tampered in (
+        doc.replace(rc182, rc182.replace("不會", "可能不會")),  # a softened quote
+        doc.replace(rc182, rc182[:-5]),  # a cut quote
+        doc.replace(rc207, rc207.replace("不要再執行登記檔", "不要執行登記檔")),
+        doc.replace(rc209, rc209.replace("-verify.db", "-second.db")),  # a file name that differs
+        doc.replace(row, row.replace("Nothing was registered", "All good")),
+        doc + "\n這一步保證不會出事。\n",  # a guarantee word in own text
+        doc.replace("已套用風控 RC-185～RC-211", "待風控定稿"),
+        doc.replace("不要自己修改任何設定或檔案。", "", 1),  # a row without the warning
+    ):
+        results = v["check"](tampered, **inputs)
+        assert any(not ok for ok, _t in results)
+    extra = [*inputs["sentences"], "STOP: x"]
+    assert any(not ok for ok, _t in v["check"](doc, **{**inputs, "sentences": extra}))
+    wrong = {**inputs["script"], "PROMPT_SEEN": "Type 0 or 1: "}
+    assert any(not ok for ok, _t in v["check"](doc, **{**inputs, "script": wrong}))
+
+
+def test_the_extraction_rules_fail_closed() -> None:
+    v = _verifier()
+    with pytest.raises(ValueError):
+        v["extract_rc182"]("no bullet here\n")
+    with pytest.raises(ValueError):
+        v["extract_block5"]("**區塊五：登記時「是否看過暫定對照」**\n\nnot a quote\n")
+    with pytest.raises(ValueError):
+        v["block_after"]("**RC-999 x**\n\n**RC-998 y**\n> quote\n", "**RC-999")
+    with pytest.raises(ValueError):
+        v["block_after"]("nothing\n", "**RC-999")
+    two = v["RC182_REPORT"].read_text(encoding="utf-8")
+    with pytest.raises(ValueError):
+        v["extract_rc182"](two + "\n" + two)
+
+
+def test_the_instruction_names_the_backup_place_both_launchers_and_the_applied_status() -> None:
+    doc = _verifier()["DOC"].read_text(encoding="utf-8")
+    for needle in (
+        "cg2-preflight.bat",
+        "cg2-register.bat",
+        r"stock-desk-cg2-registration\backups",
+        real.backup_file_name("<時間戳>"),
+        real.verify_file_name("<時間戳>"),
+        "還原方式（只描述；請不要自己動手）",
+        "已套用風控 RC-185～RC-211",
+        "不要再執行登記檔",
+    ):
+        assert needle in doc, needle
+    assert "待風控定稿" not in doc
+    assert real.WORK_ROOT_NAME in doc and real.BACKUP_DIR_NAME in doc
+
+
+def test_the_instruction_has_no_code_explanation_for_the_refusal_reasons() -> None:
+    doc = _verifier()["DOC"].read_text(encoding="utf-8")
+    for code in real.REFUSAL_CODES:
+        assert f"refusal_reason={code}" not in doc
+    assert doc.count("refusal_reason=") >= 1  # only the generic RC-205 sentence names the line
