@@ -302,6 +302,13 @@ def test_r1_the_app_tree_differs_from_the_cg2_pr(world: World, capsys: Any, mode
     stop(world, capsys, mode, "app_changed")
 
 
+def test_r1_ignored_bytecode_in_app_does_not_make_the_tree_dirty(world: World, capsys: Any) -> None:
+    cache = world.backend / "app" / "forecast" / "__pycache__"
+    cache.mkdir()
+    (cache / "x.cpython-312.pyc").write_bytes(b"\0\0")
+    assert run(world, capsys, "preflight")[0] == 0
+
+
 def test_r1_a_change_outside_the_watched_paths_does_not_stop(world: World, capsys: Any) -> None:
     (world.backend / "scripts").mkdir()
     (world.backend / "scripts" / "note.txt").write_text("not watched\n")

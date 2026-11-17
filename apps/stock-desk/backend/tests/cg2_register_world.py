@@ -160,6 +160,7 @@ class World:
         rules.mkdir()
         (rules / "h3.yaml").write_bytes(H3_BYTES)
         (rules / "h5.yaml").write_bytes(H5_BYTES)
+        (self.backend / ".gitignore").write_text("__pycache__/\n.coverage\n")
         (self.backend / ".gitattributes").write_text(
             "uv.lock text eol=lf\n"
             "/app/outlook/rules/h3.yaml text eol=lf\n"
