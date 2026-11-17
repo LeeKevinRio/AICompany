@@ -17,6 +17,7 @@
 - 補充紀錄：2026-11-16 append 補充七附記二（附記第 3 點 `mode=ro` 字面更正、claims.py 白名單與補充六第 6 點 (d) 範圍的確認、提交後例外、`git_blob` 環境、M-7 屬性位置、claims.py 模組 docstring；tech-architect 裁示，字面更正與釐清，第 1、5、6 點窄幅寬於字面已標明，不改 store.py、schema.py、harness 三檔、使用者面字面、規則檔、定義物件與已登記雜湊；CEO 可推翻；來源 `work/reviews/2026-11-16-CG2登記PR第二段交件-dev-lead.md`、`work/reviews/2026-11-16-CG2登記PR審查-qa-reviewer.md`）。
 - 補充紀錄：2026-11-16 append 補充七附記二的風控審查紀錄（附記二第 1、5、6 點經風控審查，RC-179～RC-184，附條件接受；coordinator 依風控報告落檔，不改附記二原文；來源 `work/reviews/2026-11-16-補充七附記二三點判定RC179至RC184-風控.md`）。
 - 補充紀錄：2026-11-17 append 補充七附記三（CG-2 登記一鍵檔：R-1 以 `app/` tree id 等價核對並由 coordinator 人工補齊字面、登記檔綁定預檢回貼、兩份備份 sha256 相等、`review_refs` 內容規則與執行期存在檢查、`refusal_reason` 封閉代號、結束碼語意與 `UNCONFIRMED`、順序與探針；tech-architect 裁示，第 1 點窄幅寬於字面，其餘收緊或釐清；新增的 CEO 可見字面送風控；CEO 可推翻）
+- 補充紀錄：2026-11-17 append 補充七附記三之一（「登記已開始」自呼叫啟動子行程的函式之前起算，只有 `OSError` 判為未開始；更正附記三第 3 點與 S-15c 第 6 點字面，方向較保守；tech-architect 裁示；不改 CEO 可見字面；CEO 可推翻）
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -963,3 +964,13 @@
   - 第 5 點：代號表與 `claims.py` 兩張表相等；每個代號與 `unknown` 各一個測試；畫面不含 stderr 原文。
   - 第 6 點：注入 `KeyboardInterrupt`，啟動子行程前結束碼為 2，啟動後為 5 並留下 `UNCONFIRMED` 回貼。
   - 第 7 點：預檢會執行探針（測試）。
+
+## 補充七附記三之一：「登記已開始」的起點（2026-11-17）
+
+- 決策者：tech-architect。來源：`work/reviews/2026-11-17-CG2登記一鍵檔修正複審-qa.md`（low：`start()` 期間中斷）；另讀 `7b3fef0f` 的 `scripts/cg2_register.py`。
+- 性質：更正附記三第 3 點與 S-15c 第 6 點的字面，方向比原字面保守（不確定時判為已開始）。不改 CEO 可見字面、規則檔、定義物件與已登記雜湊，不改 `app/`。CEO 可推翻。
+
+1. 「登記已開始」的狀態，自呼叫啟動子行程的函式之前起算。只有該函式拋出 `OSError`，也就是能確定子行程沒有建立時，才判為未開始：STOP，結束碼 3。這段期間的其他任何例外或中斷，都判為已開始：結束碼 5，寫入 `register_result=UNCONFIRMED` 回貼；已經取得子行程時，就終止它。
+2. S-15c 第 6 點的「啟動子行程前」，讀為「呼叫啟動函式之前」。
+
+- **S-15d（逐條可檢查）**：啟動函式執行中注入中斷、注入非 `OSError` 的例外、注入回傳後的中斷，三種情況都得到結束碼 5 與 `UNCONFIRMED` 回貼；拋 `OSError` 時得到結束碼 3，而且不留回貼（測試）。
