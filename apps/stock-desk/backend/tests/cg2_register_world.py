@@ -92,6 +92,9 @@ class InProcessClaims:
         self.calls: list[list[str]] = []
         self.probes = 0
         self.before_run: Callable[[], None] | None = None
+        #: Raised by ``start`` (before the program exists): an ``OSError`` is "could not start".
+        self.start_error: BaseException | None = None
+        #: Raised by ``finish`` (after the program was started).
         self.raises: BaseException | None = None
         self.override: Any = None
         self.probe_result: Path | None = world.backend
@@ -101,11 +104,16 @@ class InProcessClaims:
         self.probes += 1
         return self.probe_result
 
-    def run(self, args: Sequence[str]) -> Any:
+    def start(self, args: Sequence[str]) -> Any:
         self.events.append("run")
         self.calls.append(list(args))
+        if self.start_error is not None:
+            raise self.start_error
         if self.before_run is not None:
             self.before_run()
+        return list(args)
+
+    def finish(self, handle: Any) -> Any:
         if self.raises is not None:
             raise self.raises
         if self.override is not None:
@@ -113,12 +121,22 @@ class InProcessClaims:
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             code = claims.main(
-                list(args),
+                list(handle),
                 env=self.env,
                 backend_dir=self.world.backend,
                 clock=self.clock,
             )
         return real.CliResult(code, out.getvalue(), err.getvalue())
+
+
+class _ProbeOnly:
+    """The silent preflight's runner: answers the probe, starts nothing."""
+
+    def __init__(self, backend: Path) -> None:
+        self.backend = backend
+
+    def probe(self) -> Path | None:
+        return self.backend
 
 
 @dataclass
@@ -138,6 +156,7 @@ class World:
     opened: list[Path] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
     listening: bool = False
+    auto_files: set[Path] = field(default_factory=set)
     env: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -160,6 +179,13 @@ class World:
         rules.mkdir()
         (rules / "h3.yaml").write_bytes(H3_BYTES)
         (rules / "h5.yaml").write_bytes(H5_BYTES)
+        (self.backend / "scripts").mkdir()
+        (self.backend / "scripts" / "cg2_register.py").write_text("# stand-in\n")
+        for rel in real.BAT_RELS:
+            (self.repo / rel).write_text("@echo off\r\n")
+        for ref in REVIEW_REFS:
+            (self.repo / ref).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / ref).write_text("# a review record (stand-in)\n")
         (self.backend / ".gitignore").write_text("__pycache__/\n.coverage\n")
         (self.backend / ".gitattributes").write_text(
             "uv.lock text eol=lf\n"
@@ -213,7 +239,28 @@ class World:
     def opener(self, path: Path) -> None:
         self.opened.append(path)
 
-    def run(self, mode: str, **overrides: Any) -> int:
+    def _silent_preflight(self, seams: dict[str, Any]) -> None:
+        """A preflight made a minute before ``NOW``, silently, so that a register run has the passed
+        preflight it needs. A failing one leaves no file (the register run stops at the same
+        check). Its files are left out of :meth:`paste_backs`."""
+        before = set(self.paste_dir_files())
+        quiet = dict(seams)
+        quiet.update(
+            now=lambda: NOW - timedelta(minutes=1),
+            ask=lambda _prompt: "",
+            claims=_ProbeOnly(self.backend),
+            opener=lambda _path: None,
+        )
+        argv = ["preflight", "--backend-dir", str(self.backend), "--home", str(self.home)]
+        with redirect_stdout(io.StringIO()):
+            real.main(argv, **quiet)
+        self.auto_files |= set(self.paste_dir_files()) - before
+
+    def paste_dir_files(self) -> list[Path]:
+        folder = self.work / real.PASTE_DIR_NAME
+        return sorted(folder.iterdir()) if folder.is_dir() else []
+
+    def run(self, mode: str, *, preflight: bool = True, **overrides: Any) -> int:
         seams: dict[str, Any] = {
             "env": self.env,
             "port_check": lambda: self.listening,
@@ -226,6 +273,8 @@ class World:
             "app_check": lambda _backend: True,
         }
         seams.update(overrides)
+        if mode == "register" and preflight:
+            self._silent_preflight(seams)
         argv = [mode, "--backend-dir", str(self.backend), "--home", str(self.home)]
         return int(real.main(argv, **seams))
 
@@ -239,9 +288,14 @@ class World:
         folder = self.work / real.BACKUP_DIR_NAME
         return sorted(folder.iterdir()) if folder.is_dir() else []
 
+    def main_backup(self) -> Path:
+        """The first backup (the second one, ``-verify``, is its twin)."""
+        (first,) = [p for p in self.backups() if not p.name.endswith("-verify.db")]
+        return first
+
     def paste_backs(self) -> list[Path]:
-        folder = self.work / real.PASTE_DIR_NAME
-        return sorted(folder.iterdir()) if folder.is_dir() else []
+        """The paste-back files, without the preflights the harness made for a register run."""
+        return [p for p in self.paste_dir_files() if p not in self.auto_files]
 
     def logical_state(self) -> tuple[tuple[str, ...], tuple[object, ...]]:
         """The main database's dump and header pragmas, read through a ``mode=ro`` connection."""

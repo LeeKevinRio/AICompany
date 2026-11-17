@@ -16,7 +16,7 @@ set "BACKEND_DIR=%APP_DIR%backend"
 where uv >nul 2>nul
 if errorlevel 1 (
   echo [MISSING] uv - install from https://docs.astral.sh/uv/getting-started/installation/
-  echo After installing, run this script again.
+  echo Tell the coordinator.
   goto fail
 )
 

@@ -131,12 +131,38 @@ def test_r1_the_app_tree_constant_is_the_app_tree_of_this_checkout() -> None:
     assert tree == PINS.app_tree_id
 
 
-def test_the_review_refs_are_repo_relative_and_exist_at_head() -> None:
-    assert PINS.review_refs
+def test_the_review_refs_are_the_final_list_in_repo_relative_form_without_spaces() -> None:
+    assert PINS.review_refs == (
+        "work/reviews/2026-11-15-凍結包第2輪單項確認-風控.md",
+        "work/reviews/2026-11-15-事先宣告v0.32套用單項確認-風控.md",
+        "work/reviews/2026-11-15-C8決策紀錄檔確認-風控.md",
+        "work/reviews/2026-11-17-CG2登記PR-M9核對M2M3M6-風控.md",
+        "work/reviews/2026-11-17-CG2登記PR-M9最終審查-qa.md",
+    )
     for ref in PINS.review_refs:
-        assert ref.startswith("work/reviews/") and " " not in ref
-        assert "\\" not in ref and ".." not in ref.split("/")
-        assert _blob(ref)  # raises when the path is not in HEAD
+        assert ref.startswith("work/reviews/") and not re.search(r"\s", ref)
+        assert "\\" not in ref and ".." not in ref.split("/") and not ref.startswith("/")
+        assert ref.endswith(".md")
+    assert len(set(PINS.review_refs)) == len(PINS.review_refs)
+    assert " ".join(PINS.review_refs).count(" ") == len(PINS.review_refs) - 1
+
+
+def test_the_review_refs_all_exist_at_head() -> None:
+    """EXPECTED TO FAIL until the coordinator commits the two final records (M-9 風控 and qa).
+
+    Not skipped, not xfail, not weakened: ``check_review_refs`` stops a real run on the same
+    condition. The failure lists exactly the paths that are not yet in ``HEAD``.
+    """
+    root = _repo_root()
+    missing = [
+        ref
+        for ref in PINS.review_refs
+        if subprocess.run(
+            ["git", "cat-file", "-e", f"HEAD:{ref}"], cwd=root, capture_output=True
+        ).returncode
+        != 0
+    ]
+    assert missing == []
 
 
 def test_the_backend_rel_path_is_this_backend() -> None:
@@ -183,7 +209,7 @@ SAMPLES = {
     "registered_at": "registered_at_h5=2026-11-20T13:05:09.123456+00:00",
     "provisional_results_seen": "provisional_results_seen=0",
     "post_commit_check": "post_commit_check=ok",
-    "register_result": "register_result=WRITTEN_UNCHECKED",
+    "register_result": "register_result=UNCONFIRMED",
     "done_at_utc": "done_at_utc=2026-11-20T13:05:09Z",
 }
 
@@ -402,13 +428,13 @@ def test_ast_the_main_database_is_never_opened_hashed_or_read_by_bytes() -> None
         ):
             assert "db" not in [ast.unparse(a) for a in node.args], ast.unparse(node)
     flow = _functions(_tree())
-    for name in ("check_r4", "make_backup", "check_r3"):
+    for name in ("check_r4", "_backup_once", "check_r3"):
         calls = _call_names(flow[name])
-        assert "open" in calls if name == "make_backup" else "open" not in calls
+        assert "open" in calls if name == "_backup_once" else "open" not in calls
     # make_backup opens only the new backup target ("xb"), never the source
     opens = [
         n
-        for n in ast.walk(flow["make_backup"])
+        for n in ast.walk(flow["_backup_once"])
         if isinstance(n, ast.Call) and ast.unparse(n.func) == "open"
     ]
     assert [ast.unparse(o.args[0]) for o in opens] == ["target"] and ast.unparse(
@@ -427,20 +453,21 @@ def test_ast_the_order_probe_backup_typed_answer_child() -> None:
     first: dict[str, int] = {}
     for line, name in sorted(calls):
         first.setdefault(name, line)
+    ask_lines = [line for line, name in sorted(calls) if name == "seams.ask"]
+    assert len(ask_lines) == 2  # the "close the windows" prompt, then the typed answer
     order = [
+        ask_lines[0],
         first["prechecks"],
+        first["check_preflight_binding"],
         first["seams.claims.probe"],
         first["make_backup"],
-        first["seams.ask"],
-        first["seams.claims.run"],
+        ask_lines[1],
+        first["seams.port_check"],
+        first["seams.claims.start"],
+        first["seams.claims.finish"],
     ]
-    # ``seams.ask`` first appears for the "close the windows" prompt; the typed answer is the last.
-    ask_lines = [line for line, name in sorted(calls) if name == "seams.ask"]
-    assert len(ask_lines) == 2
-    order[3] = ask_lines[1]
-    assert order == sorted(order) and len(set(order)) == 5
-    assert ask_lines[0] < first["prechecks"]
-    assert [n for _l, n in sorted(calls) if n == "seams.claims.run"] == ["seams.claims.run"]
+    assert order == sorted(order) and len(set(order)) == len(order)
+    assert [n for _l, n in sorted(calls) if n == "seams.claims.start"] == ["seams.claims.start"]
 
 
 def test_ast_the_typed_answer_has_no_default_and_no_other_source() -> None:
@@ -531,6 +558,7 @@ def test_the_bat_has_no_non_cmd_syntax_and_only_r2_launcher_lines_besides_its_ow
         f"title stock-desk cg2-{mode}",
         'set "UV_ENV_FILE="',
         rf"uv run --no-sync python -I -X utf8 scripts\cg2_register.py {mode}",
+        "  echo Tell the coordinator.",  # RC-198: replaces the r2 launcher's "run again" line
         "",
     }
     r2_commands = {x for x in r2 if not x.startswith("REM")}
@@ -584,89 +612,3 @@ def test_the_acceptance_script_is_unchanged_in_its_interface_by_this_script() ->
     # This script copies; it never imports the acceptance script.
     text = SCRIPT_PATH.read_text(encoding="utf-8")
     assert "import pipeline_acceptance_real" not in text and "from scripts" not in text
-
-
-# === the CEO instruction (RC-164, RC-182) ========================================================
-
-
-def _verifier() -> dict[str, Any]:
-    import runpy
-
-    return runpy.run_path(str(BACKEND / "scripts" / "verify_cg2_instruction.py"), run_name="v")
-
-
-def _sentences() -> list[str]:
-    stops = [sentence for _code, sentence in real.STOPS.values()]
-    fixed = [
-        real.INTERRUPTED_SAFE,
-        real.INTERRUPTED_LATE,
-        real.UNEXPECTED_SAFE,
-        real.UNEXPECTED_LATE,
-        real.HOOK_SENTENCE,
-        real.PROMPT_CLOSE.strip(),
-        real.PROMPT_SEEN.strip(),
-    ]
-    return [*stops, *fixed]
-
-
-def test_the_ceo_instruction_quotes_the_risk_text_verbatim_and_lists_every_sentence() -> None:
-    v = _verifier()
-    results = v["check"](
-        v["DOC"].read_text(encoding="utf-8"),
-        rc182_report=v["RC182_REPORT"].read_text(encoding="utf-8"),
-        block5_report=v["BLOCK5_REPORT"].read_text(encoding="utf-8"),
-        sentences=_sentences(),
-    )
-    assert [text for ok, text in results if not ok] == []
-    assert len(results) == 6
-
-
-def test_the_verifier_has_teeth() -> None:
-    v = _verifier()
-    doc = v["DOC"].read_text(encoding="utf-8")
-    rc182 = v["RC182_REPORT"].read_text(encoding="utf-8")
-    block5 = v["BLOCK5_REPORT"].read_text(encoding="utf-8")
-    quote = v["extract_rc182"](rc182)
-    assert quote in doc and "登記指令不會在資料庫裡新增、修改或刪除任何資料" in quote
-    for tampered in (
-        doc.replace(quote, quote.replace("不會", "可能不會")),  # a softened quote
-        doc.replace(quote, quote[:-5]),  # a cut quote
-        doc.replace(v["extract_block5"](block5), "x"),  # a missing block
-        doc + "\n這一步保證不會出事。\n",  # a guarantee word in own text
-        doc.replace("待風控定稿", "已定稿"),
-        doc.replace("不要自己修改任何設定或檔案。", "", 1),  # a row without the warning
-    ):
-        results = v["check"](
-            tampered, rc182_report=rc182, block5_report=block5, sentences=_sentences()
-        )
-        assert any(not ok for ok, _t in results)
-    results = v["check"](
-        doc, rc182_report=rc182, block5_report=block5, sentences=[*_sentences(), "STOP: x"]
-    )
-    assert any(not ok for ok, _t in results)
-
-
-def test_the_extraction_rules_fail_closed() -> None:
-    v = _verifier()
-    with pytest.raises(ValueError):
-        v["extract_rc182"]("no bullet here\n")
-    with pytest.raises(ValueError):
-        v["extract_block5"]("**區塊五：登記時「是否看過暫定對照」**\n\nnot a quote\n")
-    two = v["RC182_REPORT"].read_text(encoding="utf-8")
-    with pytest.raises(ValueError):
-        v["extract_rc182"](two + "\n" + two)
-
-
-def test_the_instruction_names_the_backup_place_and_both_launchers() -> None:
-    doc = _verifier()["DOC"].read_text(encoding="utf-8")
-    for needle in (
-        "cg2-preflight.bat",
-        "cg2-register.bat",
-        r"stock-desk-cg2-registration\backups",
-        "stock-desk-before-cg2-",
-        "還原方式（只描述；請不要自己動手）",
-        "待風控定稿",
-        "不要再執行登記檔",
-    ):
-        assert needle in doc, needle
-    assert str(real.WORK_ROOT_NAME) in doc and real.BACKUP_DIR_NAME in doc

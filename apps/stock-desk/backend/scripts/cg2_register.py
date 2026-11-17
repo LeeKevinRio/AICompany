@@ -84,6 +84,9 @@ from app.forecast import canonical, definitions
 VERSION_LINE: Final = "cg2_oneclick version=1"
 BACKEND_REL: Final = "apps/stock-desk/backend"
 APP_REL: Final = f"{BACKEND_REL}/app"
+#: This script and its two launchers: part of what R-1 requires to be clean (addendum 3 point 1).
+SCRIPT_REL: Final = f"{BACKEND_REL}/scripts/cg2_register.py"
+BAT_RELS: Final = ("apps/stock-desk/cg2-preflight.bat", "apps/stock-desk/cg2-register.bat")
 PUBLISHED_REF: Final = "origin/product/stock-desk"
 DB_NAME: Final = "stock-desk.db"
 ENV_VAR: Final = "STOCK_DESK_DB_PATH"
@@ -176,13 +179,15 @@ REAL_PINS: Final = Pins(
             "e5310b8e6ce14525e81616eedd4368d45a682cb8a4647129ea5617a41cedf1bb",
         ),
     ),
-    # PENDING coordinator: the final list of review records stored in the ledger row.
+    # Final list (coordinator, addendum 3 point 4): records that approve or check the content.
+    # The last two are written after the final review; until they are in HEAD the run time
+    # check (check_review_refs) stops, which is the intended state.
     review_refs=(
         "work/reviews/2026-11-15-凍結包第2輪單項確認-風控.md",
         "work/reviews/2026-11-15-事先宣告v0.32套用單項確認-風控.md",
         "work/reviews/2026-11-15-C8決策紀錄檔確認-風控.md",
-        "work/reviews/2026-11-15-真實資料一鍵檔Q1Q2確認-風控.md",
-        "work/reviews/2026-11-16-補充七附記二三點判定RC179至RC184-風控.md",
+        "work/reviews/2026-11-17-CG2登記PR-M9核對M2M3M6-風控.md",
+        "work/reviews/2026-11-17-CG2登記PR-M9最終審查-qa.md",
     ),
 )
 
@@ -217,12 +222,19 @@ StopKey = Literal[
     "written_5",
     "written_unknown",
     "output_unverified",
+    "preflight_mismatch",
+    "review_refs_missing",
+    "backup_mismatch",
+    "claims_not_started",
 ]
 
 #: (exit code, sentence). Exit 3: nothing was written. Exit 5: written, or not known to be not.
 STOPS: Final[Mapping[StopKey, tuple[int, str]]] = MappingProxyType(
     {
-        "usage": (3, "STOP: usage is cg2_register.py preflight or cg2_register.py register."),
+        "usage": (
+            3,
+            "STOP: usage is cg2_register.py preflight or cg2_register.py register." + _TELL,
+        ),
         "work_in_git": (
             3,
             "STOP: the work folder would be inside a git work tree." + _TELL,
@@ -291,7 +303,11 @@ STOPS: Final[Mapping[StopKey, tuple[int, str]]] = MappingProxyType(
             "STOP: the backup holds forecast_ or plan_ objects. Leave the backup folder as it is."
             + _TELL,
         ),
-        "bad_answer": (3, "STOP: the answer must be exactly 0 or 1. Nothing was registered."),
+        "bad_answer": (
+            3,
+            "STOP: the answer must be exactly 0 or 1. Nothing was registered. Do not"
+            " change any setting or file yourself; tell the coordinator.",
+        ),
         "claims_unreachable": (
             3,
             "STOP: the registration program could not be reached from this folder." + _TELL,
@@ -322,13 +338,47 @@ STOPS: Final[Mapping[StopKey, tuple[int, str]]] = MappingProxyType(
             "STOP: the registration finished but its output did not match what was expected."
             " Do not run this again. Do not change any file. Tell the coordinator now.",
         ),
+        "preflight_mismatch": (
+            3,
+            "STOP: no preflight result that passed and matches this code version was"
+            " found. Nothing was registered. Do not change any setting or file"
+            " yourself; tell the coordinator.",
+        ),
+        "review_refs_missing": (
+            3,
+            "STOP: a review record the registration refers to is not in this code"
+            " version. Nothing was registered. Do not change any setting or file"
+            " yourself; tell the coordinator.",
+        ),
+        "backup_mismatch": (
+            3,
+            "STOP: the two backups are not identical. Leave the backup folder as it"
+            " is. Nothing was registered. Do not change any setting or file yourself;"
+            " tell the coordinator.",
+        ),
+        "claims_not_started": (
+            3,
+            "STOP: the registration program could not be started. Nothing was"
+            " registered. Do not change any setting or file yourself; tell the"
+            " coordinator.",
+        ),
     }
+)
+#: The stops of addendum 3 (RC-200, RC-201): their sentences are the risk-final ones.
+NEW_STOP_KEYS: Final = (
+    "preflight_mismatch",
+    "review_refs_missing",
+    "backup_mismatch",
+    "claims_not_started",
 )
 PROMPT_CLOSE: Final = (
     "Close the stock-desk backend, scheduler and frontend windows, then press Enter. "
 )
 PROMPT_SEEN: Final = (
-    "Type 0 if you have NOT seen any provisional comparison, or 1 if you have, then press Enter: "
+    "Before this registration, have you seen any provisional comparison"
+    " (whether any market outlook call turned out right or wrong, or how it"
+    " compared with the baseline), from any source? Type 1 if you have, or 0"
+    " if you have not, then press Enter: "
 )
 INTERRUPTED_SAFE: Final = "ERROR: interrupted; nothing was registered. No paste-back file was made."
 INTERRUPTED_LATE: Final = (
@@ -350,12 +400,14 @@ HOOK_SENTENCE: Final = "ERROR: unexpected failure. Do not run this again; tell t
 class RunStop(Exception):
     """A stop: a closed ``key`` and its fixed sentence; the exit code comes from the table."""
 
-    def __init__(self, key: StopKey) -> None:
+    def __init__(self, key: StopKey, *, reason: str | None = None) -> None:
         if key not in STOPS:
             raise ValueError("unknown stop key")
         super().__init__(STOPS[key][1])
         self.key: StopKey = key
         self.exit_code: int = STOPS[key][0]
+        #: Only for the two refusals of the registration program: a code of the closed set.
+        self.reason: str | None = reason
 
 
 def say(text: str) -> None:
@@ -405,7 +457,7 @@ WHITELIST: Final[tuple[tuple[str, re.Pattern[str]], ...]] = tuple(
         ("registered_at", rf"registered_at_h(3|5)={_STAMP}"),
         ("provisional_results_seen", r"provisional_results_seen=[01]"),
         ("post_commit_check", r"post_commit_check=ok"),
-        ("register_result", r"register_result=(DONE|WRITTEN_UNCHECKED)"),
+        ("register_result", r"register_result=(DONE|UNCONFIRMED)"),
         ("done_at_utc", r"done_at_utc=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"),
     )
 )
@@ -413,6 +465,55 @@ WHITELIST: Final[tuple[tuple[str, re.Pattern[str]], ...]] = tuple(
 
 def on_whitelist(line: str) -> bool:
     return any(pattern.fullmatch(line) for _name, pattern in WHITELIST)
+
+
+#: The registration program's refusal sentences (copies of ``claims.BOOTSTRAP_PATH_REFUSALS`` for
+#: exit 4 and ``claims.BOOTSTRAP_REFUSALS`` for exit 3; a test keeps them equal). The script does
+#: not import ``claims``. A refusal's stderr is never shown; it only selects a key of these tables.
+REFUSALS_EXIT_4: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "db_missing": "refused: the production database is not at its default location",
+        "db_not_default": "refused: the production database resolves to another location",
+        "db_not_regular": "refused: the production database is not a regular file",
+        "env_db_path": "refused: STOCK_DESK_DB_PATH is set in the environment",
+        "env_file_db_path": "refused: STOCK_DESK_DB_PATH is set in the .env file of the app",
+        "not_empty": "refused: the production database already holds forecast_ or plan_ objects",
+        "horizons": "refused: the two claims must be the h3 then the h5 rule set",
+        "replaces": "refused: a bootstrap claim replaces no claim",
+    }
+)
+REFUSALS_EXIT_3: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "provisional": "refused: --provisional-results-seen must be typed as 0 or 1",
+        "frozen_commit": "refused: --frozen-commit must be 40 lower-case hex digits",
+        "prereg_path": "refused: --prereg-doc-path is not a repo-relative path",
+        "prereg_sha256": "refused: --prereg-doc-sha256 must be 64 lower-case hex digits",
+        "prereg_blob": "refused: the pre-registration blob cannot be read at --frozen-commit",
+        "prereg_mismatch": "refused: the pre-registration blob does not match --prereg-doc-sha256",
+        "review_refs": "refused: --review-refs must be repo-relative paths separated by spaces",
+        "unpublished": "refused: a rule set or the definition is not published or is rejected",
+        "phrases": "refused: a banned phrase is in a rule set or the definition",
+        "store": "refused: the store refused the registration; nothing was written",
+    }
+)
+REFUSAL_CODES: Final = (*REFUSALS_EXIT_4, *REFUSALS_EXIT_3, "unknown")
+#: Screen only (never in a paste-back file): the reason line after a refusal's STOP sentence.
+REFUSAL_PATTERN: Final = re.compile(r"refusal_reason=(" + "|".join(REFUSAL_CODES) + ")")
+
+
+def refusal_reason(exit_code: int, stderr: str) -> str:
+    """The code of the table line ``stderr`` equals (trailing newline removed), else ``unknown``.
+
+    Exact comparison against the table of that exit code; the text itself is never shown.
+    """
+    table = REFUSALS_EXIT_4 if exit_code == 4 else REFUSALS_EXIT_3
+    text = stderr.rstrip("\r\n")
+    return next((key for key, sentence in table.items() if sentence == text), "unknown")
+
+
+def on_screen(line: str) -> bool:
+    """A line the screen may show: a whitelist line or the refusal reason line."""
+    return on_whitelist(line) or REFUSAL_PATTERN.fullmatch(line) is not None
 
 
 #: The 16 lines of a successful ``bootstrap --production``, in order (dev-lead's interface note).
@@ -439,17 +540,23 @@ CLI_OUTPUT_SHAPES: Final[tuple[re.Pattern[str], ...]] = tuple(
 )
 
 
-def verified_cli_lines(stdout: str, *, head: str, typed: str, pins: Pins) -> list[str] | None:
+def verified_cli_lines(
+    stdout: str, *, head: str, typed: str, pins: Pins, scans: Sequence[str]
+) -> list[str] | None:
     """The 16 child output lines when each has its shape and its value is the expected one.
 
     The values checked against what this run knows: the frozen commit (R-1's ``HEAD``), the
     pre-registration hash, the definition and rule hashes (M-8 constants), the row count and the
-    typed answer. Anything else returns ``None`` (the caller stops: the database was written).
+    typed answer, and the two ``banned_phrase_scan`` lines, which must equal the ones this run's
+    own preflight computed (``scans``). Anything else returns ``None`` (the caller stops: the
+    database was written).
     """
     lines = stdout.splitlines()
     if len(lines) != len(CLI_OUTPUT_SHAPES):
         return None
     if not all(shape.fullmatch(line) for shape, line in zip(CLI_OUTPUT_SHAPES, lines, strict=True)):
+        return None
+    if list(lines[1:3]) != list(scans):
         return None
     h3, h5 = pins.rules
     expected = {
@@ -480,7 +587,18 @@ def run_git(cwd: Path, args: Sequence[str]) -> tuple[int, bytes]:
     clean_env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
     try:
         done = subprocess.run(
-            ["git", "--no-optional-locks", "--no-replace-objects", "-C", str(cwd), *args],
+            [
+                "git",
+                "--no-optional-locks",
+                "--no-replace-objects",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.untrackedCache=false",
+                "-C",
+                str(cwd),
+                *args,
+            ],
             capture_output=True,
             timeout=120,
             check=False,
@@ -564,7 +682,21 @@ def check_r1(backend_dir: Path, pins: Pins, *, git: GitRunner) -> CheckoutFacts:
     code, _ = git(top, ["merge-base", "--is-ancestor", "HEAD", PUBLISHED_REF])
     if code != 0:
         raise RunStop("head_unpublished")
-    watched = [APP_REL, pins.frozen("prereg").path, pins.frozen("c8").path]
+    watched = [
+        APP_REL,
+        pins.frozen("prereg").path,
+        pins.frozen("c8").path,
+        SCRIPT_REL,
+        *BAT_RELS,
+    ]
+    # A path marked assume-unchanged (``h``) or skip-worktree (``S``) hides its changes from
+    # ``status``: every listed entry must carry the plain ``H`` (cached) tag.
+    code, tags = git(top, ["ls-files", "-v", "-z", "--", *watched])
+    entries = [entry for entry in tags.split(b"\0") if entry]
+    if code != 0:
+        raise RunStop("git_unusable")
+    if not entries or any(not entry.startswith(b"H ") for entry in entries):
+        raise RunStop("git_dirty")
     code, dirty = git(top, ["status", "--porcelain", "-z", "--untracked-files=all", "--", *watched])
     if code != 0:
         raise RunStop("git_unusable")
@@ -574,6 +706,17 @@ def check_r1(backend_dir: Path, pins: Pins, *, git: GitRunner) -> CheckoutFacts:
     if code != 0 or tree.decode("ascii", "ignore").strip() != pins.app_tree_id:
         raise RunStop("app_changed")
     return CheckoutFacts(top=top, head=head, autocrlf=core_autocrlf(top, git=git))
+
+
+def check_review_refs(top: Path, pins: Pins, *, git: GitRunner) -> None:
+    """Every ``--review-refs`` path must exist in ``HEAD`` (``git cat-file -e``), else a stop.
+
+    The paths go into the ledger for good; an absent record would be a dead reference.
+    """
+    for ref in pins.review_refs:
+        code, _out = git(top, ["cat-file", "-e", f"HEAD:{ref}"])
+        if code != 0:
+            raise RunStop("review_refs_missing")
 
 
 def check_r2(top: Path, pins: Pins, *, git: GitRunner) -> None:
@@ -730,7 +873,17 @@ class Backup:
     sha256: str
 
 
-def make_backup(db: Path, target: Path) -> Backup:
+def backup_file_name(stamp: str) -> str:
+    """The first backup's file name (the instruction names it; the verifier checks it)."""
+    return f"stock-desk-before-cg2-{stamp}.db"
+
+
+def verify_file_name(stamp: str) -> str:
+    """The second backup's file name (RC-209)."""
+    return f"stock-desk-before-cg2-{stamp}-verify.db"
+
+
+def _backup_once(db: Path, target: Path) -> Backup:
     """R-5: a consistent copy by the SQLite backup API; the source is opened read-only.
 
     ``target`` is reserved first (``"xb"``: an existing file stops). Then the backup is read back
@@ -764,6 +917,21 @@ def make_backup(db: Path, target: Path) -> Backup:
     return Backup(path=target, sha256=before)
 
 
+def make_backup(db: Path, folder: Path, stamp: str) -> Backup:
+    """Two backups taken one after the other by the same rule; their sha256 must be equal.
+
+    A source that no lock protects (``immutable=1`` takes none) could be written by another
+    process while it is copied; two equal copies in a row show that it was not (addendum 3
+    point 3). A difference is a stop (``backup_mismatch``). Both files stay; the recorded
+    sha256 is the one both have.
+    """
+    first = _backup_once(db, folder / backup_file_name(stamp))
+    second = _backup_once(db, folder / verify_file_name(stamp))
+    if first.sha256 != second.sha256:
+        raise RunStop("backup_mismatch")
+    return first
+
+
 # === the registration child ======================================================================
 
 
@@ -782,8 +950,16 @@ class ClaimsRunner(Protocol):
     def probe(self) -> Path | None:
         """The backend folder the program derives its target from, or ``None``."""
 
-    def run(self, args: Sequence[str]) -> CliResult:
-        """``bootstrap`` with ``args`` (the arguments after ``-m app.forecast.claims``)."""
+    def start(self, args: Sequence[str]) -> Any:
+        """Start ``bootstrap`` with ``args`` (after ``-m app.forecast.claims``); ``OSError`` if it
+        cannot be started. Nothing has been registered until this returns."""
+
+    def finish(self, handle: Any) -> CliResult:
+        """Wait for the started program; :class:`ClaimsTimeout` when it did not end in time."""
+
+
+class ClaimsTimeout(Exception):
+    """The registration program did not end in time and was killed: the result is unknown."""
 
 
 PROBE_CODE: Final = "from app.forecast import claims; print(claims.BACKEND_DIR)"
@@ -818,18 +994,27 @@ class SubprocessClaims:
         text = done.stdout.decode("utf-8", "replace").strip()
         return Path(text) if done.returncode == 0 and text else None
 
-    def run(self, args: Sequence[str]) -> CliResult:
-        done = subprocess.run(
+    def start(self, args: Sequence[str]) -> Any:
+        return subprocess.Popen(
             self._argv("-m", "app.forecast.claims", *args),
             cwd=self.backend_dir,
-            capture_output=True,
-            timeout=RUN_TIMEOUT_SECONDS,
-            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
+
+    def finish(self, handle: Any) -> CliResult:
+        try:
+            out, err = handle.communicate(timeout=RUN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            handle.kill()
+            handle.communicate()
+            raise ClaimsTimeout from None
+        except BaseException:
+            handle.kill()
+            raise
         return CliResult(
-            done.returncode,
-            done.stdout.decode("utf-8", "replace"),
-            done.stderr.decode("utf-8", "replace"),
+            handle.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
         )
 
 
@@ -909,6 +1094,7 @@ def prechecks(backend_dir: Path, seams: Seams) -> tuple[CheckoutFacts, Path, lis
     db = check_r3(backend_dir, env=seams.env, port_check=seams.port_check)
     facts = check_r1(backend_dir, pins, git=seams.git)
     check_r2(facts.top, pins, git=seams.git)
+    check_review_refs(facts.top, pins, git=seams.git)
     if not seams.app_check(backend_dir):
         raise RunStop("app_changed")
     try:
@@ -945,6 +1131,24 @@ def prechecks(backend_dir: Path, seams: Seams) -> tuple[CheckoutFacts, Path, lis
     return facts, db, lines, scans
 
 
+def check_preflight_binding(paste_dir: Path, *, head: str, script_sha256: str) -> None:
+    """The register run needs a passed preflight of this very code version (addendum 3 point 2).
+
+    The newest ``preflight-*.txt`` (the time stamp in the name orders them) is read as text. A stop
+    when it cannot be read, when any line is off the whitelist, when ``preflight_result=PASS`` is
+    missing, or when its ``git_head`` or ``script_sha256_lf`` is not this run's.
+    """
+    try:
+        newest = max(paste_dir.glob("preflight-*.txt"), key=lambda path: path.name)
+        text = newest.read_bytes().decode("utf-8-sig")
+    except (ValueError, OSError, UnicodeDecodeError):
+        raise RunStop("preflight_mismatch") from None
+    lines = text.splitlines()
+    wanted = {"preflight_result=PASS", f"git_head={head}", f"script_sha256_lf={script_sha256}"}
+    if not lines or not all(on_whitelist(line) for line in lines) or not wanted <= set(lines):
+        raise RunStop("preflight_mismatch")
+
+
 def write_paste_back(
     state: State, lines: list[str], *, name: str, opener: Callable[[Path], object] | None
 ) -> None:
@@ -978,6 +1182,14 @@ def flow(state: State, mode: Mode, *, backend_dir: Path, home: Path, seams: Seam
     header = [VERSION_LINE, f"mode={mode}"]
     paste_dir = root / PASTE_DIR_NAME
     state.paste_dir = paste_dir
+    if mode == "register":
+        script_line = next(line for line in lines if line.startswith("script_sha256_lf="))
+        check_preflight_binding(
+            paste_dir, head=facts.head, script_sha256=script_line.partition("=")[2]
+        )
+    probed = seams.claims.probe()  # both modes: the preflight covers it too
+    if probed is None or probed.resolve() != backend_dir.resolve():
+        raise RunStop("claims_unreachable")
     if mode == "preflight":
         done = [*header, *lines, *scans, "preflight_result=PASS"]
         done.append(f"done_at_utc={_utc_stamp(seams.utc_now())}")
@@ -986,13 +1198,10 @@ def flow(state: State, mode: Mode, *, backend_dir: Path, home: Path, seams: Seam
         return 0
 
     # --- register ---
-    probed = seams.claims.probe()
-    if probed is None or probed.resolve() != backend_dir.resolve():
-        raise RunStop("claims_unreachable")
     backups = root / BACKUP_DIR_NAME
     backups.mkdir(parents=True, exist_ok=True)
     paste_dir.mkdir(parents=True, exist_ok=True)
-    backup = make_backup(db, backups / f"stock-desk-before-cg2-{stamp}.db")  # R-5, RC-181
+    backup = make_backup(db, backups, stamp)  # R-5 (two equal copies), RC-181
     state.backup_sha256 = backup.sha256
     backup_lines = [
         "backup_integrity=ok",
@@ -1006,19 +1215,31 @@ def flow(state: State, mode: Mode, *, backend_dir: Path, home: Path, seams: Seam
         typed = ""
     if typed not in ("0", "1"):
         raise RunStop("bad_answer")
+    if seams.port_check():  # the typing took time: nothing may have started in the meantime
+        raise RunStop("port_listening")
+    args = bootstrap_args(head=facts.head, typed=typed, pins=pins)
+    try:
+        handle = seams.claims.start(args)
+    except OSError:
+        raise RunStop("claims_not_started") from None
     state.late = True  # from here the database may be written
-    result = seams.claims.run(bootstrap_args(head=facts.head, typed=typed, pins=pins))
+    try:
+        result = seams.claims.finish(handle)
+    except ClaimsTimeout:
+        raise RunStop("written_unknown") from None
     if result.code == 3:
         state.late = False
-        raise RunStop("refused_3")
+        raise RunStop("refused_3", reason=refusal_reason(3, result.stderr))
     if result.code == 4:
         state.late = False
-        raise RunStop("refused_4")
+        raise RunStop("refused_4", reason=refusal_reason(4, result.stderr))
     if result.code == 5:
         raise RunStop("written_5")
     if result.code != 0:
         raise RunStop("written_unknown")
-    cli_lines = verified_cli_lines(result.stdout, head=facts.head, typed=typed, pins=pins)
+    cli_lines = verified_cli_lines(
+        result.stdout, head=facts.head, typed=typed, pins=pins, scans=scans
+    )
     if cli_lines is None:
         raise RunStop("output_unverified")
     done = [*state.lines, *cli_lines, "register_result=DONE"]
@@ -1047,8 +1268,10 @@ def _abnormal_tail(state: State) -> None:
 def main(argv: Sequence[str] | None = None, **injected: Any) -> int:
     """Run one mode; the screen shows whitelisted lines or one fixed sentence (RC-162).
 
-    Exit codes: 0 done; 1 unexpected failure; 2 interrupted; 3 stopped, nothing written; 5 the
-    registration was written (or may have been) and must not be run again. ``injected`` are the
+    Exit codes: 0 done; 1 unexpected failure and 2 interrupted, both before the registration
+    program started (nothing written); 3 stopped, nothing written; 5 the registration started
+    and its result cannot be confirmed (interrupted, failed or timed out after the start too):
+    it must not be run again. ``injected`` are the
     test seams (``env``, ``port_check``, ``git``, ``ask``, ``opener``, ``now``, ``utc_now``,
     ``claims``, ``pins``, ``app_check``); the batch files pass none of them.
     """
@@ -1057,7 +1280,8 @@ def main(argv: Sequence[str] | None = None, **injected: Any) -> int:
     try:
         parser = _Parser(prog="cg2_register.py", add_help=False)
         parser.add_argument("mode", choices=("preflight", "register"))
-        # Test-only overrides; the batch files never pass them.
+        # TEST ONLY: the batch files never pass these two (the tests that read the launchers
+        # assert the exact command, which has no argument beyond the mode).
         parser.add_argument("--backend-dir", default=None)
         parser.add_argument("--home", default=None)
         try:
@@ -1081,13 +1305,15 @@ def main(argv: Sequence[str] | None = None, **injected: Any) -> int:
         code = flow(state, args.mode, backend_dir=backend, home=home, seams=seams)
     except RunStop as stop:
         say(str(stop))
+        if stop.reason is not None:
+            say(f"refusal_reason={stop.reason}")
         code = stop.exit_code
         if stop.exit_code == 5 and state.late:
             _write_unchecked_paste_back(state, injected)
         _abnormal_tail(state)
     except KeyboardInterrupt:
         say(INTERRUPTED_LATE if state.late else INTERRUPTED_SAFE)
-        code = 2
+        code = 5 if state.late else 2
         if state.late:
             _write_unchecked_paste_back(state, injected)
         _abnormal_tail(state)
@@ -1107,7 +1333,7 @@ def _write_unchecked_paste_back(state: State, injected: Mapping[str, Any]) -> No
     """
     try:
         utc_now = injected.get("utc_now", lambda: datetime.now(UTC))
-        lines = [*state.lines, "register_result=WRITTEN_UNCHECKED"]
+        lines = [*state.lines, "register_result=UNCONFIRMED"]
         lines.append(f"done_at_utc={_utc_stamp(utc_now())}")
         if state.paste_dir is None or not all(on_whitelist(line) for line in lines):
             return

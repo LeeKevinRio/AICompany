@@ -63,7 +63,7 @@ def screen_is_closed(out: str, err: str) -> list[str]:
     assert err == ""
     lines = out.splitlines()
     for line in lines:
-        assert real.on_whitelist(line) or line in FIXED_SENTENCES, line
+        assert real.on_screen(line) or line in FIXED_SENTENCES, line
         assert line.isascii()
     return lines
 
@@ -119,7 +119,7 @@ def test_preflight_passes_and_writes_the_whitelisted_paste_back(
     assert world.opened == files
     for forbidden in poisoned_paths(world):
         assert all(forbidden not in line for line in lines), forbidden
-    assert world.runner.calls == [] and world.runner.probes == 0
+    assert world.runner.calls == [] and world.runner.probes == 1  # G: the preflight probes
     assert world.backups() == []
     assert world.logical_state() == before
 
@@ -139,14 +139,15 @@ def test_e2e_register_creates_the_ledger_two_rows_and_a_backup(
     assert world.store().ledger_schema_status().complete
     assert world.store().runs() == []
     backups = world.backups()
-    assert len(backups) == 1
-    assert not [n for k, n in world.objects(backups[0]) if n.lower().startswith("forecast_")]
-    with closing(sqlite3.connect(f"{backups[0].as_uri()}?mode=ro", uri=True)) as conn:
+    assert len(backups) == 2  # the backup and its twin
+    first = world.main_backup()
+    assert not [n for k, n in world.objects(first) if n.lower().startswith("forecast_")]
+    with closing(sqlite3.connect(f"{first.as_uri()}?mode=ro", uri=True)) as conn:
         assert conn.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
         assert conn.execute("SELECT k, v FROM app_settings ORDER BY k").fetchall() == sorted(
             APP_ROWS
         )
-    digest = hashlib.sha256(backups[0].read_bytes()).hexdigest()
+    digest = hashlib.sha256(first.read_bytes()).hexdigest()
     assert f"backup_sha256={digest}" in lines
     assert f"provisional_results_seen={typed}" in lines
     assert lines[-2:] == ["register_result=DONE", f"done_at_utc={real._utc_stamp(UTC_NOW)}"]
@@ -202,8 +203,35 @@ def test_the_frozen_commit_is_the_head_of_the_same_run(world: World, capsys: Any
     assert stored == [(world.head,)] * 2
 
 
+class FakePopen:
+    """A stand-in ``subprocess.Popen``: records how it was made, answers ``communicate``."""
+
+    made: list[tuple[list[str], dict[str, Any]]] = []
+    timeout = False
+    killed = 0
+
+    def __init__(self, argv: list[str], **kwargs: Any) -> None:
+        FakePopen.made.append((argv, kwargs))
+        self.returncode = 0
+
+    def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+        if FakePopen.timeout and timeout is not None:
+            raise subprocess.TimeoutExpired("cmd", timeout)
+        return b"out\n", b"err\n"
+
+    def kill(self) -> None:
+        FakePopen.killed += 1
+
+
+@pytest.fixture
+def fake_popen(monkeypatch: pytest.MonkeyPatch) -> type[FakePopen]:
+    FakePopen.made, FakePopen.timeout, FakePopen.killed = [], False, 0
+    monkeypatch.setattr(real.subprocess, "Popen", FakePopen)
+    return FakePopen
+
+
 def test_the_real_subprocess_runner_builds_the_documented_command(
-    world: World, monkeypatch: pytest.MonkeyPatch
+    world: World, monkeypatch: pytest.MonkeyPatch, fake_popen: type[FakePopen]
 ) -> None:
     seen: list[tuple[list[str], dict[str, Any]]] = []
 
@@ -213,9 +241,10 @@ def test_the_real_subprocess_runner_builds_the_documented_command(
 
     monkeypatch.setattr(real.subprocess, "run", fake_run)
     runner = real.SubprocessClaims(world.backend)
-    runner.run(["bootstrap", "--production"])
+    result = runner.finish(runner.start(["bootstrap", "--production"]))
     runner.probe()
-    run_argv, run_kwargs = seen[0]
+    assert result.code == 0 and result.stdout == "out\n" and result.stderr == "err\n"
+    run_argv, run_kwargs = fake_popen.made[0]
     assert run_argv == [
         sys.executable,
         "-I",
@@ -226,10 +255,35 @@ def test_the_real_subprocess_runner_builds_the_documented_command(
         "bootstrap",
         "--production",
     ]
-    assert run_kwargs["cwd"] == world.backend and run_kwargs["capture_output"] is True
-    probe_argv, probe_kwargs = seen[1]
+    assert run_kwargs["cwd"] == world.backend
+    assert run_kwargs["stdout"] == subprocess.PIPE and run_kwargs["stderr"] == subprocess.PIPE
+    probe_argv, probe_kwargs = seen[0]
     assert probe_argv[:4] == [sys.executable, "-I", "-X", "utf8"] and probe_argv[4] == "-c"
     assert probe_kwargs["cwd"] == world.backend
+
+
+def test_d_a_child_that_runs_too_long_is_killed_and_the_result_is_unknown(
+    world: World, fake_popen: type[FakePopen]
+) -> None:
+    fake_popen.timeout = True
+    runner = real.SubprocessClaims(world.backend)
+    handle = runner.start(["bootstrap"])
+    with pytest.raises(real.ClaimsTimeout):
+        runner.finish(handle)
+    assert fake_popen.killed == 1
+
+
+def test_d_an_interrupt_while_waiting_kills_the_child(
+    world: World, fake_popen: type[FakePopen], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def interrupted(self: FakePopen, timeout: float | None = None) -> Any:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(FakePopen, "communicate", interrupted)
+    runner = real.SubprocessClaims(world.backend)
+    with pytest.raises(KeyboardInterrupt):
+        runner.finish(runner.start(["bootstrap"]))
+    assert fake_popen.killed == 1
 
 
 def test_the_real_child_import_resolves_to_this_backend() -> None:
@@ -237,7 +291,7 @@ def test_the_real_child_import_resolves_to_this_backend() -> None:
     backend = Path(__file__).resolve().parents[1]
     runner = real.SubprocessClaims(backend)
     assert runner.probe() == backend
-    done = runner.run(["bootstrap", "--help"])
+    done = runner.finish(runner.start(["bootstrap", "--help"]))
     assert done.code == 0 and "--provisional-results-seen" in done.stdout
 
 
@@ -310,7 +364,6 @@ def test_r1_ignored_bytecode_in_app_does_not_make_the_tree_dirty(world: World, c
 
 
 def test_r1_a_change_outside_the_watched_paths_does_not_stop(world: World, capsys: Any) -> None:
-    (world.backend / "scripts").mkdir()
     (world.backend / "scripts" / "note.txt").write_text("not watched\n")
     (world.repo / "work" / "scratch.txt").write_text("not watched\n")
     assert run(world, capsys, "preflight")[0] == 0
@@ -690,7 +743,7 @@ def test_r5_the_backup_is_outside_the_work_tree_and_named_apart_from_the_accepta
     world: World, capsys: Any
 ) -> None:
     assert run(world, capsys, "register")[0] == 0
-    (backup,) = world.backups()
+    backup = world.main_backup()
     assert world.repo not in backup.parents
     assert real.WORK_ROOT_NAME != "stock-desk-pipeline-acceptance"
     assert backup.parent == world.work / "backups" and backup.name.endswith(".db")
@@ -706,7 +759,7 @@ def test_r5_a_wal_main_database_is_backed_up_with_its_wal_rows(world: World, cap
     try:
         code, _lines = run(world, capsys, "register")
         assert code == 0
-        (backup,) = world.backups()
+        backup = world.main_backup()
         with closing(sqlite3.connect(f"{backup.as_uri()}?mode=ro&immutable=1", uri=True)) as conn:
             assert ("in_wal", "yes") in conn.execute("SELECT k, v FROM app_settings").fetchall()
     finally:
@@ -803,9 +856,9 @@ def test_r7_each_exit_code_has_its_fixed_sentence(
     code, lines = run(world, capsys, "register")
     assert code == exit_code
     assert lines[0] == STOP_SENTENCES[key]
-    assert len(world.backups()) == 1
+    assert len(world.backups()) == 2
     assert (
-        lines[-1] == f"backup_sha256={hashlib.sha256(world.backups()[0].read_bytes()).hexdigest()}"
+        lines[-1] == f"backup_sha256={hashlib.sha256(world.main_backup().read_bytes()).hexdigest()}"
     )
     assert not any("secret" in x for x in lines)
 
@@ -826,9 +879,9 @@ def test_r7_exit_5_leaves_an_unchecked_paste_back_with_the_backup_hash(
     assert code == 5
     (paste,) = world.paste_backs()
     text = paste.read_bytes().decode("utf-8-sig").splitlines()
-    assert text[-2] == "register_result=WRITTEN_UNCHECKED"
+    assert text[-2] == "register_result=UNCONFIRMED"
     assert all(real.on_whitelist(x) for x in text)
-    digest = hashlib.sha256(world.backups()[0].read_bytes()).hexdigest()
+    digest = hashlib.sha256(world.main_backup().read_bytes()).hexdigest()
     assert f"backup_sha256={digest}" in text
     assert not any(x.startswith(("bootstrap=", "registered_")) for x in text)
 
@@ -1071,7 +1124,7 @@ def test_m8_a_failure_after_the_first_row_rolls_the_schema_back_too(
 
     world.runner.clock = Dies()
     code, lines = run(world, capsys, "register")
-    assert code == 2 and lines[0] == real.INTERRUPTED_LATE
+    assert code == 5 and lines[0] == real.INTERRUPTED_LATE
     assert not [n for _k, n in world.objects() if n.lower().startswith("forecast_")]
 
 
@@ -1104,7 +1157,7 @@ def test_rc181_2_the_backup_is_complete_before_bootstrap_is_called(
     seen: dict[str, Any] = {}
 
     def at_call() -> None:
-        (backup,) = world.backups()  # exactly one, and it is complete and sound right now
+        backup = world.main_backup()  # exactly one, and it is complete and sound right now
         with closing(sqlite3.connect(f"{backup.as_uri()}?mode=ro&immutable=1", uri=True)) as conn:
             seen["integrity"] = conn.execute("PRAGMA integrity_check").fetchall()
             seen["rows"] = conn.execute("SELECT k, v FROM app_settings ORDER BY k").fetchall()
@@ -1216,7 +1269,7 @@ def test_rc162_ctrl_c_prints_one_fixed_sentence_at_every_stage(
     late = where in ("run", "after_run")
     _inject(world, monkeypatch, where, KeyboardInterrupt())
     code, lines = run(world, capsys, "register")
-    assert code == 2
+    assert code == (5 if late else 2)  # B-3
     assert lines[0] == (real.INTERRUPTED_LATE if late else real.INTERRUPTED_SAFE)
     if late:  # a possibly written registration leaves its record behind
         assert [p.name for p in world.paste_backs()] == [f"register-{STAMP}.txt"]
@@ -1265,8 +1318,8 @@ def test_rc162_an_interrupt_after_the_backup_still_shows_the_backup_hash(
 ) -> None:
     world.runner.raises = KeyboardInterrupt()
     code, lines = run(world, capsys, "register")
-    digest = hashlib.sha256(world.backups()[0].read_bytes()).hexdigest()
-    assert code == 2 and lines == [real.INTERRUPTED_LATE, f"backup_sha256={digest}"]
+    digest = hashlib.sha256(world.main_backup().read_bytes()).hexdigest()
+    assert code == 5 and lines == [real.INTERRUPTED_LATE, f"backup_sha256={digest}"]
 
 
 def test_rc162_a_failing_opener_is_silent(world: World, capsys: Any) -> None:
@@ -1434,7 +1487,7 @@ def test_e2e_the_register_run_only_opens_the_main_database_read_only(
     world.runner.override = real.CliResult(4, "", "")
     code, _lines = run(world, capsys, "register")
     assert code == 3
-    assert len(monitor.connects) == 2  # R-4 and the backup source
+    assert len(monitor.connects) == 4  # R-4 of the harness preflight, R-4, two backup sources
     assert all("mode=ro" in uri for uri in monitor.connects)
     assert monitor.opens == [] and monitor.hits == []
 
