@@ -286,16 +286,18 @@ def test_p3_popen_that_cannot_start_the_child_is_exit_3_and_not_late(
     assert world.paste_backs() == []  # nothing "may have been written"
 
 
-def test_p3_an_error_that_is_not_oserror_while_starting_is_still_before_the_registration(
+def test_p3_an_error_that_is_not_oserror_while_starting_is_unconfirmed_exit_5(
     world: World, capsys: Any
 ) -> None:
     world.runner.start_error = RuntimeError("secret")
     code, lines = run(world, capsys, "register")
-    assert code == 1 and lines[0] == real.UNEXPECTED_SAFE
-    assert world.paste_backs() == []
+    assert code == 5 and lines[0] == real.UNEXPECTED_LATE  # addendum 3-1 (S-15d)
+    (paste,) = world.paste_backs()
+    assert paste.read_text("utf-8-sig").splitlines()[-2] == "register_result=UNCONFIRMED"
+    assert not any("secret" in x for x in lines)
 
 
-def test_p3_late_starts_only_after_the_child_exists(
+def test_p3_late_is_set_before_the_start_function_is_called_and_reset_only_by_oserror(
     world: World, capsys: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: dict[str, bool] = {}
@@ -309,11 +311,18 @@ def test_p3_late_starts_only_after_the_child_exists(
     monkeypatch.setattr(real, "flow", spy_flow)
 
     def at_start() -> None:
-        seen.setdefault("late_at_start", holder["state"].late)
+        seen.setdefault("late_in_start", holder["state"].late)
 
     world.runner.before_run = at_start
     assert run(world, capsys, "register")[0] == 0
-    assert seen == {"late_at_start": False} and holder["state"].late is True
+    assert seen == {"late_in_start": True} and holder["state"].late is True
+
+
+def test_p3_oserror_puts_the_state_back_to_not_started(world: World, capsys: Any) -> None:
+    world.runner.start_error = OSError("x")
+    code, lines = run(world, capsys, "register")
+    assert code == 3 and lines[0] == STOP_SENTENCES["claims_not_started"]
+    assert world.paste_backs() == [] and world.runner.aborted == []
 
 
 def test_p3_a_child_that_times_out_is_unconfirmed_exit_5(world: World, capsys: Any) -> None:
@@ -529,12 +538,25 @@ def test_p5_the_database_symlink_case_gives_db_not_default(
 # === point 6: interruptions ==============================================================
 
 
-def test_p6_an_interrupt_while_starting_is_exit_2_with_no_paste_back(
+def test_p6_an_interrupt_while_the_start_function_runs_is_exit_5_with_an_unconfirmed_paste_back(
     world: World, capsys: Any
 ) -> None:
     world.runner.start_error = KeyboardInterrupt()
     code, lines = run(world, capsys, "register")
-    assert code == 2 and lines[0] == real.INTERRUPTED_SAFE and world.paste_backs() == []
+    assert code == 5 and lines[0] == real.INTERRUPTED_LATE  # addendum 3-1 (S-15d)
+    (paste,) = world.paste_backs()
+    assert paste.read_text("utf-8-sig").splitlines()[-2] == "register_result=UNCONFIRMED"
+
+
+def test_p6_an_interrupt_after_start_returned_and_before_the_wait_kills_the_child(
+    world: World, capsys: Any
+) -> None:
+    world.runner.interrupt_before_finish = KeyboardInterrupt()
+    code, lines = run(world, capsys, "register")
+    assert code == 5 and lines[0] == real.INTERRUPTED_LATE
+    assert world.runner.aborted == [world.runner.calls[0]]  # the started child is killed
+    (paste,) = world.paste_backs()
+    assert paste.read_text("utf-8-sig").splitlines()[-2] == "register_result=UNCONFIRMED"
 
 
 def test_p6_an_interrupt_after_the_start_is_exit_5_and_leaves_an_unconfirmed_paste_back(
@@ -709,3 +731,85 @@ def test_i_a_wal_beside_the_main_database_leaves_the_logic_alone_and_only_a_shm_
     assert "stock-desk.db-journal" not in names
     with closing(sqlite3.connect(f"{world.db.as_uri()}?mode=ro", uri=True)) as c:
         assert tuple(c.iterdump()) == before_dump  # the logical state is unchanged
+
+
+# === K: only files this script names are preflights ======================================
+
+
+def test_k_the_file_name_pattern_is_the_one_the_script_writes_with() -> None:
+    stamp = real.datetime(2026, 11, 20, 21, 5, 3).strftime(real.STAMP_FORMAT)
+    assert real.PREFLIGHT_NAME_PATTERN.fullmatch(real.preflight_file_name(stamp))
+    for odd in (
+        "preflight-zzz.txt",
+        "preflight-20261120-21050.txt",
+        "preflight-20261120-210503.txt.bak",
+    ):
+        assert not real.PREFLIGHT_NAME_PATTERN.fullmatch(odd)
+
+
+def test_k_a_file_that_does_not_fit_the_pattern_is_never_chosen(world: World, capsys: Any) -> None:
+    good = good_preflight(world, capsys)
+    for odd in (
+        "preflight-zzz.txt",
+        "preflight-99999999-999999.bak",
+        "preflight-zzzzzzzz-zzzzzz.txt",
+    ):
+        (good.parent / odd).write_bytes(b"not a preflight\n")  # sorts after the real one
+    later = real.datetime(2026, 11, 20, 21, 9, 0)
+    assert run(world, capsys, "register", preflight=False, now=lambda: later)[0] == 0
+
+
+def test_k_only_files_off_the_pattern_is_a_stop(world: World, capsys: Any) -> None:
+    folder = world.work / real.PASTE_DIR_NAME
+    folder.mkdir(parents=True)
+    (folder / "preflight-zzz.txt").write_text("preflight_result=PASS\n", "utf-8-sig")
+    (folder / "notes.txt").write_text("x\n", "utf-8-sig")
+    refused_binding(world, capsys)
+
+
+# === L: the wait after the kill is bounded ===============================================
+
+
+def test_l_a_child_that_survives_the_kill_does_not_block_and_is_unconfirmed(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    waits: list[float | None] = []
+
+    class Stubborn:
+        killed = 0
+
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            self.returncode = None
+
+        def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+            waits.append(timeout)
+            raise real.subprocess.TimeoutExpired("cmd", timeout or 0)
+
+        def kill(self) -> None:
+            Stubborn.killed += 1
+
+    monkeypatch.setattr(real.subprocess, "Popen", Stubborn)
+    runner = real.SubprocessClaims(world.backend)
+    with pytest.raises(real.ClaimsTimeout):
+        runner.finish(runner.start(["bootstrap"]))
+    assert Stubborn.killed == 1
+    assert waits == [real.RUN_TIMEOUT_SECONDS, real.KILL_WAIT_SECONDS]  # both waits are bounded
+
+
+def test_l_through_the_flow_it_is_exit_5_with_an_unconfirmed_paste_back(
+    world: World, capsys: Any
+) -> None:
+    world.runner.raises = real.ClaimsTimeout()
+    code, lines = run(world, capsys, "register")
+    assert code == 5 and lines[0] == STOP_SENTENCES["written_unknown"]
+    assert world.paste_backs()[0].read_text("utf-8-sig").splitlines()[-2] == (
+        "register_result=UNCONFIRMED"
+    )
+
+
+def test_l_abort_never_raises(world: World) -> None:
+    class Broken:
+        def kill(self) -> None:
+            raise OSError("gone")
+
+    real.SubprocessClaims(world.backend).abort(Broken())

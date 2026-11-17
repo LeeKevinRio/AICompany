@@ -88,6 +88,16 @@ APP_REL: Final = f"{BACKEND_REL}/app"
 SCRIPT_REL: Final = f"{BACKEND_REL}/scripts/cg2_register.py"
 BAT_RELS: Final = ("apps/stock-desk/cg2-preflight.bat", "apps/stock-desk/cg2-register.bat")
 PUBLISHED_REF: Final = "origin/product/stock-desk"
+#: The time stamp of every file name this script makes, and the pattern that recognises it.
+STAMP_FORMAT: Final = "%Y%m%d-%H%M%S"
+PREFLIGHT_NAME_PATTERN: Final = re.compile(r"preflight-\d{8}-\d{6}\.txt")
+
+
+def preflight_file_name(stamp: str) -> str:
+    """The preflight paste-back's file name (it fullmatches :data:`PREFLIGHT_NAME_PATTERN`)."""
+    return f"preflight-{stamp}.txt"
+
+
 DB_NAME: Final = "stock-desk.db"
 ENV_VAR: Final = "STOCK_DESK_DB_PATH"
 ENV_KEY_PATTERN: Final = re.compile(r"^\s*STOCK_DESK_DB_PATH\s*=")
@@ -957,6 +967,9 @@ class ClaimsRunner(Protocol):
     def finish(self, handle: Any) -> CliResult:
         """Wait for the started program; :class:`ClaimsTimeout` when it did not end in time."""
 
+    def abort(self, handle: Any) -> None:
+        """Kill a started program the flow can no longer wait for (best effort, never raises)."""
+
 
 class ClaimsTimeout(Exception):
     """The registration program did not end in time and was killed: the result is unknown."""
@@ -964,6 +977,8 @@ class ClaimsTimeout(Exception):
 
 PROBE_CODE: Final = "from app.forecast import claims; print(claims.BACKEND_DIR)"
 RUN_TIMEOUT_SECONDS: Final = 600
+#: How long to wait for the output of a child that was just killed.
+KILL_WAIT_SECONDS: Final = 10
 
 
 class SubprocessClaims:
@@ -1008,7 +1023,10 @@ class SubprocessClaims:
             out, err = handle.communicate(timeout=RUN_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             handle.kill()
-            handle.communicate()
+            try:
+                handle.communicate(timeout=KILL_WAIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass  # it did not end after the kill either: stop waiting, the result is unknown
             raise ClaimsTimeout from None
         except BaseException:
             handle.kill()
@@ -1016,6 +1034,12 @@ class SubprocessClaims:
         return CliResult(
             handle.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
         )
+
+    def abort(self, handle: Any) -> None:
+        try:
+            handle.kill()
+        except BaseException:  # noqa: BLE001 - best effort
+            pass
 
 
 def bootstrap_args(*, head: str, typed: str, pins: Pins) -> list[str]:
@@ -1134,12 +1158,17 @@ def prechecks(backend_dir: Path, seams: Seams) -> tuple[CheckoutFacts, Path, lis
 def check_preflight_binding(paste_dir: Path, *, head: str, script_sha256: str) -> None:
     """The register run needs a passed preflight of this very code version (addendum 3 point 2).
 
-    The newest ``preflight-*.txt`` (the time stamp in the name orders them) is read as text. A stop
+    The newest ``preflight-<stamp>.txt`` (the time stamp in the name orders them; a file whose
+    name does not fullmatch :data:`PREFLIGHT_NAME_PATTERN` is not listed) is read as text. A stop
     when it cannot be read, when any line is off the whitelist, when ``preflight_result=PASS`` is
     missing, or when its ``git_head`` or ``script_sha256_lf`` is not this run's.
     """
     try:
-        newest = max(paste_dir.glob("preflight-*.txt"), key=lambda path: path.name)
+        # Only files this script names (the same pattern its own file names fullmatch) count.
+        candidates = [
+            path for path in paste_dir.iterdir() if PREFLIGHT_NAME_PATTERN.fullmatch(path.name)
+        ]
+        newest = max(candidates, key=lambda path: path.name)
         text = newest.read_bytes().decode("utf-8-sig")
     except (ValueError, OSError, UnicodeDecodeError):
         raise RunStop("preflight_mismatch") from None
@@ -1172,7 +1201,7 @@ def write_paste_back(
 def flow(state: State, mode: Mode, *, backend_dir: Path, home: Path, seams: Seams) -> int:
     """The whole run; returns the exit code. ``state`` carries what an abnormal end needs."""
     root = home / WORK_ROOT_NAME
-    stamp = seams.now().strftime("%Y%m%d-%H%M%S")
+    stamp = seams.now().strftime(STAMP_FORMAT)
     state.stamp = stamp
     seams.ask(PROMPT_CLOSE)
     if inside_git_work_tree(root):
@@ -1194,7 +1223,7 @@ def flow(state: State, mode: Mode, *, backend_dir: Path, home: Path, seams: Seam
         done = [*header, *lines, *scans, "preflight_result=PASS"]
         done.append(f"done_at_utc={_utc_stamp(seams.utc_now())}")
         paste_dir.mkdir(parents=True, exist_ok=True)
-        write_paste_back(state, done, name=f"preflight-{stamp}.txt", opener=seams.opener)
+        write_paste_back(state, done, name=preflight_file_name(stamp), opener=seams.opener)
         return 0
 
     # --- register ---
@@ -1218,15 +1247,23 @@ def flow(state: State, mode: Mode, *, backend_dir: Path, home: Path, seams: Seam
     if seams.port_check():  # the typing took time: nothing may have started in the meantime
         raise RunStop("port_listening")
     args = bootstrap_args(head=facts.head, typed=typed, pins=pins)
+    # The registration is "started" from before the start function is called (addendum 3-1):
+    # only an OSError, which shows that no child exists, puts it back to "not started".
+    state.late = True
+    handle: Any = None
     try:
-        handle = seams.claims.start(args)
-    except OSError:
-        raise RunStop("claims_not_started") from None
-    state.late = True  # from here the database may be written
-    try:
+        try:
+            handle = seams.claims.start(args)
+        except OSError:
+            state.late = False
+            raise RunStop("claims_not_started") from None
         result = seams.claims.finish(handle)
     except ClaimsTimeout:
         raise RunStop("written_unknown") from None
+    except BaseException:
+        if handle is not None:
+            seams.claims.abort(handle)  # a child we can no longer wait for is killed
+        raise
     if result.code == 3:
         state.late = False
         raise RunStop("refused_3", reason=refusal_reason(3, result.stderr))

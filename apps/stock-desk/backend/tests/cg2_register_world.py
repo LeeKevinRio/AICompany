@@ -98,6 +98,8 @@ class InProcessClaims:
         self.raises: BaseException | None = None
         self.override: Any = None
         self.probe_result: Path | None = world.backend
+        self.aborted: list[Any] = []
+        self.interrupt_before_finish: BaseException | None = None
         self.events: list[str] = world.events
 
     def probe(self) -> Path | None:
@@ -113,7 +115,17 @@ class InProcessClaims:
             self.before_run()
         return list(args)
 
-    def finish(self, handle: Any) -> Any:
+    def abort(self, handle: Any) -> None:
+        self.aborted.append(handle)
+
+    @property
+    def finish(self) -> Callable[[Any], Any]:
+        """A property so that a test can interrupt between ``start`` returning and ``finish``."""
+        if self.interrupt_before_finish is not None:
+            raise self.interrupt_before_finish
+        return self._finish
+
+    def _finish(self, handle: Any) -> Any:
         if self.raises is not None:
             raise self.raises
         if self.override is not None:
