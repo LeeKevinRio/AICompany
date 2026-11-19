@@ -64,7 +64,7 @@ def load_script() -> ModuleType:
 
 
 def weekdays(start: date, end: date, holidays: Iterable[date] = ()) -> list[date]:
-    """Monday-Friday dates of ``[start, end]`` minus ``holidays`` (a synthetic official calendar)."""
+    """Monday-Friday dates of ``[start, end]`` minus ``holidays`` (a synthetic calendar)."""
     skip = set(holidays)
     days = []
     day = start
