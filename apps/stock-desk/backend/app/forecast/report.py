@@ -95,6 +95,17 @@ from app.outlook.inputs import MarketSnapshot
 
 #: D-8 point 4 / D-4 point 5: the fixed note n-hat is always printed with.
 N_HAT_NOTE: Final = "重審觸發用計數（近似上界估計），不是驗證統計，不代表規則有效"
+#: ADR-0030 supplement 8 (final draft 2, to be appended) point 6 (b): the one fixed line
+#: printed with the F-2 and phase-0 grid counts -- the core does not detect sessions the
+#: source left out, these values may differ from the validation layer's recomputation,
+#: and the F-2 count may be low. Printed unconditionally (no branch on any data) and it
+#: changes no count. The wording is the risk-approved text (RC-230,
+#: ``work/reviews/2026-11-19-report-status缺日加註定稿RC229至RC232-風控.md``,
+#: the line "定稿全文："), copied by script; any change goes back to risk review.
+GAP_DISCLOSURE: Final = (
+    "加註：核心不偵測資料來源缺少的交易日；"
+    "F-2 計數與格點數值可能與日後驗證時重算的結果不同，F-2 計數可能偏低。"
+)
 #: The F-2 section title (supplement 5 point 1: told apart from the prereg's delisting rule F-2).
 F2_TITLE: Final = (
     "ADR-0030 失效條件 F-2（每 20 個平日為一個視窗，逐平日滾動；"
@@ -413,6 +424,9 @@ def render_execution_status(store: ForecastStore, *, now: datetime) -> list[str]
     No n-hat and no T1 / T2: the pipeline acceptance harness prints only this
     part (ADR-0030 supplement 5 point 5, C5-1). The F-2 lines print what
     ``store.f2_status`` derived; this module counts nothing for F-2 (C5-3).
+    :data:`GAP_DISCLOSURE` is the last line on every call, after the F-2 and
+    grid counts, so in ``status`` it precedes the review trigger lines
+    (supplement 8 point 6 (b), RC-230).
     """
     runs = store.runs()
     counts = {outcome: 0 for outcome in get_args(RunOutcome)}
@@ -441,6 +455,8 @@ def render_execution_status(store: ForecastStore, *, now: datetime) -> list[str]
             f"  {claim.claim_id}：第 0 相位格點 {len(grid.points)} 個，"
             f"其中沒有 late = 0 紀錄 {grid.lost} 個"
         )
+    # Supplement 8 point 6 (b), RC-230: always the last line, whatever the ledger holds.
+    lines.append(GAP_DISCLOSURE)
     return lines
 
 
