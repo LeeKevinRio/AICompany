@@ -114,6 +114,22 @@ REVIEW_GAP_DISCLOSURE: Final = (
 # each ``定稿全文：``). Templates: ``{name}`` is a value, ``{A／B}`` a choice of one
 # alternative, braces and slash not printed (:func:`_fill`).
 
+#: RC-259 (``work/reviews/2026-11-19-收盤定案時點定案與補充十判定RC255至RC264-風控.md``):
+#: the latest run that left a run row; with ``{YYYY-MM-DD HH:MM}`` its ``started_at`` in
+#: Taipei time and ``{outcome}`` its outcome, or "沒有 end 列".
+LATEST_RUN_LINE: Final = (
+    "最近一次留下執行紀錄的執行："
+    "開始於 {YYYY-MM-DD HH:MM}（台北），"
+    "結果 {outcome}；"
+    "被跳過的執行（例如當晚無法從資料來源取得最新資料，"
+    "或記錄目標不符）不留執行紀錄，不會出現在這一行。"
+)
+#: RC-259, when the ledger holds no run row at all.
+LATEST_RUN_NONE_LINE: Final = (
+    "最近一次留下執行紀錄的執行："
+    "無；被跳過的執行（例如當晚無法從資料來源取得最新資料，"
+    "或記錄目標不符）不留執行紀錄，不會出現在這一行。"
+)
 #: RC-248 段標題 (supplement 5 point 1: told apart from the prereg's delisting rule F-2).
 F2_TITLE: Final = (
     "ADR-0030 失效條件 F-2（「成立」指這個失效條件成立，"
@@ -502,6 +518,18 @@ def _f2_line(status: F2Status) -> str:
     return _fill(F2_FULL_LINE, (item.holds, status.ever_held), d=item.denominator, **values)
 
 
+def _latest_run_line(run: RunRow | None) -> str:
+    """RC-259: the run with the highest ``run_id`` (``store.latest_run``), formatted only."""
+    if run is None:
+        return LATEST_RUN_NONE_LINE
+    started = run.started_at.astimezone(_TAIPEI).strftime("%Y-%m-%d %H:%M")
+    return _fill(
+        LATEST_RUN_LINE,
+        (),
+        **{"YYYY-MM-DD HH:MM": started, "outcome": run.outcome or "沒有 end 列"},
+    )
+
+
 def _grid_line(status: GridLossStatus) -> str:
     """One claim's F-2 second sentence line (supplement 9 point 5); values from the store."""
     if status.verdict == "undecidable":
@@ -563,6 +591,7 @@ def render_execution_status(store: ForecastStore, *, now: datetime) -> list[str]
         + "，".join(f"{outcome}={count}" for outcome, count in counts.items())
         + f"，沒有 end 列={interrupted}",
         f"inputs_not_ready 日數（全部期間，台北日期）：{len(not_ready_days)}",
+        _latest_run_line(store.latest_run()),
         F2_TITLE,
         F2_FIRST_HEADING,
     ]

@@ -564,6 +564,12 @@ def test_the_output_holds_no_n_hat_while_report_status_does(
         assert result.output.count(fixed) == 1
         assert fixed not in render_summary(result)
     assert not any("F-2 第二句" in line for line in render_summary(result))
+    # RC-259: the latest-run line is execution status too (full output yes, summary no).
+    latest = [line for line in result.output if line.startswith("最近一次留下執行紀錄的執行：")]
+    assert len(latest) == 1
+    assert not any(
+        line.startswith("最近一次留下執行紀錄的執行：") for line in render_summary(result)
+    )
     # The report's own status on the same ledger still lists the review trigger.
     ledger = tmp_path / "work" / harness.LEDGER_NAME
     code = report.main(["status", "--db", str(ledger)], clock=lambda: FIXED_NOW)

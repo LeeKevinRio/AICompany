@@ -34,6 +34,13 @@ F2_LINES_APPROVAL: Final = REVIEWS / "2026-11-19-接線PR-F2視窗字面判定RC
 #: RC-244～RC-254: supplement 9 and the final F-2 wording.
 F2_WORDING_APPROVAL: Final = REVIEWS / "2026-11-19-補充九判定與F2字面定稿RC244至RC254-風控.md"
 
+#: RC-255～RC-264: the closing-time ruling and supplement 10 (only RC-259 is used here).
+LATEST_RUN_APPROVAL: Final = REVIEWS / "2026-11-19-收盤定案時點定案與補充十判定RC255至RC264-風控.md"
+LATEST_RUN_ITEMS: Final = {
+    "with_run": "RC-259 最近一次執行（帳內有執行紀錄時）",
+    "no_run": "RC-259 最近一次執行（帳內沒有執行紀錄時）",
+}
+
 #: The labels of F2_LINES_APPROVAL still in force, and the two that are not.
 F2_LINES_IN_FORCE: Final = {
     "full": "RC-238 完整視窗（分母大於 0）",
@@ -104,6 +111,12 @@ def f2_superseded() -> list[str]:
     """The RC-237～243 texts that must not be used (the old title, the old denominator-0 line)."""
     texts = labelled_texts(F2_LINES_APPROVAL, item_prefix=None)
     return [texts[label] for label in F2_LINES_SUPERSEDED]
+
+
+def latest_run_lines() -> dict[str, str]:
+    """The two RC-259 texts by :data:`LATEST_RUN_ITEMS` key (each label exactly once)."""
+    texts = labelled_texts(LATEST_RUN_APPROVAL, item_prefix="項目：")
+    return {key: texts[label] for key, label in LATEST_RUN_ITEMS.items()}
 
 
 def f2_gap_line() -> str:

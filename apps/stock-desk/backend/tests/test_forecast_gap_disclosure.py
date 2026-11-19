@@ -27,7 +27,7 @@ import ast
 import hashlib
 import json
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import get_args
 
@@ -130,6 +130,10 @@ def _expected_before_the_line(*, gap: bool) -> list[str]:
         "執行次數：ok=1，no_new_session=0，inputs_not_ready=0，gate_closed=0，error=0，"
         "沒有 end 列=0",
         "inputs_not_ready 日數（全部期間，台北日期）：0",
+        approved_copy.fill(
+            approved_copy.latest_run_lines()["with_run"],
+            **{"YYYY-MM-DD HH:MM": "2026-10-05 22:10", "outcome": "ok"},
+        ),
         wording["title"],
         wording["first_heading"],
         *first,
@@ -433,8 +437,8 @@ def test_rc252_the_fixed_lines_are_printed_in_order_whatever_the_ledger(
     assert at_line == sorted(at_line)
     assert all(lines.count(getattr(report, name)) == 1 for name in FIXED_LINES)
     assert lines[-2:] == [report.F2_ACTION_LINE, report.GAP_DISCLOSURE]
-    assert lines[:3][0].startswith("執行狀態（") and lines[3] == report.F2_TITLE
-    assert lines[4] == report.F2_FIRST_HEADING
+    assert lines[0].startswith("執行狀態（") and lines[4] == report.F2_TITLE
+    assert lines[5] == report.F2_FIRST_HEADING
 
 
 def test_rc252_the_whole_status_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -491,3 +495,70 @@ def _dummy(template: str) -> dict[str, object]:
         for name in approved_copy.placeholders(template)
         if "／" not in name
     }
+
+
+# --- RC-259: the latest run that left a run row --------------------------------------------------
+
+
+def _latest_line(lines: list[str]) -> str:
+    at_line = lines.index(report.F2_TITLE) - 1
+    assert lines[at_line - 1].startswith("inputs_not_ready 日數（全部期間，台北日期）：")
+    return lines[at_line]
+
+
+def test_rc259_the_constants_are_the_approved_text() -> None:
+    texts = approved_copy.latest_run_lines()
+    assert report.LATEST_RUN_LINE == texts["with_run"]
+    assert report.LATEST_RUN_NONE_LINE == texts["no_run"]
+
+
+def test_rc259_without_a_run_row_the_none_variant_is_printed(tmp_path: Path) -> None:
+    lines = report.render_execution_status(
+        ForecastStore(_ledger(tmp_path, case="no-claim").path), now=NOW
+    )
+    assert _latest_line(lines) == approved_copy.latest_run_lines()["no_run"]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "shown"),
+    [("ok", "ok"), ("inputs_not_ready", "inputs_not_ready"), (None, "沒有 end 列")],
+)
+def test_rc259_the_latest_run_is_the_highest_run_id_in_taipei_time(
+    tmp_path: Path, outcome: str | None, shown: str
+) -> None:
+    ledger = _ledger(tmp_path, case="whole")  # run 1 at MONDAY 22:10 Taipei, ok
+    if outcome is None:
+        ledger.execute("forecast_run", {**_run_row_values(at(DAYS[-1], 23, 10))})
+    else:
+        ledger.run(at(DAYS[-1], 23, 10), outcome=outcome)
+    lines = report.render_execution_status(ForecastStore(ledger.path), now=NOW)
+    expected = approved_copy.fill(
+        approved_copy.latest_run_lines()["with_run"],
+        **{"YYYY-MM-DD HH:MM": f"{DAYS[-1].isoformat()} 23:10", "outcome": shown},
+    )
+    assert _latest_line(lines) == expected
+
+
+def _run_row_values(started: datetime) -> dict[str, object]:
+    from app.forecast.canonical import canonical_timestamp
+    from tests.forecast_ledger_helpers import row
+
+    return row("forecast_run", started_at=canonical_timestamp(started))
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_rc259_both_variants_carry_the_note_and_pass_the_d4_checks(
+    tmp_path: Path, case: str
+) -> None:
+    lines = report.render_execution_status(
+        ForecastStore(_ledger(tmp_path, case=case).path), now=NOW
+    )
+    line = _latest_line(lines)
+    note = approved_copy.latest_run_lines()["no_run"].split("；", 1)[1]
+    assert line.endswith(note)
+    assert d4_violations([line], unpassed_hashes=set()) == []
+    for text in approved_copy.latest_run_lines().values():
+        filled = approved_copy.fill(
+            text, **{"YYYY-MM-DD HH:MM": "2026-10-05 22:10", "outcome": "ok"}
+        )
+        assert d4_violations([filled], unpassed_hashes=set()) == []
