@@ -55,6 +55,7 @@ from app.forecast.recorder import record_forecasts
 from app.forecast.schema import EXPECTED_OBJECTS
 from app.forecast.store import ForecastStore
 from app.services.index import IndexServiceResolver, load_market_benchmark
+from tests import approved_copy
 from tests.approved_copy import review_gap_line
 from tests.forecast_ledger_helpers import FakeClock, file_ledger, publish_definition
 from tests.import_graph import offenders, reachable_app_modules
@@ -662,6 +663,28 @@ def test_status_n_hat_without_its_note_is_caught(
     assert [v for v in found if v.startswith("n-hat without its note")] != []
 
 
+def test_rc240_the_n_hat_exemption_is_exactly_one_line() -> None:
+    assert len(APPROVED_N_HAT_LINES) == 1
+    assert APPROVED_N_HAT_LINES == {report.REVIEW_GAP_DISCLOSURE}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param(lambda line: line + "。", id="one-char-more"),
+        pytest.param(lambda line: "註" + line[1:], id="one-char-changed"),
+        pytest.param(lambda line: line[:-1], id="one-char-less"),
+    ],
+)
+def test_rc240_a_near_copy_of_the_exempt_line_is_still_caught(change: Any) -> None:
+    (line,) = APPROVED_N_HAT_LINES
+    near = change(line)
+    assert near != line and "n̂" in near
+    found = d4_violations([near], unpassed_hashes=set())
+    assert [v for v in found if v.startswith("n-hat without its note")] != []
+    assert d4_violations([line], unpassed_hashes=set()) == []
+
+
 def test_status_counts_the_f2_window(ledger: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # ADR-0030 supplement 5 point 1: the start is the first run (the claims were
     # registered on 2026-10-01, before it); at NOW the weekdays whose cutoff has passed
@@ -673,11 +696,18 @@ def test_status_counts_the_f2_window(ledger: Path, capsys: pytest.CaptureFixture
     weekdays_since = len(_sessions_ending(date(2026, 11, 16), 40)) - len(
         [d for d in _sessions_ending(date(2026, 11, 16), 40) if d < first]
     )
-    f2 = [line for line in lines if line.startswith("  ") and "視窗未滿（自起點以來" in line]
+    f2 = lines[lines.index(report.F2_FIRST_HEADING) + 1 : lines.index(report.F2_SECOND_HEADING)]
     assert f2 == [
-        f"  {claim}：視窗未滿（自起點以來 {weekdays_since} 個平日："
-        f"{first.isoformat()}～2026-11-16），沒有 late = 0 紀錄的定案 session 數 0，"
-        "inputs_not_ready 日數 0，視窗未滿"
+        approved_copy.fill(
+            approved_copy.f2_lines()["short"],
+            1,
+            claim_id=claim,
+            k=weekdays_since,
+            起=first.isoformat(),
+            迄="2026-11-16",
+            a=0,
+            b=0,
+        )
         for claim in sorted_claims(ledger)
     ]
     assert d4_violations(lines, unpassed_hashes=set()) == []

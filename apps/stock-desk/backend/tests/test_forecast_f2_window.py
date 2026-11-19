@@ -30,6 +30,7 @@ from app.forecast.store import (
     ForecastStoreError,
 )
 from app.outlook.inputs import late_cutoff_at
+from tests import approved_copy
 from tests.forecast_ledger_helpers import TAIPEI, file_ledger, insert, row, weekdays
 
 APP_ROOT = Path(__file__).resolve().parents[1] / "app"
@@ -393,8 +394,17 @@ def test_the_query_only_reads(ledger: Ledger, monkeypatch: pytest.MonkeyPatch) -
 
 
 def f2_lines(lines: Sequence[str]) -> list[str]:
-    start = lines.index(report.F2_TITLE)
-    return [line for line in lines[start + 1 :] if line.startswith("  ") and "視窗" in line]
+    """The first sentence's claim lines: between its heading and the second's."""
+    return list(
+        lines[lines.index(report.F2_FIRST_HEADING) + 1 : lines.index(report.F2_SECOND_HEADING)]
+    )
+
+
+def grid_lines(lines: Sequence[str]) -> list[str]:
+    """The second sentence's claim lines: between its heading and the action line."""
+    return list(
+        lines[lines.index(report.F2_SECOND_HEADING) + 1 : lines.index(report.F2_ACTION_LINE)]
+    )
 
 
 def test_the_report_prints_the_full_window_per_claim(ledger: Ledger) -> None:
@@ -402,35 +412,73 @@ def test_the_report_prints_the_full_window_per_claim(ledger: Ledger) -> None:
     ledger.run(at(MONDAY))
     recorded_window(ledger, days, skip=days[:7])
     lines = report.render_execution_status(store(ledger), now=after_cutoff(days[-1]))
-    assert report.F2_TITLE in lines
-    span = f"{days[5].isoformat()}～{days[-1].isoformat()}"
+    template = approved_copy.f2_lines()["full"]
     assert f2_lines(lines) == [
-        f"  {claim}：最近一個完整視窗 {span}，沒有 late = 0 紀錄的定案 session 數 2，"
-        "inputs_not_ready 日數 0，分母 20，未成立；自起點以來曾否成立：是"
+        approved_copy.fill(template, 1, 0, claim_id=claim, 起=days[5], 迄=days[-1], a=2, b=0, d=20)
         for claim in (CLAIM_H3, CLAIM_H5)
     ]
     assert not any(word in line for line in lines for word in LABEL_WORDS)
 
 
-def test_the_report_prints_the_short_range(ledger: Ledger) -> None:
-    days = weekdays(MONDAY, 3)
-    ledger.run(at(MONDAY))
-    recorded_window(ledger, days)
-    lines = report.render_execution_status(store(ledger), now=after_cutoff(days[-1]))
-    span = f"{days[0].isoformat()}～{days[-1].isoformat()}"
+def test_the_report_prints_a_full_window_without_a_final_session(ledger: Ledger) -> None:
+    window = weekdays(MONDAY, F2_WINDOW_WEEKDAYS)
+    ledger.run(at(MONDAY), outcome="inputs_not_ready")
+    lines = report.render_execution_status(store(ledger), now=after_cutoff(window[-1]))
+    template = approved_copy.f2_wording()["full_zero"]
     assert f2_lines(lines) == [
-        f"  {claim}：視窗未滿（自起點以來 3 個平日：{span}），沒有 late = 0 紀錄的定案"
-        " session 數 0，inputs_not_ready 日數 0，視窗未滿"
+        approved_copy.fill(template, claim_id=claim, 起=window[0], 迄=window[-1], a=0, b=1)
+        for claim in (CLAIM_H3, CLAIM_H5)
+    ]
+
+
+@pytest.mark.parametrize(("missed", "choice"), [(0, 1), (7, 0)], ids=["open", "held"])
+def test_the_report_prints_the_short_range(ledger: Ledger, missed: int, choice: int) -> None:
+    days = weekdays(MONDAY, 10)
+    ledger.run(at(MONDAY))
+    recorded_window(ledger, days, skip=days[:missed])
+    lines = report.render_execution_status(store(ledger), now=after_cutoff(days[-1]))
+    template = approved_copy.f2_lines()["short"]
+    assert f2_lines(lines) == [
+        approved_copy.fill(
+            template, choice, claim_id=claim, k=10, 起=days[0], 迄=days[-1], a=missed, b=0
+        )
         for claim in (CLAIM_H3, CLAIM_H5)
     ]
 
 
 def test_the_report_prints_no_run_and_no_weekday_yet(ledger: Ledger) -> None:
     lines = report.render_execution_status(store(ledger), now=at(MONDAY))
-    assert f2_lines(lines) == [f"  {c}：視窗未滿（尚無執行）" for c in (CLAIM_H3, CLAIM_H5)]
+    # "視窗未滿（尚無執行）" keeps its earlier wording (RC-239's note): the module's own.
+    assert f2_lines(lines) == [
+        approved_copy.fill(report.F2_NO_RUN_LINE, claim_id=c) for c in (CLAIM_H3, CLAIM_H5)
+    ]
+    assert report.F2_NO_RUN_LINE == "  {claim_id}：視窗未滿（尚無執行）"
     ledger.run(at(MONDAY))
     lines = report.render_execution_status(store(ledger), now=at(MONDAY, 23, 0))
-    assert f2_lines(lines) == [f"  {c}：視窗未滿" for c in (CLAIM_H3, CLAIM_H5)]
+    template = approved_copy.f2_lines()["no_weekday"]
+    assert f2_lines(lines) == [
+        approved_copy.fill(template, claim_id=c, S_c=MONDAY) for c in (CLAIM_H3, CLAIM_H5)
+    ]
+
+
+def test_the_report_prints_the_second_sentence_per_claim(ledger: Ledger) -> None:
+    days = _grid_ledger(ledger, 25, [4, 8])
+    lines = report.render_execution_status(store(ledger), now=after_cutoff(days[-1]))
+    template = approved_copy.f2_wording()["second"]
+    # h5: points 0,5,...,20 (5 of them), the two lost h3 points are recorded for h5.
+    assert grid_lines(lines) == [
+        approved_copy.fill(template, 0, 0, claim_id=CLAIM_H3, G=9, L=2),
+        approved_copy.fill(template, 1, 1, claim_id=CLAIM_H5, G=5, L=0),
+    ]
+
+
+def test_the_undecidable_second_sentence_has_no_ever_held(ledger: Ledger) -> None:
+    lines = report.render_execution_status(store(ledger), now=at(MONDAY))
+    template = approved_copy.f2_wording()["second_undecidable"]
+    assert grid_lines(lines) == [
+        approved_copy.fill(template, claim_id=c) for c in (CLAIM_H3, CLAIM_H5)
+    ]
+    assert not any("曾否成立" in line for line in grid_lines(lines))
 
 
 # --- C5-3: only store.py derives F-2; one weekday function with T2 ------------------------------
@@ -546,3 +594,9 @@ def test_the_grid_loss_query_needs_an_aware_now_and_only_reads(
 
     monkeypatch.setattr(ForecastStore, "_connect", no_write)
     store(ledger).grid_loss_status(CLAIM_H3, now=after_cutoff(MONDAY))
+
+
+def test_the_grid_loss_verdict_is_derived_in_store_py_only() -> None:
+    source = (APP_ROOT / "forecast" / "report.py").read_text(encoding="utf-8")
+    for computed in ("GRID_LOSS_FACTOR", "* 5", "*5", "late_cutoff_at", ".points", "on_time"):
+        assert computed not in source

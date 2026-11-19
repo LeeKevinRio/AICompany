@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -86,6 +87,7 @@ from app.forecast.store import (
     F2Status,
     ForecastStore,
     ForecastStoreError,
+    GridLossStatus,
     LedgerInconsistentError,
     RunOutcome,
     RunRow,
@@ -95,17 +97,6 @@ from app.outlook.inputs import MarketSnapshot
 
 #: D-8 point 4 / D-4 point 5: the fixed note n-hat is always printed with.
 N_HAT_NOTE: Final = "重審觸發用計數（近似上界估計），不是驗證統計，不代表規則有效"
-#: ADR-0030 supplement 8 (final draft 2, to be appended) point 6 (b): the one fixed line
-#: printed with the F-2 and phase-0 grid counts -- the core does not detect sessions the
-#: source left out, these values may differ from the validation layer's recomputation,
-#: and the F-2 count may be low. Printed unconditionally (no branch on any data) and it
-#: changes no count. The wording is the risk-approved text (RC-230,
-#: ``work/reviews/2026-11-19-report-status缺日加註定稿RC229至RC232-風控.md``,
-#: the line "定稿全文："), copied by script; any change goes back to risk review.
-GAP_DISCLOSURE: Final = (
-    "加註：核心不偵測資料來源缺少的交易日；"
-    "F-2 計數與格點數值可能與日後驗證時重算的結果不同，F-2 計數可能偏低。"
-)
 #: ADR-0030 supplement 8 point 6 (b), second line (risk RC-233, RC-234): the one fixed
 #: line after every review trigger line -- n-hat and T1 may differ from the validation
 #: layer's recomputation and missing source sessions may make n-hat low. The wording is
@@ -116,10 +107,87 @@ REVIEW_GAP_DISCLOSURE: Final = (
     "加註：重審觸發的 n̂ 與 T1 可能與日後驗證時重算的結果不同；"
     "資料來源缺少的交易日可能使 n̂ 偏低、T1 較晚成立，此時「近似上界」不一定成立。"
 )
-#: The F-2 section title (supplement 5 point 1: told apart from the prereg's delisting rule F-2).
+# --- risk-approved wording of ``status`` (copied by script; changes go back to risk) ---------
+#
+# ``work/reviews/2026-11-19-補充九判定與F2字面定稿RC244至RC254-風控.md`` (``項目：`` labels) and
+# ``work/reviews/2026-11-19-接線PR-F2視窗字面判定RC237至RC243-風控.md`` (the label line before
+# each ``定稿全文：``). Templates: ``{name}`` is a value, ``{A／B}`` a choice of one
+# alternative, braces and slash not printed (:func:`_fill`).
+
+#: RC-248 段標題 (supplement 5 point 1: told apart from the prereg's delisting rule F-2).
 F2_TITLE: Final = (
-    "ADR-0030 失效條件 F-2（每 20 個平日為一個視窗，逐平日滾動；"
+    "ADR-0030 失效條件 F-2（「成立」指這個失效條件成立，"
+    "即記錄缺漏達到門檻，不代表規則成立或不成立；"
     "只含執行狀態，不含任何標籤或對照）："
+)
+#: RC-248 第一句小標題: printed on every call.
+F2_FIRST_HEADING: Final = (
+    "F-2 第一句（定案 session 缺漏與 inputs_not_ready）："
+    "平日指週一至週五，不扣休市日；每 20 個平日為一個視窗，"
+    "逐平日滾動。"
+)
+#: RC-238 完整視窗（分母大於 0）.
+F2_FULL_LINE: Final = (
+    "  {claim_id}：最近一個完整視窗 {起}～{迄}，"
+    "沒有 late = 0 紀錄的定案 session 數 {a}，"
+    "inputs_not_ready 日數 {b}，"
+    "分母 {d}，此視窗 F-2 {成立／未成立}；"
+    "自起點以來 F-2 曾否成立：{是（成立後不撤銷）／否}"
+)
+#: RC-247 第一句完整視窗分母為 0 (supplement 9 point 4: always held, ever held).
+F2_FULL_ZERO_LINE: Final = (
+    "  {claim_id}：最近一個完整視窗 {起}～{迄}，"
+    "沒有 late = 0 紀錄的定案 session 數 {a}，"
+    "inputs_not_ready 日數 {b}，"
+    "分母 0（範圍內沒有任何定案 session，"
+    "可能是停機、資料來源整段缺席或執行沒有存下快照；"
+    "分母為 0 時一律判成立），"
+    "此視窗 F-2 成立；自起點以來 F-2 曾否成立："
+    "是（成立後不撤銷）"
+)
+#: RC-239 視窗未滿.
+F2_SHORT_LINE: Final = (
+    "  {claim_id}：視窗未滿（自起點以來 {k} 個平日："
+    "{起}～{迄}），沒有 late = 0 紀錄的定案 session 數 {a}，"
+    "inputs_not_ready 日數 {b}，"
+    "{F-2 成立（兩項合計已超過 6，"
+    "成立後不撤銷）／尚未判定（兩項合計未超過 6）}"
+)
+#: RC-242: a start but no weekday counted yet.
+F2_NO_WEEKDAY_LINE: Final = "  {claim_id}：視窗未滿（自起點 {S_c} 以來尚無可計入的平日）"
+#: No run at all yet (unchanged wording, RC-239's note: kept as it is).
+F2_NO_RUN_LINE: Final = "  {claim_id}：視窗未滿（尚無執行）"
+#: RC-248 第二句小標題: printed on every call.
+F2_SECOND_HEADING: Final = (
+    "F-2 第二句（第 0 相位格點遺失）："
+    "自 D_v 起累計，不設視窗；只計入截止時點已過的格點；"
+    "沒有 late = 0 紀錄的格點數的 5 倍大於計入格點數時成立。"
+    "格點數少時，遺失一個格點就可能成立，"
+    "而且「曾否成立：是」之後不會撤銷。"
+)
+#: RC-249 第二句有判定（G 大於 0）.
+F2_SECOND_LINE: Final = (
+    "  {claim_id}：計入的格點 {G} 個，"
+    "其中沒有 late = 0 紀錄 {L} 個，"
+    "目前 F-2 第二句{成立／未成立}；"
+    "自 D_v 起 F-2 第二句曾否成立：{是（成立後不撤銷）／否}"
+)
+#: RC-249 第二句無從判定（G 為 0）: no "ever held" in it.
+F2_SECOND_UNDECIDABLE_LINE: Final = (
+    "  {claim_id}：F-2 第二句無從判定（計入的格點 0 個：尚無 D_v，或 D_v 的截止時點未過）"
+)
+#: RC-250 行動句: printed on every call, before GAP_DISCLOSURE.
+F2_ACTION_LINE: Final = (
+    "F-2 任一行顯示成立，"
+    "或曾否成立為「是」時，請告訴 coordinator（同一項先前已告訴過就不必再告訴）；"
+    "不要自己修改任何設定或檔案。"
+)
+#: ADR-0030 supplement 8 point 6 (b), first line, as revised by RC-251 (it revised
+#: RC-230): the last line of the execution status on every call; it changes no count.
+GAP_DISCLOSURE: Final = (
+    "加註：核心不偵測資料來源缺少的交易日；"
+    "F-2 計數、格點數值與兩句的判定都可能與日後驗證時重算的結果不同，"
+    "F-2 第一句的計數可能偏低。"
 )
 
 EXIT_OK: Final = 0
@@ -392,24 +460,59 @@ def _yes(value: bool) -> str:
     return "成立" if value else "未成立"
 
 
+_PLACEHOLDER: Final = re.compile(r"\{([^{}]*)\}")
+
+
+def _fill(template: str, choices: Sequence[bool], **values: object) -> str:
+    """A risk-approved template rendered: ``{A／B}`` is A when the next choice is true, else B.
+
+    ``{name}`` takes ``values[name]``. Formatting only: every value and choice
+    is the store's (supplement 9 point 5: no determination in this module).
+    """
+    picks = iter(choices)
+
+    def one(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if "／" in name:
+            first, second = name.split("／")
+            return first if next(picks) else second
+        return str(values[name])
+
+    return _PLACEHOLDER.sub(one, template)
+
+
 def _f2_line(status: F2Status) -> str:
-    """One claim's F-2 line (supplement 5 point 1 (g)); counts and verdicts come from the store."""
-    head = f"  {status.claim_id}："
+    """One claim's F-2 first sentence line (supplement 5 point 1 (g); supplement 9 point 4)."""
     item = status.window
+    if status.start is None:
+        return _fill(F2_NO_RUN_LINE, (), claim_id=status.claim_id)
     if item is None:
-        return f"{head}視窗未滿（尚無執行）" if status.start is None else f"{head}視窗未滿"
-    counts = (
-        f"沒有 late = 0 紀錄的定案 session 數 {item.missed_sessions}，"
-        f"inputs_not_ready 日數 {item.not_ready_days}"
+        return _fill(F2_NO_WEEKDAY_LINE, (), claim_id=status.claim_id, S_c=status.start)
+    values: dict[str, object] = {
+        "claim_id": status.claim_id,
+        "起": item.first.isoformat(),
+        "迄": item.last.isoformat(),
+        "a": item.missed_sessions,
+        "b": item.not_ready_days,
+    }
+    if not status.full:
+        return _fill(F2_SHORT_LINE, (item.holds,), k=status.weekdays, **values)
+    if item.denominator == 0:
+        return _fill(F2_FULL_ZERO_LINE, (), **values)
+    return _fill(F2_FULL_LINE, (item.holds, status.ever_held), d=item.denominator, **values)
+
+
+def _grid_line(status: GridLossStatus) -> str:
+    """One claim's F-2 second sentence line (supplement 9 point 5); values from the store."""
+    if status.verdict == "undecidable":
+        return _fill(F2_SECOND_UNDECIDABLE_LINE, (), claim_id=status.claim_id)
+    return _fill(
+        F2_SECOND_LINE,
+        (status.verdict == "holds", status.ever_held),
+        claim_id=status.claim_id,
+        G=status.counted,
+        L=status.lost,
     )
-    span = f"{item.first.isoformat()}～{item.last.isoformat()}"
-    if status.full:
-        return (
-            f"{head}最近一個完整視窗 {span}，{counts}，分母 {item.denominator}，"
-            f"{_yes(item.holds)}；自起點以來曾否成立：{'是' if status.ever_held else '否'}"
-        )
-    verdict = "成立" if item.holds else "視窗未滿"
-    return f"{head}視窗未滿（自起點以來 {status.weekdays} 個平日：{span}），{counts}，{verdict}"
 
 
 def render_status(store: ForecastStore, *, now: datetime) -> list[str]:
@@ -434,9 +537,13 @@ def render_execution_status(store: ForecastStore, *, now: datetime) -> list[str]
     No n-hat and no T1 / T2: the pipeline acceptance harness prints only this
     part (ADR-0030 supplement 5 point 5, C5-1). The F-2 lines print what
     ``store.f2_status`` derived; this module counts nothing for F-2 (C5-3).
-    :data:`GAP_DISCLOSURE` is the last line on every call, after the F-2 and
-    grid counts, so in ``status`` it precedes the review trigger lines
-    (supplement 8 point 6 (b), RC-230).
+    The F-2 lines print what ``store.f2_status`` and ``store.grid_loss_status``
+    derived. Order (RC-252): the three run lines, :data:`F2_TITLE`,
+    :data:`F2_FIRST_HEADING`, the first sentence per recording claim,
+    :data:`F2_SECOND_HEADING`, the second sentence per recording claim,
+    :data:`F2_ACTION_LINE` and :data:`GAP_DISCLOSURE` last -- the headings and
+    the last two on every call, whatever the ledger holds; so in ``status``
+    they precede the review trigger lines (supplement 8 point 6 (b)).
     """
     runs = store.runs()
     counts = {outcome: 0 for outcome in get_args(RunOutcome)}
@@ -457,15 +564,13 @@ def render_execution_status(store: ForecastStore, *, now: datetime) -> list[str]
         + f"，沒有 end 列={interrupted}",
         f"inputs_not_ready 日數（全部期間，台北日期）：{len(not_ready_days)}",
         F2_TITLE,
+        F2_FIRST_HEADING,
     ]
     lines.extend(_f2_line(store.f2_status(claim.claim_id, now=now)) for claim in recording)
-    for claim in recording:
-        grid = store.phase0_grid(claim.claim_id)
-        lines.append(
-            f"  {claim.claim_id}：第 0 相位格點 {len(grid.points)} 個，"
-            f"其中沒有 late = 0 紀錄 {grid.lost} 個"
-        )
-    # Supplement 8 point 6 (b), RC-230: always the last line, whatever the ledger holds.
+    lines.append(F2_SECOND_HEADING)
+    lines.extend(_grid_line(store.grid_loss_status(claim.claim_id, now=now)) for claim in recording)
+    # RC-250 and supplement 8 point 6 (b) (RC-251): always the last two lines.
+    lines.append(F2_ACTION_LINE)
     lines.append(GAP_DISCLOSURE)
     return lines
 

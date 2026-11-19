@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 from datetime import date
 from pathlib import Path
 from typing import get_args
@@ -36,6 +37,7 @@ from app.forecast import report
 from app.forecast.schema import EXPECTED_OBJECTS
 from app.forecast.store import ForecastStore, ReviewTrigger, RunOutcome
 from app.outlook.inputs import DropReason
+from tests import approved_copy
 from tests.approved_copy import f2_gap_line, review_gap_line
 from tests.forecast_ledger_helpers import file_ledger, weekdays
 from tests.test_forecast_bootstrap import EXPECTED_OBJECTS_SHA256
@@ -48,6 +50,7 @@ from tests.test_forecast_f2_window import (
     at,
     recorded_window,
 )
+from tests.test_forecast_report import d4_violations
 
 APP_ROOT = Path(__file__).resolve().parents[1] / "app"
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -99,18 +102,27 @@ def test_2_the_line_is_the_same_with_no_claim_a_gap_and_no_gap(tmp_path: Path) -
 
 
 def _expected_before_the_line(*, gap: bool) -> list[str]:
-    """The output as it was before the line was added (built here, not by the module)."""
+    """The output without the last line, rendered here from the approval records' templates."""
     sessions = [d for d in DAYS if not gap or d != DAYS[10]]
     window = DAYS[5:]
     denominator = min(20, sum(1 for d in sessions if window[0] <= d <= window[-1]))
-    f2 = [
-        f"  {claim}：最近一個完整視窗 {window[0].isoformat()}～{window[-1].isoformat()}，"
-        "沒有 late = 0 紀錄的定案 session 數 0，inputs_not_ready 日數 0，"
-        f"分母 {denominator}，未成立；自起點以來曾否成立：否"
+    wording, lines = approved_copy.f2_wording(), approved_copy.f2_lines()
+    first = [
+        approved_copy.fill(
+            lines["full"],
+            1,
+            1,
+            claim_id=claim,
+            起=window[0],
+            迄=window[-1],
+            a=0,
+            b=0,
+            d=denominator,
+        )
         for claim in (CLAIM_H3, CLAIM_H5)
     ]
-    grid = [
-        f"  {claim}：第 0 相位格點 {len(sessions[::h])} 個，其中沒有 late = 0 紀錄 0 個"
+    second = [
+        approved_copy.fill(wording["second"], 1, 1, claim_id=claim, G=len(sessions[::h]), L=0)
         for claim, h in ((CLAIM_H3, 3), (CLAIM_H5, 5))
     ]
     return [
@@ -118,9 +130,12 @@ def _expected_before_the_line(*, gap: bool) -> list[str]:
         "執行次數：ok=1，no_new_session=0，inputs_not_ready=0，gate_closed=0，error=0，"
         "沒有 end 列=0",
         "inputs_not_ready 日數（全部期間，台北日期）：0",
-        report.F2_TITLE,
-        *f2,
-        *grid,
+        wording["title"],
+        wording["first_heading"],
+        *first,
+        wording["second_heading"],
+        *second,
+        wording["action"],
     ]
 
 
@@ -232,6 +247,8 @@ HOLIDAY_MENTIONS = frozenset(
         "playbook/service.py",
         "playbook/wording.py",
         "portfolio/valuation.py",
+        # The risk-approved F-2 heading "平日指週一至週五，不扣休市日" (RC-248): wording, not data.
+        "forecast/report.py",
     }
 )
 
@@ -359,3 +376,118 @@ def test_the_second_line_is_a_module_constant_used_without_a_branch() -> None:
     for node in ast.walk(tree):
         if isinstance(node, ast.If | ast.IfExp | ast.comprehension):
             assert "REVIEW_GAP_DISCLOSURE" not in ast.unparse(node)
+
+
+# --- RC-252: the F-2 section's fixed lines, order and wording ------------------------------------
+
+FIXED_LINES = (
+    "F2_TITLE",
+    "F2_FIRST_HEADING",
+    "F2_SECOND_HEADING",
+    "F2_ACTION_LINE",
+    "GAP_DISCLOSURE",
+)
+TEMPLATES = {
+    "F2_FULL_LINE": ("lines", "full"),
+    "F2_SHORT_LINE": ("lines", "short"),
+    "F2_NO_WEEKDAY_LINE": ("lines", "no_weekday"),
+    "F2_FULL_ZERO_LINE": ("wording", "full_zero"),
+    "F2_SECOND_LINE": ("wording", "second"),
+    "F2_SECOND_UNDECIDABLE_LINE": ("wording", "second_undecidable"),
+}
+FIXED_KEYS = {
+    "F2_TITLE": "title",
+    "F2_FIRST_HEADING": "first_heading",
+    "F2_SECOND_HEADING": "second_heading",
+    "F2_ACTION_LINE": "action",
+    "GAP_DISCLOSURE": "gap",
+}
+
+
+def test_rc252_every_constant_is_the_approved_text() -> None:
+    wording, lines = approved_copy.f2_wording(), approved_copy.f2_lines()
+    for name, key in FIXED_KEYS.items():
+        assert getattr(report, name) == wording[key], name
+    for name, (record, key) in TEMPLATES.items():
+        source = lines if record == "lines" else wording
+        assert getattr(report, name) == source[key], name
+
+
+def test_rc252_the_superseded_texts_are_not_used() -> None:
+    # RC-237's title and RC-238's denominator-0 line (both superseded) appear nowhere.
+    source = (APP_ROOT / "forecast" / "report.py").read_text(encoding="utf-8")
+    values = {getattr(report, name) for name in (*FIXED_KEYS, *TEMPLATES)}
+    for old in approved_copy.f2_superseded():
+        assert old not in values
+        assert old not in "".join(re.findall(r'"([^"\n]*)"', source))
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_rc252_the_fixed_lines_are_printed_in_order_whatever_the_ledger(
+    tmp_path: Path, case: str
+) -> None:
+    lines = report.render_execution_status(
+        ForecastStore(_ledger(tmp_path, case=case).path), now=NOW
+    )
+    at_line = [lines.index(getattr(report, name)) for name in FIXED_LINES]
+    assert at_line == sorted(at_line)
+    assert all(lines.count(getattr(report, name)) == 1 for name in FIXED_LINES)
+    assert lines[-2:] == [report.F2_ACTION_LINE, report.GAP_DISCLOSURE]
+    assert lines[:3][0].startswith("執行狀態（") and lines[3] == report.F2_TITLE
+    assert lines[4] == report.F2_FIRST_HEADING
+
+
+def test_rc252_the_whole_status_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_triggers(monkeypatch)
+    lines = report.render_status(ForecastStore(_ledger(tmp_path, case="whole").path), now=NOW)
+    first_heading = lines.index(report.F2_FIRST_HEADING)
+    second_heading = lines.index(report.F2_SECOND_HEADING)
+    first_sentence = lines[first_heading + 1 : second_heading]
+    action = lines.index(report.F2_ACTION_LINE)
+    second_sentence = lines[second_heading + 1 : action]
+    triggers = [i for i, line in enumerate(lines) if line.startswith("重審觸發（")]
+    assert lines.index(report.F2_TITLE) < first_heading
+    assert len(first_sentence) == len(second_sentence) == 2
+    assert lines.index(report.GAP_DISCLOSURE) == action + 1
+    assert triggers == [action + 2, action + 3]
+    assert lines[-1] == report.REVIEW_GAP_DISCLOSURE
+
+
+@pytest.mark.parametrize("name", FIXED_LINES)
+def test_rc252_the_fixed_lines_are_single_literals_never_in_a_branch(name: str) -> None:
+    tree = ast.parse((APP_ROOT / "forecast" / "report.py").read_text(encoding="utf-8"))
+    assigned = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == name
+    ]
+    assert len(assigned) == 1 and isinstance(assigned[0].value, ast.Constant)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If | ast.IfExp | ast.comprehension):
+            assert name not in ast.unparse(node)
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_rc252_no_new_line_trips_the_d4_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    _stub_triggers(monkeypatch)
+    lines = report.render_status(ForecastStore(_ledger(tmp_path, case=case).path), now=NOW)
+    assert d4_violations(lines, unpassed_hashes=set()) == []
+    wording, templates = approved_copy.f2_wording(), approved_copy.f2_lines()
+    every = [
+        *wording.values(),
+        *(approved_copy.fill(t, *([0] * t.count("／")), **_dummy(t)) for t in templates.values()),
+        approved_copy.fill(wording["second"], 0, 0, **_dummy(wording["second"])),
+    ]
+    assert d4_violations(every, unpassed_hashes=set()) == []
+
+
+def _dummy(template: str) -> dict[str, object]:
+    return {
+        name: "2026-10-05" if name in ("起", "迄", "S_c") else 1
+        for name in approved_copy.placeholders(template)
+        if "／" not in name
+    }

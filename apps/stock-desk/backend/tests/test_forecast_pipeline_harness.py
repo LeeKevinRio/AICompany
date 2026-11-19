@@ -553,6 +553,17 @@ def test_the_output_holds_no_n_hat_while_report_status_does(
     assert report.GAP_DISCLOSURE not in render_summary(result)
     assert report.REVIEW_GAP_DISCLOSURE not in result.output
     assert report.REVIEW_GAP_DISCLOSURE not in render_summary(result)
+    # Supplement 9 point 5 / RC-252: the F-2 section's fixed lines are execution status,
+    # allowed in the full output (supplement 5 point 5), never in the summary.
+    for fixed in (
+        report.F2_TITLE,
+        report.F2_FIRST_HEADING,
+        report.F2_SECOND_HEADING,
+        report.F2_ACTION_LINE,
+    ):
+        assert result.output.count(fixed) == 1
+        assert fixed not in render_summary(result)
+    assert not any("F-2 第二句" in line for line in render_summary(result))
     # The report's own status on the same ledger still lists the review trigger.
     ledger = tmp_path / "work" / harness.LEDGER_NAME
     code = report.main(["status", "--db", str(ledger)], clock=lambda: FIXED_NOW)
