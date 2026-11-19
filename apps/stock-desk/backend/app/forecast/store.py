@@ -1527,10 +1527,11 @@ class ForecastStore:
         """
         if not isinstance(now, datetime) or now.utcoffset() is None:
             raise ForecastStoreError("now must be a timezone-aware datetime")
-        claim = self.claim(claim_id)
+        with self._read() as conn:
+            claim = self._claim(conn, claim_id)
+            runs = [_run_row(row) for row in conn.execute(f"{_RUN_SELECT} ORDER BY r.run_id")]
         if claim is None:
             raise ForecastStoreError("claim_id is not registered")
-        runs = self.runs()
         if not runs:
             return F2Status(
                 claim_id=claim_id, start=None, weekdays=0, full=False, window=None, ever_held=False
