@@ -80,7 +80,8 @@
 - 依據：補充八第 6 點 (b)、S-18a「第 6 點 (b)」；風控 RC-230 定稿（`work/reviews/2026-11-19-report-status缺日加註定稿RC229至RC232-風控.md`「定稿全文：」那一行）。
 - 改檔：`app/forecast/report.py`（模組常數 `GAP_DISCLOSURE`，以腳本自風控報告抽出寫入；`render_execution_status` 的最後一個元素，所以在 `render_status` 中排在重審觸發之前；不因任何資料分支）。
 - 測試：`tests/test_forecast_gap_disclosure.py`——常數與風控報告抽出的字面逐字相同；是最後一個元素；零 claim／有缺口／無缺口三種帳都出現且相同；其餘各行與加入前（測試內獨立組出的預期）逐行相同；`render_status` 中排在重審觸發之前；常數是單一字面、沒有在任何分支中使用（AST）。
-- 之後要增修這一行須重送風控；PR 說明附 RC-230 出處。RC-231（n̂、c₁ 是否也受缺日影響）若答「會」，字面與適用範圍會再調整。
+- 第二行（風控 RC-233、RC-234 定稿，`work/reviews/2026-11-19-重審觸發缺日加註定稿RC233至RC236-風控.md`「第二行定稿全文：」）：常數 `REVIEW_GAP_DISCLOSURE`，`render_review_trigger` 的最後一個元素（即 `render_status` 的最後一個元素），零／一／兩個 claim 都恰好一次；不進 `render_execution_status` 與 harness 輸出。`N_HAT_NOTE` 不改（補充八第 3 點 (f)），有測試釘住。測試 `tests/test_forecast_gap_disclosure.py::test_r1`～`test_r7`；`tests/test_forecast_report.py::d4_violations` 只對這一行的核可字面免除「n̂ 須附固定標示」一條，其餘規則照查。
+- 之後要增修這兩行須重送風控；PR 說明附 RC-230、RC-233／RC-234 出處。RC-231（n̂、c₁ 是否也受缺日影響）若答「會」，字面與適用範圍會再調整。
 
 ---
 
