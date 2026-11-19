@@ -59,8 +59,19 @@ run stamps :data:`LOADED`. Each run also recomputes the digest and the runtime
 of the sources on disk; when they differ from :data:`LOADED` the run logs one
 WARNING line (:data:`DISK_DIFFERS_WARNING`, no label, no value) and carries on
 unchanged -- the program it runs is still the loaded one, so the loaded
-provenance is the true one until the scheduler process is restarted. That is
-the only log line of this module: no output here carries a label (D-4 point 3).
+provenance is the true one until the scheduler process is restarted.
+
+After the run's end row is written, the D-8 point 4 review trigger of every
+forward claim is judged from the store's read-only queries; each claim whose
+T1 or T2 holds gets one WARNING line (:data:`REVIEW_TRIGGER_WARNING`: the
+``claim_id`` and which trigger, nothing else), and a determination that raises
+gets one fixed line instead (:func:`warn_review_triggers`; supplement 5 point
+2). It changes neither the run's result nor any row. These are the only log
+lines of this module: no output here carries a label (D-4 point 3).
+
+The scheduler (``app.scheduler``) imports this module at module level and
+registers job :data:`JOB_ID`; it enters the core only through here (K-3) and
+builds the store with :func:`ledger_store`.
 """
 
 from __future__ import annotations
@@ -124,7 +135,7 @@ from app.outlook.inputs import (
 )
 from app.outlook.missing import MissingItem
 
-#: The job id (D-3 point 7); the wiring PR registers it, this module does not.
+#: The job id (D-3 point 7); ``app.scheduler`` registers it, this module does not.
 JOB_ID: Final = "forecast_record"
 #: The market whose index the core records (D-1 point 1; ADR-0005).
 MARKET: Final[Market] = "TW"
@@ -242,6 +253,48 @@ def warn_if_disk_differs() -> bool:
     return not same
 
 
+# --- D-8 point 4: the review trigger WARNING ------------------------------------------------
+
+#: Supplement 5 point 2: one line per forward claim whose review trigger holds --
+#: the fixed text, the ``claim_id`` and which of T1 / T2 hold; no n-hat, c_1, d_1,
+#: D_v, count, date or label.
+REVIEW_TRIGGER_WARNING: Final = "forecast_record: review trigger holds; claim_id=%s trigger=%s"
+#: The one fixed line logged instead when the determination raises.
+REVIEW_TRIGGER_CHECK_FAILED: Final = (
+    "forecast_record: the review trigger check failed; the run outcome is unchanged"
+)
+
+
+def warn_review_triggers(store: ForecastStore) -> tuple[tuple[str, str], ...]:
+    """D-8 point 4: log one WARNING per forward claim whose T1 or T2 holds (supplement 5 point 2).
+
+    Called after the run's ``forecast_run_end`` row is written, outside any
+    write transaction, so it cannot change the outcome, ``records_written``,
+    ``error_class`` or any row: it only reads (``store.forward_claims`` and
+    ``store.review_trigger``, both read-only queries), with "today" the store
+    clock's Taipei date. Each forward claim is judged on its own (D-8 point 4);
+    a claim without D_v holds neither. Every run logs again while a trigger
+    holds -- no "already logged" state is kept. Any ``Exception`` of the
+    determination logs :data:`REVIEW_TRIGGER_CHECK_FAILED` instead, once, and
+    returns normally; a ``BaseException`` that is not an ``Exception``
+    propagates. Returns the ``(claim_id, which)`` pairs it logged.
+    """
+    try:
+        today = store.now().astimezone(_TAIPEI).date()
+        held: list[tuple[str, str]] = []
+        for claim in store.forward_claims():
+            trigger = store.review_trigger(claim.claim_id, today=today)
+            which = "+".join(name for name, on in (("T1", trigger.t1), ("T2", trigger.t2)) if on)
+            if which:
+                held.append((claim.claim_id, which))
+    except Exception:
+        logger.warning(REVIEW_TRIGGER_CHECK_FAILED)
+        return ()
+    for claim_id, which in held:
+        logger.warning(REVIEW_TRIGGER_WARNING, claim_id, which)
+    return tuple(held)
+
+
 # --- the entry ----------------------------------------------------------------------------
 
 
@@ -294,6 +347,15 @@ class _Captured:
     settling: tuple[date, ...]
 
 
+def ledger_store(db_path: Path) -> ForecastStore:
+    """The ledger store of the scheduled job on ``db_path``, on the system clock (S-6, K-10).
+
+    The scheduler's way to the store: it imports no core module but this one
+    (K-3). It opens nothing; the schema check is the store's, on every write.
+    """
+    return ForecastStore(db_path)
+
+
 def record_forecasts[R](
     store: ForecastStore, *, load_benchmark: BenchmarkLoader[R], resolver: R
 ) -> RunResult:
@@ -313,6 +375,7 @@ def record_forecasts[R](
             records_written=progress.records_written,
             error=exc,
         )
+        warn_review_triggers(store)
         return RunResult(
             run_id=run_id,
             outcome="error",
@@ -327,6 +390,7 @@ def record_forecasts[R](
         records_written=progress.records_written,
         error=stop.error,
     )
+    warn_review_triggers(store)
     return RunResult(
         run_id=run_id,
         outcome=stop.outcome,
