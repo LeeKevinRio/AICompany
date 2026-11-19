@@ -1,4 +1,4 @@
-"""Background scheduler: data refresh, alert evaluation and the sector card's batch.
+"""Background scheduler: data refresh, alerts, the sector card's batch and the forecast recorder.
 
 Runs as ``python -m app.scheduler`` (unchanged, so the compose service command
 does not move) on APScheduler's ``BlockingScheduler``. Two core jobs:
@@ -57,6 +57,17 @@ One more weekday cron job keeps the main DB's ex-dividend events current
     that accumulates, so a missed day costs nothing a later run does not
     recover. No environment variable switches it off or changes what it does.
 
+One more weekday cron job is the forecast ledger core's recorder (ADR-0030):
+
+``forecast_record`` (22:10 and 23:10, Asia/Taipei; once three minutes after start-up)
+    :func:`app.forecast.recorder.record_forecasts` on the main DB, with
+    ``app.services.index.load_market_benchmark`` as its index loader (ADR-0030
+    D-3 point 7, supplement 2 point 1). The only job that enters the forecast
+    core, and only through ``app.forecast.recorder`` (K-3), imported at module
+    level so the recorder's provenance is taken once per process (supplement
+    3 (revised) point 2). It never creates the ledger schema: without it the
+    run is refused (supplement 4 point 2).
+
 Robustness rules, because a scheduler that dies silently is worse than no
 scheduler:
 
@@ -108,7 +119,7 @@ from app.api.deps import (
     get_valuator,
 )
 from app.api.kelly import kelly_inputs_for
-from app.data.cache import BUSY_TIMEOUT_MS
+from app.data.cache import BUSY_TIMEOUT_MS, resolve_db_path
 from app.data.freshness import TW_POLICY, US_POLICY
 from app.data.http import RateLimitedClient
 from app.data.market_panel import MarketPanelStore
@@ -117,6 +128,8 @@ from app.dividends.providers import TWSE_OPENAPI_BASE_URL, DividendFetchResult, 
 from app.dividends.store import DividendEventStore, SyncTrigger
 from app.dividends.sync import DividendFetcher, sync_dividends
 from app.env_status import log_env_status
+from app.forecast.recorder import JOB_ID as FORECAST_RECORD_JOB_ID
+from app.forecast.recorder import RunResult, ledger_store, record_forecasts
 from app.logging_setup import configure_logging
 from app.positions.models import Market
 from app.services.index import load_market_benchmark
@@ -185,6 +198,14 @@ DIVIDEND_SYNC_JOB_ID = "dividend_sync"
 DIVIDEND_SYNC_MINUTE = 50
 #: The CLI's own request spacing (``app.dividends.sync.main``).
 DIVIDEND_SYNC_MIN_INTERVAL_SECONDS = 0.5
+
+#: ADR-0030 D-3 point 7 ``forecast_record``: weekdays 22:10 and the 23:10 retry,
+#: Asia/Taipei, plus one catch-up run three minutes after start-up. The 18:10
+#: run D-3 point 7 allows is not added: it waits for data-engineer's confirmation.
+FORECAST_RECORD_TIMEZONE = "Asia/Taipei"
+FORECAST_RECORD_DAYS = "mon-fri"
+FORECAST_RECORD_TIMES: tuple[time, ...] = (time(22, 10), time(23, 10))
+FORECAST_RECORD_STARTUP_DELAY = timedelta(minutes=3)
 
 logger = logging.getLogger("scheduler")
 
@@ -603,6 +624,62 @@ def run_dividend_sync(
     return result
 
 
+#: The fixed log line of a ``forecast_record`` tick that found no main DB file.
+FORECAST_RECORD_NO_DB = "forecast_record: the main database file does not exist; the run is skipped"
+
+
+def forecast_record_trigger() -> OrTrigger:
+    """The ``forecast_record`` schedule: one weekday cron per time, Asia/Taipei (D-3 point 7)."""
+    return OrTrigger(
+        [
+            CronTrigger(
+                day_of_week=FORECAST_RECORD_DAYS,
+                hour=at.hour,
+                minute=at.minute,
+                timezone=FORECAST_RECORD_TIMEZONE,
+            )
+            for at in FORECAST_RECORD_TIMES
+        ]
+    )
+
+
+def run_forecast_record() -> RunResult | None:
+    """ADR-0030 job ``forecast_record``: one recorder run on the main DB.
+
+    The recorder is the only way into the forecast core (K-3); the index
+    loader is ``app.services.index.load_market_benchmark`` itself (supplement
+    2 point 1, S-4a) and the resolver the process-wide index map, both looked
+    up when the job runs. There is no T, ``as_of``, clock or rule argument
+    (K-10, S-6): the store clock is the system clock (``ledger_store``).
+
+    The main DB is the one every store uses (``resolve_db_path``). When that
+    file does not exist the run is skipped with one WARNING line -- SQLite
+    would otherwise create an empty file on connect; nothing else is created
+    either way. The ledger schema is created only by ``python -m
+    app.forecast.claims bootstrap --production`` (ADR-0030 supplement 4 point
+    2): without it the recorder's first write refuses (``SchemaIncompleteError``
+    propagates to the scheduler's own job error log) and no table is created.
+    One INFO line reports the run's outcome -- no label (D-4 point 3).
+    """
+    db_path = resolve_db_path()
+    if not db_path.is_file():
+        logger.warning(FORECAST_RECORD_NO_DB)
+        return None
+    result = record_forecasts(
+        ledger_store(db_path),
+        load_benchmark=load_market_benchmark,
+        resolver=get_index_resolver(),
+    )
+    logger.info(
+        "forecast_record run: run_id=%d outcome=%s records_written=%d error_class=%s",
+        result.run_id,
+        result.outcome,
+        result.records_written,
+        result.error_class or "none",
+    )
+    return result
+
+
 def _guarded(name: str, job: Callable[[], object]) -> Callable[[], None]:
     """Wrap a job so an exception is logged and the schedule survives it."""
 
@@ -701,10 +778,21 @@ def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingSched
         coalesce=True,
         # No next_run_time: no start-up run (see the module docstring).
     )
+    engine.add_job(
+        _guarded(FORECAST_RECORD_JOB_ID, run_forecast_record),
+        trigger=forecast_record_trigger(),
+        id=FORECAST_RECORD_JOB_ID,
+        name="forecast ledger core: market h3 / h5 record",
+        max_instances=1,
+        coalesce=True,
+        # D-3 point 7: a catch-up run three minutes after start-up.
+        next_run_time=started + FORECAST_RECORD_STARTUP_DELAY,
+    )
     logger.info(
         "scheduler jobs registered: data_refresh at start-up then %s, "
         "alert_evaluation every %d min, %s and %s on weekdays at %s (Asia/Taipei), "
-        "%s on weekdays at %s:%d (Asia/Taipei)",
+        "%s on weekdays at %s:%d (Asia/Taipei), "
+        "%s on weekdays at %s (%s) and once after start-up",
         _data_refresh_plan(data_minutes),
         alert_minutes,
         PIT_CAPTURE_JOB_ID,
@@ -713,6 +801,9 @@ def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingSched
         DIVIDEND_SYNC_JOB_ID,
         SECTOR_JOBS_HOURS,
         DIVIDEND_SYNC_MINUTE,
+        FORECAST_RECORD_JOB_ID,
+        ",".join(at.strftime("%H:%M") for at in FORECAST_RECORD_TIMES),
+        FORECAST_RECORD_TIMEZONE,
     )
     return engine
 

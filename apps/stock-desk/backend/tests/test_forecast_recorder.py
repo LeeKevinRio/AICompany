@@ -1702,12 +1702,10 @@ def test_the_module_level_recorder_import_scan_has_teeth(source: str, ok: bool) 
     assert (_module_level_recorder_import_violations(source) == []) is ok
 
 
-def test_the_scheduler_is_not_wired_yet_so_the_scan_waits() -> None:
-    # The wiring PR asserts _module_level_recorder_import_violations(scheduler) == [].
+def test_the_scheduler_imports_the_recorder_at_module_level() -> None:
+    # Supplement 3 (revised) point 2 / supplement 4 point 1 (c): applied in the wiring PR.
     source = (APP_ROOT / "scheduler.py").read_text(encoding="utf-8")
-    assert _module_level_recorder_import_violations(source) == [
-        "no module-level import of app.forecast.recorder"
-    ]
+    assert _module_level_recorder_import_violations(source) == []
 
 
 # --- K-10, K-4, S-4a call sites -----------------------------------------------------------------
@@ -1761,17 +1759,39 @@ def _referrers(name: str, sources: Mapping[str, str]) -> set[str]:
     return found
 
 
-#: Supplement 2 S-4a. This batch wires nothing, so no app/ module refers to the
-#: entry. The wiring PR changes WIRED_REFERRERS to {"scheduler.py"}, keeps
-#: ``_wiring_violations`` at [] for the scheduler source and adds the ``is``
-#: check on the registered job (``_job_wiring_violations``).
-WIRED_REFERRERS: frozenset[str] = frozenset()
+#: Supplement 2 S-4a: the scheduler is the only app/ module that refers to the
+#: entry; its source passes the index loader by its bare name
+#: (``_wiring_violations``) and the job passes that very object (the ``is``
+#: check, ``tests/test_forecast_scheduler_wiring.py`` and below).
+WIRED_REFERRERS: frozenset[str] = frozenset({"scheduler.py"})
 
 
 def test_s4a_only_the_scheduler_may_refer_to_the_entry() -> None:
     sources = {p: s for p, s in _app_sources().items() if p != "forecast/recorder.py"}
     assert _referrers("record_forecasts", sources) == WIRED_REFERRERS
-    assert "record_forecasts" not in (APP_ROOT / "scheduler.py").read_text(encoding="utf-8")
+    assert _wiring_violations((APP_ROOT / "scheduler.py").read_text(encoding="utf-8")) == []
+
+
+def test_s4a_the_job_passes_the_index_loader_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import scheduler as scheduler_module
+
+    db = tmp_path / "main.db"
+    sqlite3.connect(db).close()
+    monkeypatch.setenv("STOCK_DESK_DB_PATH", str(db))
+    monkeypatch.setattr(scheduler_module, "get_index_resolver", lambda: {})
+    seen: list[Mapping[str, object]] = []
+
+    def spy(store: object, **kwargs: object) -> RunResult:
+        seen.append(kwargs)
+        return RunResult(
+            run_id=1, outcome="ok", candidate_t=None, records_written=0, error_class=None
+        )
+
+    monkeypatch.setattr(scheduler_module, "record_forecasts", spy)
+    scheduler_module.run_forecast_record()
+    assert len(seen) == 1 and _job_wiring_violations(seen[0]) == []
 
 
 def test_the_referrer_scan_has_teeth() -> None:
