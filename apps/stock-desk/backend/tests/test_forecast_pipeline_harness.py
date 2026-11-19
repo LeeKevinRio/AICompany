@@ -547,6 +547,12 @@ def test_the_output_holds_no_n_hat_while_report_status_does(
         text = "\n".join(lines)
         assert not [mark for mark in REVIEW_TRIGGER_MARKS if mark in text]
     assert any(line.startswith("執行狀態（") for line in result.output)
+    # ADR-0030 supplement 8 point 6 (b): the execution status' gap line is in the full
+    # output (once, never in the summary); the review trigger's gap line is not (RC-234 (6)).
+    assert result.output.count(report.GAP_DISCLOSURE) == 1
+    assert report.GAP_DISCLOSURE not in render_summary(result)
+    assert report.REVIEW_GAP_DISCLOSURE not in result.output
+    assert report.REVIEW_GAP_DISCLOSURE not in render_summary(result)
     # The report's own status on the same ledger still lists the review trigger.
     ledger = tmp_path / "work" / harness.LEDGER_NAME
     code = report.main(["status", "--db", str(ledger)], clock=lambda: FIXED_NOW)

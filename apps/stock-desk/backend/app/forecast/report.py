@@ -106,6 +106,16 @@ GAP_DISCLOSURE: Final = (
     "加註：核心不偵測資料來源缺少的交易日；"
     "F-2 計數與格點數值可能與日後驗證時重算的結果不同，F-2 計數可能偏低。"
 )
+#: ADR-0030 supplement 8 point 6 (b), second line (risk RC-233, RC-234): the one fixed
+#: line after every review trigger line -- n-hat and T1 may differ from the validation
+#: layer's recomputation and missing source sessions may make n-hat low. The wording is
+#: the risk-approved text (``work/reviews/2026-11-19-重審觸發缺日加註定稿RC233至RC236-風控.md``,
+#: the line "第二行定稿全文："), copied by script; any change goes back to risk review.
+#: Printed once on every call, whatever the ledger holds.
+REVIEW_GAP_DISCLOSURE: Final = (
+    "加註：重審觸發的 n̂ 與 T1 可能與日後驗證時重算的結果不同；"
+    "資料來源缺少的交易日可能使 n̂ 偏低、T1 較晚成立，此時「近似上界」不一定成立。"
+)
 #: The F-2 section title (supplement 5 point 1: told apart from the prereg's delisting rule F-2).
 F2_TITLE: Final = (
     "ADR-0030 失效條件 F-2（每 20 個平日為一個視窗，逐平日滾動；"
@@ -461,7 +471,11 @@ def render_execution_status(store: ForecastStore, *, now: datetime) -> list[str]
 
 
 def render_review_trigger(store: ForecastStore, *, now: datetime) -> list[str]:
-    """The D-8 point 4 review trigger of each recording claim, n-hat with its fixed note."""
+    """The D-8 point 4 review trigger of each recording claim, n-hat with its fixed note.
+
+    Ends with :data:`REVIEW_GAP_DISCLOSURE`, once, on every call (supplement 8
+    point 6 (b), RC-233 / RC-234); it is the last line of ``status``.
+    """
     today = taipei_date(now)
     lines: list[str] = []
     for claim in _recording_claims(store):
@@ -473,6 +487,8 @@ def render_review_trigger(store: ForecastStore, *, now: datetime) -> list[str]:
             f"n̂={trigger.n_hat}（{N_HAT_NOTE}），d₁={d_1}，"
             f"T1={_yes(trigger.t1)}，T2={_yes(trigger.t2)}"
         )
+    # Supplement 8 point 6 (b), RC-233 / RC-234: always the last line, once.
+    lines.append(REVIEW_GAP_DISCLOSURE)
     return lines
 
 

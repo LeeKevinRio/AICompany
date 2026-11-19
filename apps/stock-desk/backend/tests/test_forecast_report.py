@@ -55,6 +55,7 @@ from app.forecast.recorder import record_forecasts
 from app.forecast.schema import EXPECTED_OBJECTS
 from app.forecast.store import ForecastStore
 from app.services.index import IndexServiceResolver, load_market_benchmark
+from tests.approved_copy import review_gap_line
 from tests.forecast_ledger_helpers import FakeClock, file_ledger, publish_definition
 from tests.import_graph import offenders, reachable_app_modules
 from tests.outlook_helpers import (
@@ -96,6 +97,10 @@ BANNED_WORDS = (
 #: The D-8 point 4 note, as ADR-0030 writes it (not read from the module under test).
 N_HAT_NOTE = "重審觸發用計數（近似上界估計），不是驗證統計，不代表規則有效"
 FIXED_TEXTS = (scoring.PROVISIONAL_BANNER, N_HAT_NOTE)
+#: Risk-approved whole lines that name n-hat without a value (ADR-0030 supplement 8
+#: point 6 (b), RC-233 / RC-234): exempt from the n-hat-with-its-note rule only; every
+#: other rule still applies to them.
+APPROVED_N_HAT_LINES = frozenset({review_gap_line()})
 
 
 def _sessions_ending(last: date, count: int) -> list[date]:
@@ -248,7 +253,7 @@ def d4_violations(lines: Sequence[str], *, unpassed_hashes: set[str]) -> list[st
         if any(digest in line for digest in unpassed_hashes):
             if any(word in line for word in LABEL_WORDS) or "B1=" in line or "模型=" in line:
                 found.append(f"label of an unpassed record: {line}")
-        if "n̂" in line and N_HAT_NOTE not in line:
+        if "n̂" in line and N_HAT_NOTE not in line and line not in APPROVED_N_HAT_LINES:
             found.append(f"n-hat without its note: {line}")
         for cell in re.finditer(r"(?<![A-Za-z0-9_])B[1268]=unavailable(?::([^\s（]*))?", line):
             if cell.group(1) in (None, "", "None"):

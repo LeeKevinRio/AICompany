@@ -9,6 +9,14 @@ the approved text (the line "定稿全文：" of that report, extracted here and
 compared verbatim); it is printed on every call, never branches on data and
 changes no other line. Any change of it goes back to risk review.
 
+The second line (RC-233 / RC-234,
+``work/reviews/2026-11-19-重審觸發缺日加註定稿RC233至RC236-風控.md``, the line
+"第二行定稿全文："): the last element of ``render_review_trigger`` and so of
+``render_status``, once, with zero, one or two claims; it leaves every other
+line, and n-hat, c_1, d_1, T1, T2 and D_v, unchanged, and never reaches the
+execution status or the harness output. ``N_HAT_NOTE`` stays word for word
+(supplement 8 point 3 (f)).
+
 Plus the S-18a point 3 (a)-(c) guards: the wiring PR changes no gap semantics
 (``MISSING_CODES`` is pinned by ``tests/test_outlook_missing_codes.py``).
 """
@@ -18,7 +26,6 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
-import re
 from datetime import date
 from pathlib import Path
 from typing import get_args
@@ -29,6 +36,7 @@ from app.forecast import report
 from app.forecast.schema import EXPECTED_OBJECTS
 from app.forecast.store import ForecastStore, ReviewTrigger, RunOutcome
 from app.outlook.inputs import DropReason
+from tests.approved_copy import f2_gap_line, review_gap_line
 from tests.forecast_ledger_helpers import file_ledger, weekdays
 from tests.test_forecast_bootstrap import EXPECTED_OBJECTS_SHA256
 from tests.test_forecast_f2_window import (
@@ -51,15 +59,8 @@ DAYS = weekdays(MONDAY, 25)
 NOW = after_cutoff(DAYS[-1])
 
 
-def approved_text() -> str:
-    """The text between the backticks of the approval's "定稿全文：" line, exactly once."""
-    found = re.findall(r"^定稿全文：`([^`]+)`$", APPROVAL.read_text(encoding="utf-8"), flags=re.M)
-    assert len(found) == 1
-    return found[0]
-
-
 def test_the_line_is_the_risk_approved_text() -> None:
-    assert report.GAP_DISCLOSURE == approved_text()
+    assert report.GAP_DISCLOSURE == f2_gap_line()
 
 
 def _ledger(tmp_path: Path, *, case: str) -> Ledger:
@@ -68,7 +69,8 @@ def _ledger(tmp_path: Path, *, case: str) -> Ledger:
     if case == "no-claim":
         return built
     built.claim(CLAIM_H3, horizon=3, registered=at(date(2026, 9, 1), 9, 0))
-    built.claim(CLAIM_H5, horizon=5, registered=at(date(2026, 9, 1), 9, 1))
+    if case != "one-claim":
+        built.claim(CLAIM_H5, horizon=5, registered=at(date(2026, 9, 1), 9, 1))
     built.run(at(MONDAY))
     recorded_window(built, [d for d in DAYS if case != "gap" or d != DAYS[10]])
     return built
@@ -247,3 +249,113 @@ def test_no_holiday_data_is_added_to_app() -> None:
         if path.is_file() and path.suffix.lower() in {".json", ".csv", ".txt", ".ics", ".toml"}
     )
     assert data_files == []
+
+
+# --- the second line: after the review trigger lines (RC-233 / RC-234) --------------------------
+
+#: The fixed n-hat note as it was before the wiring PR (9d5bbf48); it must not change.
+N_HAT_NOTE_BEFORE = "重審觸發用計數（近似上界估計），不是驗證統計，不代表規則有效"
+
+
+def _stub_triggers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fixed trigger values: the synthetic registry rows carry no real definition JSON."""
+
+    def review_trigger(self: ForecastStore, claim_id: str, *, today: date) -> ReviewTrigger:
+        horizon = 3 if "|h3|" in claim_id else 5
+        return ReviewTrigger(
+            claim_id=claim_id,
+            horizon=horizon,
+            c1=30,
+            d_v=MONDAY,
+            n_hat=4 + horizon,
+            d_1=date(2027, 3, 1),
+            t1=False,
+            t2=horizon == 3,
+        )
+
+    monkeypatch.setattr(ForecastStore, "review_trigger", review_trigger)
+
+
+def test_r1_the_second_line_is_the_risk_approved_text() -> None:
+    assert report.REVIEW_GAP_DISCLOSURE == review_gap_line()
+
+
+def test_the_n_hat_note_is_unchanged() -> None:
+    assert report.N_HAT_NOTE == N_HAT_NOTE_BEFORE
+
+
+@pytest.mark.parametrize("case", ("no-claim", "one-claim", "whole", "gap"))
+def test_r2_r3_the_second_line_is_last_and_printed_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    _stub_triggers(monkeypatch)
+    store = ForecastStore(_ledger(tmp_path, case=case).path)
+    status = report.render_status(store, now=NOW)
+    review = report.render_review_trigger(store, now=NOW)
+    assert status[-1] == review[-1] == report.REVIEW_GAP_DISCLOSURE
+    assert status.count(report.REVIEW_GAP_DISCLOSURE) == 1
+    assert review.count(report.REVIEW_GAP_DISCLOSURE) == 1
+    claims = {"no-claim": 0, "one-claim": 1}.get(case, 2)
+    assert sum(line.startswith("重審觸發（") for line in review) == claims
+
+
+def test_r4_the_second_line_is_the_same_with_and_without_a_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_triggers(monkeypatch)
+    lasts = {
+        report.render_status(ForecastStore(_ledger(tmp_path / c, case=c).path), now=NOW)[-1]
+        for c in ("whole", "gap")
+    }
+    assert lasts == {report.REVIEW_GAP_DISCLOSURE}
+
+
+def test_r5_no_other_line_or_value_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_triggers(monkeypatch)
+    store = ForecastStore(_ledger(tmp_path, case="whole").path)
+    review = report.render_review_trigger(store, now=NOW)
+    assert review[:-1] == [
+        f"重審觸發（{CLAIM_H3}）：D_v={MONDAY.isoformat()}，c₁=30，"
+        f"n̂=7（{N_HAT_NOTE_BEFORE}），d₁=2027-03-01，T1=未成立，T2=成立",
+        f"重審觸發（{CLAIM_H5}）：D_v={MONDAY.isoformat()}，c₁=30，"
+        f"n̂=9（{N_HAT_NOTE_BEFORE}），d₁=2027-03-01，T1=未成立，T2=未成立",
+    ]
+    before = report.render_status(store, now=NOW)
+    monkeypatch.setattr(report, "REVIEW_GAP_DISCLOSURE", "another text")
+    after = report.render_status(store, now=NOW)
+    assert before[:-1] == after[:-1] and after[-1] == "another text"
+
+
+def test_r6_the_second_line_is_not_in_the_execution_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_triggers(monkeypatch)
+    for case in ("no-claim", "whole"):
+        store = ForecastStore(_ledger(tmp_path / case, case=case).path)
+        assert report.REVIEW_GAP_DISCLOSURE not in report.render_execution_status(store, now=NOW)
+    # The harness output (tests/test_forecast_pipeline_harness.py) is checked there.
+
+
+def test_r7_the_first_line_precedes_every_review_trigger_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_triggers(monkeypatch)
+    lines = report.render_status(ForecastStore(_ledger(tmp_path, case="whole").path), now=NOW)
+    first = lines.index(report.GAP_DISCLOSURE)
+    assert all(first < i for i, line in enumerate(lines) if line.startswith("重審觸發（"))
+    assert first < lines.index(report.REVIEW_GAP_DISCLOSURE)
+
+
+def test_the_second_line_is_a_module_constant_used_without_a_branch() -> None:
+    tree = ast.parse((APP_ROOT / "forecast" / "report.py").read_text(encoding="utf-8"))
+    assigned = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "REVIEW_GAP_DISCLOSURE"
+    ]
+    assert len(assigned) == 1 and isinstance(assigned[0].value, ast.Constant)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If | ast.IfExp | ast.comprehension):
+            assert "REVIEW_GAP_DISCLOSURE" not in ast.unparse(node)
