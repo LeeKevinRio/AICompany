@@ -79,7 +79,17 @@ DAYS = _days(331)
 GAP = DAYS[-100]
 
 
-def _run(root: Path, monkeypatch: pytest.MonkeyPatch, bars: list[PriceBar]) -> Path:
+def _run(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bars: list[PriceBar],
+    *,
+    earlier: tuple[date, list[PriceBar]] | None = None,
+) -> Path:
+    """Register the two claims and run the recorder at LAST 22:10 on ``bars``.
+
+    ``earlier``: one run before that, at the given day's 22:10 on its own bars.
+    """
     root.mkdir(parents=True)
     publish_definition(monkeypatch, definition())
     entries = {
@@ -106,6 +116,14 @@ def _run(root: Path, monkeypatch: pytest.MonkeyPatch, bars: list[PriceBar]) -> P
             replaces_claim_id=None,
             replace_reason=None,
             provisional_results_seen=False,
+        )
+    if earlier is not None:
+        day, earlier_bars = earlier
+        clock.now = datetime.combine(day, time(22, 10), TAIPEI)
+        first: IndexServiceResolver = {"TW": FakeIndexService(earlier_bars)}
+        assert (
+            record_forecasts(store, load_benchmark=load_market_benchmark, resolver=first).outcome
+            == "ok"
         )
     clock.now = datetime.combine(LAST, time(22, 10), TAIPEI)
     resolver: IndexServiceResolver = {"TW": FakeIndexService(bars)}
@@ -172,8 +190,9 @@ def test_a_missing_session_is_kept_as_a_gap_and_judged_by_the_same_rules(
 def test_a_missing_t_falls_back_to_the_previous_final_bar_late(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Supplement 8 point 2 (b): the source has no row for T (LAST). The run at T's 22:10
-    # takes T-1 as the latest final bar; T-1's cutoff has passed, so the record is late.
+    # Supplement 8 point 2 (b): the source has no row for T (LAST) and T-1 was never
+    # recorded. The run at LAST 22:10 takes T-1 as the latest final bar; T-1's cutoff has
+    # passed, so this fixture's one outcome is ok with two late = 1 records of T-1.
     bars = [bar for bar in _bars(DAYS) if bar.date != LAST]
     path = _run(tmp_path / "no-t", monkeypatch, bars)
     (series,) = _rows(path, "SELECT bars_json, dropped_rows_json FROM forecast_input_series")
@@ -181,13 +200,28 @@ def test_a_missing_t_falls_back_to_the_previous_final_bar_late(
     assert LAST.isoformat() not in days and days[-1] == DAYS[-2].isoformat()
     assert LAST.isoformat() not in series["dropped_rows_json"]
     (end,) = _rows(path, "SELECT outcome, candidate_t FROM forecast_run_end")
+    assert (end["outcome"], end["candidate_t"]) == ("ok", DAYS[-2].isoformat())
     records = _rows(path, "SELECT data_as_of, late, label, missing_json FROM forecast_record")
-    if end["outcome"] == "no_new_session":
-        assert records == []
-    else:
-        assert end["outcome"] == "ok" and len(records) == 2
-        for record in records:
-            assert (record["data_as_of"], record["late"]) == (DAYS[-2].isoformat(), 1)
-            codes = {item["code"] for item in json.loads(record["missing_json"])}
-            assert codes <= set(MISSING_CODES)
-            assert bool(codes) == (record["label"] == "insufficient")
+    assert len(records) == 2
+    for record in records:
+        assert (record["data_as_of"], record["late"]) == (DAYS[-2].isoformat(), 1)
+        codes = {item["code"] for item in json.loads(record["missing_json"])}
+        assert codes <= set(MISSING_CODES)
+        assert bool(codes) == (record["label"] == "insufficient")
+
+
+def test_a_missing_t_after_t_minus_1_was_recorded_is_no_new_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Supplement 8 point 2 (b), the other outcome: T-1 was recorded on time the evening
+    # before, so the run at LAST 22:10 finds no new session and writes nothing more.
+    bars = [bar for bar in _bars(DAYS) if bar.date != LAST]
+    path = _run(tmp_path / "no-t-seen", monkeypatch, bars, earlier=(DAYS[-2], bars))
+    ends = _rows(path, "SELECT outcome, candidate_t FROM forecast_run_end ORDER BY run_id")
+    assert [(e["outcome"], e["candidate_t"]) for e in ends] == [
+        ("ok", DAYS[-2].isoformat()),
+        ("no_new_session", DAYS[-2].isoformat()),
+    ]
+    records = _rows(path, "SELECT data_as_of, late FROM forecast_record")
+    assert [(r["data_as_of"], r["late"]) for r in records] == [(DAYS[-2].isoformat(), 0)] * 2
+    assert len(_rows(path, "SELECT 1 FROM forecast_input_series")) == 1
