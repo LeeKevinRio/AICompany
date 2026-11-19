@@ -70,7 +70,10 @@ Read-only queries: ``first_record_at`` and "counts toward m" are the D-2 point
 ``(scope_kind, horizon)`` (D-6 CG-2); ``d_v`` and ``n_hat`` follow D-8 point 4,
 over the one grid definition ``phase0_grid`` (which also gives the F-2
 phase-0 grid point loss count), and ``review_trigger`` derives d_1 and whether
-T1 or T2 holds (D-8 point 4: only from this module's read-only queries).
+T1 or T2 holds (D-8 point 4: only from this module's read-only queries);
+``f2_status`` derives the counts and the verdict of failure condition F-2's
+first sentence over its rolling 20-weekday windows (supplement 5 point 1:
+only here).
 For the operator report (``report.py``): ``registered_material`` (the stored
 rule bytes and definition JSON, D-5 points 2-3), ``runs``,
 ``snapshot_digests``, ``on_time_sessions`` and ``ledger_schema_status``.
@@ -83,6 +86,7 @@ one definition), so the D-5 point 6 recomputation compares like with like.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import secrets
@@ -95,8 +99,9 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Final, Literal, get_args
+from zoneinfo import ZoneInfo
 
-from app.data.freshness import next_weekday
+from app.data.freshness import TW_POLICY, next_weekday
 from app.data.session_calendar import is_final
 from app.dirdef.definition import (
     DirectionDefinition,
@@ -409,6 +414,14 @@ def replacement_violations(forward: Sequence[ClaimRow]) -> list[str]:
     return found
 
 
+_TAIPEI: Final = ZoneInfo(TW_POLICY.timezone)
+
+
+def _taipei_date(moment: datetime) -> date:
+    """The Asia/Taipei calendar date of an aware timestamp."""
+    return moment.astimezone(_TAIPEI).date()
+
+
 def _weekdays_after(day: date, count: int) -> date:
     """``day`` moved by ``count`` Monday-Friday days; exchange holidays are not modelled."""
     for _ in range(count):
@@ -473,6 +486,56 @@ class ReviewTrigger:
     @property
     def triggered(self) -> bool:
         return self.t1 or self.t2
+
+
+#: ADR-0030 failure condition F-2, first sentence (supplement 5 point 1): weekdays per window.
+F2_WINDOW_WEEKDAYS: Final = 20
+#: (f) fewer than 20 weekdays since the start: F-2 holds when the numerator exceeds this.
+F2_SHORT_WINDOW_LIMIT: Final = 6
+#: (e) F-2 holds when numerator / denominator exceeds 3 / 10 (compared in integers).
+F2_RATIO_NUMERATOR: Final = 3
+F2_RATIO_DENOMINATOR: Final = 10
+
+
+@dataclass(frozen=True)
+class F2Window:
+    """One F-2 window of one claim: its calendar range, the two numerator terms, the verdict.
+
+    ``denominator`` is ``None`` for the short range of (f) (fewer than 20
+    weekdays since the start), where the verdict is ``numerator > 6``.
+    """
+
+    first: date
+    last: date
+    missed_sessions: int
+    not_ready_days: int
+    denominator: int | None
+    holds: bool
+
+    @property
+    def numerator(self) -> int:
+        """(d): the two terms added as they are, overlaps not deducted."""
+        return self.missed_sessions + self.not_ready_days
+
+
+@dataclass(frozen=True)
+class F2Status:
+    """F-2 (first sentence) for one claim, as :meth:`ForecastStore.f2_status` derives it.
+
+    ``start`` is S_c, ``None`` when there is no ``forecast_run`` yet;
+    ``weekdays`` the weekdays since S_c whose ``late_cutoff_at`` has passed;
+    ``window`` the latest full window when ``full``, else the short range of
+    (f) (``None`` when there is no such weekday); ``ever_held`` whether any
+    full window since S_c held (or, before the first full window, the short
+    range holds).
+    """
+
+    claim_id: str
+    start: date | None
+    weekdays: int
+    full: bool
+    window: F2Window | None
+    ever_held: bool
 
 
 @dataclass(frozen=True)
@@ -1438,6 +1501,100 @@ class ForecastStore:
             d_1=d_1,
             t1=start is not None and grid.n_hat >= -(-c1 // 2),
             t2=d_1 is not None and today >= d_1 - timedelta(days=REVIEW_T2_DAYS),
+        )
+
+    def f2_status(self, claim_id: str, *, now: datetime) -> F2Status:
+        """ADR-0030 failure condition F-2, first sentence, for one claim (supplement 5 point 1).
+
+        (a) Weekdays are Monday-Friday, holidays not deducted, enumerated by
+        :func:`_weekdays_after` -- the function T2 uses; dates are Taipei
+        dates; a weekday D enters only once ``late_cutoff_at(D) <= now``, so
+        the current day is never counted. (b) S_c = max(Taipei date of the
+        claim's ``registered_at``, Taipei date of the first ``forecast_run``'s
+        ``started_at``); S_c itself counts when it is a weekday. (c) Every
+        run of 20 consecutive weekdays from S_c is a window, rolling by one
+        weekday; its calendar range runs from its first to its last weekday,
+        weekends included; F-2 has held once any full window held. (d) The
+        numerator adds, as they are, the final sessions in the range (the
+        union over every snapshot, :meth:`final_sessions`, n-hat's query)
+        without a ``late = 0`` record of the claim, and the Taipei dates in
+        the range with at least one ``inputs_not_ready`` run (one per date).
+        (e) The denominator is min(20, final sessions in the range); a full
+        window holds when numerator > 30 % of it. (f) With fewer than 20
+        weekdays the range is every weekday since S_c and holds when the
+        numerator exceeds 6. ``now`` is the caller's reading of the clock (the
+        report's), not a stored value. Read-only.
+        """
+        if not isinstance(now, datetime) or now.utcoffset() is None:
+            raise ForecastStoreError("now must be a timezone-aware datetime")
+        claim = self.claim(claim_id)
+        if claim is None:
+            raise ForecastStoreError("claim_id is not registered")
+        runs = self.runs()
+        if not runs:
+            return F2Status(
+                claim_id=claim_id, start=None, weekdays=0, full=False, window=None, ever_held=False
+            )
+        start = max(
+            _taipei_date(claim.registered_at),
+            min(_taipei_date(run.started_at) for run in runs),
+        )
+        eligible: list[date] = []
+        day = _weekdays_after(start - timedelta(days=1), 1)
+        while late_cutoff_at(day) <= now:
+            eligible.append(day)
+            day = _weekdays_after(day, 1)
+        sessions = self.final_sessions()
+        on_time = self.on_time_sessions(claim_id)
+        missed = [session for session in sessions if session not in on_time]
+        not_ready = sorted(
+            {_taipei_date(run.started_at) for run in runs if run.outcome == "inputs_not_ready"}
+        )
+
+        def within(days: Sequence[date], first: date, last: date) -> int:
+            return bisect.bisect_right(days, last) - bisect.bisect_left(days, first)
+
+        def window(first: date, last: date, *, full: bool) -> F2Window:
+            missed_count = within(missed, first, last)
+            not_ready_count = within(not_ready, first, last)
+            numerator = missed_count + not_ready_count
+            denominator: int | None = None
+            if full:
+                limit = min(F2_WINDOW_WEEKDAYS, within(sessions, first, last))
+                denominator = limit
+                holds = numerator * F2_RATIO_DENOMINATOR > limit * F2_RATIO_NUMERATOR
+            else:
+                holds = numerator > F2_SHORT_WINDOW_LIMIT
+            return F2Window(
+                first=first,
+                last=last,
+                missed_sessions=missed_count,
+                not_ready_days=not_ready_count,
+                denominator=denominator,
+                holds=holds,
+            )
+
+        if len(eligible) < F2_WINDOW_WEEKDAYS:
+            short = window(eligible[0], eligible[-1], full=False) if eligible else None
+            return F2Status(
+                claim_id=claim_id,
+                start=start,
+                weekdays=len(eligible),
+                full=False,
+                window=short,
+                ever_held=short is not None and short.holds,
+            )
+        windows = [
+            window(eligible[index], eligible[index + F2_WINDOW_WEEKDAYS - 1], full=True)
+            for index in range(len(eligible) - F2_WINDOW_WEEKDAYS + 1)
+        ]
+        return F2Status(
+            claim_id=claim_id,
+            start=start,
+            weekdays=len(eligible),
+            full=True,
+            window=windows[-1],
+            ever_held=any(item.holds for item in windows),
         )
 
     def registered_material(self, claim_id: str) -> RegisteredMaterial:

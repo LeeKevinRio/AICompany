@@ -5,11 +5,13 @@ by D-4 points 3 and 5); D-5 points 3 and 5; D-8 point 4. Commands, each with
 ``--db PATH``:
 
 * ``status`` -- execution status only (D-4 point 5, F-2): the number of runs
-  per ``outcome`` (and without an end row), the ``inputs_not_ready`` days, the
-  F-2 counts over the latest 20 weekdays (``inputs_not_ready`` days; per
-  recording claim, the final sessions of the latest snapshot without a
-  ``late = 0`` record), the phase-0 grid points and how many have no
-  ``late = 0`` record, and per recording claim the D-8 point 4 review trigger:
+  per ``outcome`` (and without an end row), the ``inputs_not_ready`` days, per
+  recording claim failure condition F-2's first sentence over its rolling
+  20-weekday windows (ADR-0030 supplement 5 point 1: the latest full window's
+  range, its two numerator terms, denominator and verdict, and whether any
+  window since the start held -- all derived by ``store.f2_status``), the
+  phase-0 grid points and how many have no ``late = 0`` record, and per
+  recording claim the D-8 point 4 review trigger:
   D_v, c_1, n-hat with :data:`N_HAT_NOTE`, d_1, T1, T2 (all derived by
   ``store.py``'s read-only queries). No label, no comparison. The two parts
   are :func:`render_execution_status` and :func:`render_review_trigger`; the
@@ -70,7 +72,7 @@ import sqlite3
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Final, get_args
 from zoneinfo import ZoneInfo
@@ -81,6 +83,7 @@ from app.forecast.canonical import content_sha256
 from app.forecast.errors import exception_class_name
 from app.forecast.store import (
     ClaimRow,
+    F2Status,
     ForecastStore,
     ForecastStoreError,
     LedgerInconsistentError,
@@ -92,8 +95,11 @@ from app.outlook.inputs import MarketSnapshot
 
 #: D-8 point 4 / D-4 point 5: the fixed note n-hat is always printed with.
 N_HAT_NOTE: Final = "重審觸發用計數（近似上界估計），不是驗證統計，不代表規則有效"
-#: F-2: the number of weekdays its counts are taken over.
-F2_WEEKDAYS: Final = 20
+#: The F-2 section title (supplement 5 point 1: told apart from the prereg's delisting rule F-2).
+F2_TITLE: Final = (
+    "ADR-0030 失效條件 F-2（每 20 個平日為一個視窗，逐平日滾動；"
+    "只含執行狀態，不含任何標籤或對照）："
+)
 
 EXIT_OK: Final = 0
 EXIT_INCONSISTENT: Final = 1
@@ -361,19 +367,28 @@ def render_verify(checked: Sequence[VerifiedRecord]) -> list[str]:
 # --- status -----------------------------------------------------------------------------
 
 
-def f2_window(today: date) -> tuple[date, ...]:
-    """The :data:`F2_WEEKDAYS` Monday-Friday days before ``today``, ascending."""
-    days: list[date] = []
-    day = today
-    while len(days) < F2_WEEKDAYS:
-        day -= timedelta(days=1)
-        if day.weekday() < 5:
-            days.append(day)
-    return tuple(reversed(days))
-
-
 def _yes(value: bool) -> str:
     return "成立" if value else "未成立"
+
+
+def _f2_line(status: F2Status) -> str:
+    """One claim's F-2 line (supplement 5 point 1 (g)); counts and verdicts come from the store."""
+    head = f"  {status.claim_id}："
+    item = status.window
+    if item is None:
+        return f"{head}視窗未滿（尚無執行）" if status.start is None else f"{head}視窗未滿"
+    counts = (
+        f"沒有 late = 0 紀錄的定案 session 數 {item.missed_sessions}，"
+        f"inputs_not_ready 日數 {item.not_ready_days}"
+    )
+    span = f"{item.first.isoformat()}～{item.last.isoformat()}"
+    if status.full:
+        return (
+            f"{head}最近一個完整視窗 {span}，{counts}，分母 {item.denominator}，"
+            f"{_yes(item.holds)}；自起點以來曾否成立：{'是' if status.ever_held else '否'}"
+        )
+    verdict = "成立" if item.holds else "視窗未滿"
+    return f"{head}視窗未滿（自起點以來 {status.weekdays} 個平日：{span}），{counts}，{verdict}"
 
 
 def render_status(store: ForecastStore, *, now: datetime) -> list[str]:
@@ -396,9 +411,9 @@ def render_execution_status(store: ForecastStore, *, now: datetime) -> list[str]
     """``status`` without the review trigger: runs per outcome and the F-2 counts.
 
     No n-hat and no T1 / T2: the pipeline acceptance harness prints only this
-    part (ADR-0030 supplement 5 point 5, C5-1).
+    part (ADR-0030 supplement 5 point 5, C5-1). The F-2 lines print what
+    ``store.f2_status`` derived; this module counts nothing for F-2 (C5-3).
     """
-    today = taipei_date(now)
     runs = store.runs()
     counts = {outcome: 0 for outcome in get_args(RunOutcome)}
     interrupted = 0
@@ -410,38 +425,16 @@ def render_execution_status(store: ForecastStore, *, now: datetime) -> list[str]
     not_ready_days = sorted(
         {taipei_date(run.started_at) for run in runs if run.outcome == "inputs_not_ready"}
     )
-    window = f2_window(today)
     recording = _recording_claims(store)
-    digests = store.snapshot_digests()
-    latest = (
-        {date.fromisoformat(str(bar["session_date"])) for bar in store.snapshot(digests[-1]).bars}
-        if digests
-        else set()
-    )
     lines = [
         "執行狀態（只含執行狀態，不含任何標籤或對照）",
         "執行次數："
         + "，".join(f"{outcome}={count}" for outcome, count in counts.items())
         + f"，沒有 end 列={interrupted}",
         f"inputs_not_ready 日數（全部期間，台北日期）：{len(not_ready_days)}",
-        f"F-2 計數（最近 {F2_WEEKDAYS} 個平日：{window[0].isoformat()} 起至"
-        f" {window[-1].isoformat()}）：",
-        "  inputs_not_ready 日數："
-        f"{sum(1 for day in not_ready_days if window[0] <= day <= window[-1])}",
+        F2_TITLE,
     ]
-    for claim in recording:
-        on_time = store.on_time_sessions(claim.claim_id)
-        registered = taipei_date(claim.registered_at)
-        missed = sum(
-            1
-            for session in latest
-            if window[0] <= session <= window[-1]
-            and session >= registered
-            and session not in on_time
-        )
-        lines.append(
-            f"  {claim.claim_id}：最新快照中出現、但沒有 late = 0 紀錄的定案 session 數：{missed}"
-        )
+    lines.extend(_f2_line(store.f2_status(claim.claim_id, now=now)) for claim in recording)
     for claim in recording:
         grid = store.phase0_grid(claim.claim_id)
         lines.append(

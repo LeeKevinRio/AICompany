@@ -658,17 +658,29 @@ def test_status_n_hat_without_its_note_is_caught(
 
 
 def test_status_counts_the_f2_window(ledger: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    window = report.f2_window(report.taipei_date(NOW))
-    assert len(window) == report.F2_WEEKDAYS and window[-1] == date(2026, 11, 16)
-    assert all(day.weekday() < 5 for day in window)
+    # ADR-0030 supplement 5 point 1: the start is the first run (the claims were
+    # registered on 2026-10-01, before it); at NOW the weekdays whose cutoff has passed
+    # run from the first run's day to Monday 2026-11-16 -- fewer than 20, so the range
+    # is short; every recorded session has a late = 0 record.
     _, lines = _run(ledger, "status", capsys=capsys)
-    # The latest snapshot ends on LAST; every recorded session has a late = 0 record,
-    # the window sessions before the first run do not (registered 2026-10-01).
-    missed = [line for line in lines if "沒有 late = 0 紀錄的定案 session 數" in line]
-    expected = sum(
-        1 for day in window if day <= LAST and day not in set(_sessions_ending(LAST, RUNS))
+    assert report.F2_TITLE in lines
+    first = _sessions_ending(LAST, RUNS)[0]
+    weekdays_since = len(_sessions_ending(date(2026, 11, 16), 40)) - len(
+        [d for d in _sessions_ending(date(2026, 11, 16), 40) if d < first]
     )
-    assert [int(line.rsplit("：", 1)[1]) for line in missed] == [expected, expected]
+    f2 = [line for line in lines if line.startswith("  ") and "視窗未滿（自起點以來" in line]
+    assert f2 == [
+        f"  {claim}：視窗未滿（自起點以來 {weekdays_since} 個平日："
+        f"{first.isoformat()}～2026-11-16），沒有 late = 0 紀錄的定案 session 數 0，"
+        "inputs_not_ready 日數 0，視窗未滿"
+        for claim in sorted_claims(ledger)
+    ]
+    assert d4_violations(lines, unpassed_hashes=set()) == []
+
+
+def sorted_claims(ledger: Path) -> list[str]:
+    recording = ForecastStore(ledger).recording_claims()
+    return [recording[key].claim_id for key in sorted(recording)]
 
 
 # --- read-only ---------------------------------------------------------------------------------
