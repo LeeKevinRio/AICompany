@@ -67,6 +67,13 @@
 - 依據：派工的「不得動」清單；D-8 第 6 點；補充七「不改……已登記雜湊」。
 - 內容：`app/dirdef/`、`app/outlook/rules/*.yaml`、`uv.lock`、所有 `.gitattributes`、事先宣告、C-8 紀錄檔、`scripts/pipeline_acceptance_real.py`、`pipeline-acceptance.bat`、`work/dispatch/` 兩份 CEO 操作說明、`scripts/cg2_register.py`、`scripts/verify_cg2_instruction.py`、兩個 `cg2-*.bat` 及其測試：對 `origin/feat/nm5-cg2-registration` 零差異（交件附 `git diff --stat`）。definition／rules 雜湊以既有 M-4、M-5 測試證明不變（交件附測試名稱與結果）。
 
+### W-8 缺日（來源整列缺席）的特性測試（2026-11-19 補入，coordinator 轉 TA 裁示第 5 題）〔做〕
+- 依據：`work/reviews/2026-11-19-缺日靜默丟列與登記先後裁示-tech-architect.md` 第 5 題；ADR D-8 第 3 點（已接受的限制，修補留給驗證層 ADR）。
+- 改檔：只加 `tests/test_forecast_missing_session_characterization.py`。
+- 內容：合成中間缺一個 session 的 bars，斷言 (1) 快照照原樣保存、缺口保留、沒有補值；(2) `dropped_rows_json` 不含該日；(3) outcome 與 `missing_json` 與沒有缺口時相同，missing code 不出 `MISSING_CODES`。docstring 引用 D-8 第 3 點並註明「已知限制，修補見後續 ADR」。
+- 本 PR **不得**：改 `app/outlook/**`、`app/forecast/**`、`app/dirdef/**`、`app/data/session_calendar.py` 中與缺日有關的行為；新增 `DropReason` 值、`MISSING_CODES` 成員、outcome 值、表或欄位；在 `app/` 內新增交易日曆；以缺口或開盤值作為 recorder 的分支或拒收條件；改 `app/data/providers/yfinance.py`、`app/data/cache.py`、`app/services/index.py`。
+- 已知盲點（只記，不處理）：補充五第 1 點 (d) 的 F-2 分子取「快照中定案 session 的聯集」，來源永久缺席的 session 不會進分子，F-2 會偏低。
+
 ---
 
 ## 二、不改程式、由 qa／coordinator 在合併時核對〔流程〕
@@ -122,8 +129,9 @@
 
 ## 五、新增的使用者面字面（操作者報告 `python -m app.forecast.report status`；log 以外，送風控）
 
-實作後在交件報告逐字列出最終版本；預計為：
-- 段標題：`ADR-0030 失效條件 F-2（連續 20 個平日的遺失計數；只含執行狀態，不含任何標籤或對照）`
+實作後在交件報告逐字列出最終版本；預計為（段標題實作時改掉「連續」二字，因 D-4 第 5 點禁「連續…計數」類字樣，既有 `d4_violations` 測試擋下）：
+- 段標題：`ADR-0030 失效條件 F-2（每 20 個平日為一個視窗，逐平日滾動；只含執行狀態，不含任何標籤或對照）：`
+- 有起點但還沒有任何合格平日時：`  {claim_id}：視窗未滿`
 - 每個 claim 一行（完整視窗）：`  {claim_id}：最近一個完整視窗 {起}～{迄}，沒有 late = 0 紀錄的定案 session 數 {a}，inputs_not_ready 日數 {b}，分母 {d}，{成立／未成立}；自起點以來曾否成立：{是／否}`
 - 每個 claim 一行（視窗未滿）：`  {claim_id}：視窗未滿（自起點以來 {k} 個平日：{起}～{迄}），沒有 late = 0 紀錄的定案 session 數 {a}，inputs_not_ready 日數 {b}，{成立／視窗未滿}`
 - 沒有任何執行時：`  {claim_id}：視窗未滿（尚無執行）`
