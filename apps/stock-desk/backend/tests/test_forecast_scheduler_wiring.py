@@ -178,6 +178,71 @@ def test_k3_the_scheduler_reaches_no_core_module_the_recorder_does_not() -> None
     assert via_scheduler <= via_recorder
 
 
+#: qa N-2: outside the three core packages, the one app/ module that imports any of them,
+#: and what it imports (by import statement, the whole of app/).
+CORE_IMPORTERS_OUTSIDE = {"scheduler.py": {"app.forecast.recorder"}}
+#: Inside the core, the package-level imports as they stand (K-2 direction).
+CORE_PACKAGE_IMPORTS = {"forecast": {"outlook", "dirdef"}, "outlook": {"dirdef"}}
+
+
+def _core_imports_by_file(sources: Mapping[str, str]) -> dict[str, set[str]]:
+    found: dict[str, set[str]] = {}
+    for path, source in sources.items():
+        names = set(_core_imports(ast.parse(source)))
+        if names:
+            found[path] = names
+    return found
+
+
+def _app_sources() -> dict[str, str]:
+    return {
+        path.relative_to(APP_ROOT).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(APP_ROOT.rglob("*.py"))
+    }
+
+
+def _outside(sources: Mapping[str, str]) -> dict[str, str]:
+    return {
+        path: source
+        for path, source in sources.items()
+        if path.split("/", 1)[0] not in ("forecast", "outlook", "dirdef")
+    }
+
+
+def _package_imports(sources: Mapping[str, str]) -> dict[str, set[str]]:
+    found: dict[str, set[str]] = {}
+    for path, names in _core_imports_by_file(sources).items():
+        package = path.split("/", 1)[0]
+        if package not in ("forecast", "outlook", "dirdef"):
+            continue
+        for name in names:
+            target = name.split(".")[1]
+            if target != package:
+                found.setdefault(package, set()).add(target)
+    return found
+
+
+def test_n2_only_the_scheduler_imports_the_core_from_outside_it() -> None:
+    assert _core_imports_by_file(_outside(_app_sources())) == CORE_IMPORTERS_OUTSIDE
+
+
+def test_n2_the_core_package_imports_are_as_they_stand() -> None:
+    assert _package_imports(_app_sources()) == CORE_PACKAGE_IMPORTS
+
+
+def test_n2_the_whole_app_scans_have_teeth() -> None:
+    sources = {
+        **_app_sources(),
+        "services/x.py": "from app.forecast import store\n",
+        "api/y.py": "import app.outlook.engine\n",
+    }
+    found = _core_imports_by_file(_outside(sources))
+    assert found != CORE_IMPORTERS_OUTSIDE
+    assert set(found) == {"scheduler.py", "services/x.py", "api/y.py"}
+    reverse = {**_app_sources(), "dirdef/z.py": "from app.forecast.store import ForecastStore\n"}
+    assert _package_imports(reverse) != CORE_PACKAGE_IMPORTS
+
+
 def test_the_scheduler_calls_no_schema_or_registration_writer() -> None:
     called = {
         node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
