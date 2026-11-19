@@ -6,9 +6,12 @@ when the source has no row for a session -- e.g. the adapter dropped a row with
 missing values -- the core does not detect the missing day. The snapshot keeps
 the gap, nothing is filled in, ``dropped_rows_json`` does not name it, and the
 outcome and ``missing_json`` follow the same rules as without the gap (no new
-code). The repair belongs to a later ADR (the validation layer, D-8 point 3's
-frozen appendix); this test pins today's behaviour so the wiring PR cannot
-change it silently.
+code). When the missing day is T itself, the run takes the latest final bar
+before it: ``no_new_session``, or a ``late = 1`` record of T-1. This is the
+known blind spot of ADR-0030 supplement 8 (final draft 2, to be appended) point
+2 (a), (b); S-18a "point 3 (d)". The repair belongs to a later ADR (the
+validation layer, D-8 point 3's frozen appendix); this test pins today's
+behaviour so the wiring PR cannot change it silently.
 
 ``tmp_path`` ledgers and synthetic bars only.
 """
@@ -109,7 +112,7 @@ def _run(root: Path, monkeypatch: pytest.MonkeyPatch, bars: list[PriceBar]) -> P
     result: RunResult = record_forecasts(
         store, load_benchmark=load_market_benchmark, resolver=resolver
     )
-    assert result.outcome == "ok"
+    assert result.outcome in ("ok", "no_new_session")
     return path
 
 
@@ -164,3 +167,27 @@ def test_a_missing_session_is_kept_as_a_gap_and_judged_by_the_same_rules(
         for r in _rows(gapped, "SELECT missing_json FROM forecast_record ORDER BY horizon")
     ]
     assert gap_missing == whole_missing
+
+
+def test_a_missing_t_falls_back_to_the_previous_final_bar_late(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Supplement 8 point 2 (b): the source has no row for T (LAST). The run at T's 22:10
+    # takes T-1 as the latest final bar; T-1's cutoff has passed, so the record is late.
+    bars = [bar for bar in _bars(DAYS) if bar.date != LAST]
+    path = _run(tmp_path / "no-t", monkeypatch, bars)
+    (series,) = _rows(path, "SELECT bars_json, dropped_rows_json FROM forecast_input_series")
+    days = [bar["session_date"] for bar in json.loads(series["bars_json"])]
+    assert LAST.isoformat() not in days and days[-1] == DAYS[-2].isoformat()
+    assert LAST.isoformat() not in series["dropped_rows_json"]
+    (end,) = _rows(path, "SELECT outcome, candidate_t FROM forecast_run_end")
+    records = _rows(path, "SELECT data_as_of, late, label, missing_json FROM forecast_record")
+    if end["outcome"] == "no_new_session":
+        assert records == []
+    else:
+        assert end["outcome"] == "ok" and len(records) == 2
+        for record in records:
+            assert (record["data_as_of"], record["late"]) == (DAYS[-2].isoformat(), 1)
+            codes = {item["code"] for item in json.loads(record["missing_json"])}
+            assert codes <= set(MISSING_CODES)
+            assert bool(codes) == (record["label"] == "insufficient")
