@@ -74,9 +74,19 @@
 - 本 PR **不得**：改 `app/outlook/**`、`app/forecast/**`、`app/dirdef/**`、`app/data/session_calendar.py` 中與缺日有關的行為；新增 `DropReason` 值、`MISSING_CODES` 成員、outcome 值、表或欄位；在 `app/` 內新增交易日曆；以缺口或開盤值作為 recorder 的分支或拒收條件；改 `app/data/providers/yfinance.py`、`app/data/cache.py`、`app/services/index.py`。
 - 已知盲點（只記，不處理）：補充五第 1 點 (d) 的 F-2 分子取「快照中定案 session 的聯集」，來源永久缺席的 session 不會進分子，F-2 會偏低。
 
+- 2026-11-19 更新：依補充八（定稿第二版，待 append）S-18a「第 3 點 (d)」，特性測試再加「缺 T 本身」一組：結果為 `no_new_session`，或一筆 `late = 1` 的 T−1 紀錄；docstring 改引補充八第 2 點。另加 S-18a「第 3 點 (a)～(c)」守門測試（`tests/test_forecast_gap_disclosure.py`）：`DropReason` 只有 `"not_final"`；outcome 列舉與 `EXPECTED_OBJECTS` 的 DDL 雜湊不變；`session_calendar.py` 頂層只有 `is_final`；`app/` 提到休市／holiday 的檔案集合與 CG-2 head（`9d5bbf48`）相同、沒有日曆資料檔。`MISSING_CODES` 由既有 `tests/test_outlook_missing_codes.py` 釘住。
+
+### W-9 `report status` 缺日加註（補充八（定稿第二版，待 append）第 6 點 (b)；CG-4 阻擋項）〔做〕
+- 依據：補充八第 6 點 (b)、S-18a「第 6 點 (b)」；風控 RC-230 定稿（`work/reviews/2026-11-19-report-status缺日加註定稿RC229至RC232-風控.md`「定稿全文：」那一行）。
+- 改檔：`app/forecast/report.py`（模組常數 `GAP_DISCLOSURE`，以腳本自風控報告抽出寫入；`render_execution_status` 的最後一個元素，所以在 `render_status` 中排在重審觸發之前；不因任何資料分支）。
+- 測試：`tests/test_forecast_gap_disclosure.py`——常數與風控報告抽出的字面逐字相同；是最後一個元素；零 claim／有缺口／無缺口三種帳都出現且相同；其餘各行與加入前（測試內獨立組出的預期）逐行相同；`render_status` 中排在重審觸發之前；常數是單一字面、沒有在任何分支中使用（AST）。
+- 之後要增修這一行須重送風控；PR 說明附 RC-230 出處。RC-231（n̂、c₁ 是否也受缺日影響）若答「會」，字面與適用範圍會再調整。
+
 ---
 
 ## 二、不改程式、由 qa／coordinator 在合併時核對〔流程〕
+
+- **P-8 補充八第 5 點 (a) 帳外缺日比對（CG-4 的前置條件，不在本 PR 範圍）**：由 devops-sre 的 `feat/gap-check-oneclick` 一鍵檔與 CEO 執行。接線 PR 說明須附比對結果的 commit（qa 核對它早於合併 commit）與第 5 點 (b) 的 CEO 確認紀錄（S-18a「第 5 點 (a)」）；值由 coordinator 填。
 
 - **P-1 CG-1**：ADR 狀態為 accepted（檔頭第 3 行），含 C-M1～C-M4 與 D-11 的明確同意。qa 在 PR 說明核對。
 - **P-2 CG-3 備份紀錄的落點（值留待 coordinator 填，不編造）**：
@@ -132,6 +142,7 @@
 實作後在交件報告逐字列出最終版本；預計為（段標題實作時改掉「連續」二字，因 D-4 第 5 點禁「連續…計數」類字樣，既有 `d4_violations` 測試擋下）：
 - 段標題：`ADR-0030 失效條件 F-2（每 20 個平日為一個視窗，逐平日滾動；只含執行狀態，不含任何標籤或對照）：`
 - 有起點但還沒有任何合格平日時：`  {claim_id}：視窗未滿`
+- 執行狀態段末行（風控 RC-230 已定稿，非新擬）：`加註：核心不偵測資料來源缺少的交易日；F-2 計數與格點數值可能與日後驗證時重算的結果不同，F-2 計數可能偏低。`
 - 每個 claim 一行（完整視窗）：`  {claim_id}：最近一個完整視窗 {起}～{迄}，沒有 late = 0 紀錄的定案 session 數 {a}，inputs_not_ready 日數 {b}，分母 {d}，{成立／未成立}；自起點以來曾否成立：{是／否}`
 - 每個 claim 一行（視窗未滿）：`  {claim_id}：視窗未滿（自起點以來 {k} 個平日：{起}～{迄}），沒有 late = 0 紀錄的定案 session 數 {a}，inputs_not_ready 日數 {b}，{成立／視窗未滿}`
 - 沒有任何執行時：`  {claim_id}：視窗未滿（尚無執行）`
