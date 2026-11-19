@@ -2,7 +2,8 @@
 
 - 分支：`feat/nm5-wiring`，起點 `origin/feat/nm5-cg2-registration`（`9d5bbf480948d3a94fcef0966293bbfca7702089`），再 merge `origin/product/stock-desk`（`da4ffc2`）。
 - 合併時機：補充四第 4 點 (4)、第 6 點；補充七第 7 點——CG-2 登記 PR 合併、CEO 正式登記、coordinator 在 `work/` 留登記紀錄之後才合併。登記完成前不合併。
-- 規格來源：`docs/adr/0030-stock-desk-預測紀錄帳核心-最小記錄器.md`（以下簡稱 ADR）全文；約束 C5-1～C5-5 見 `work/reviews/2026-11-15-NM5第五批F2視窗與WARNING裁示-tech-architect.md`。
+- 規格來源：`docs/adr/0030-stock-desk-預測紀錄帳核心-最小記錄器.md`（以下簡稱 ADR）全文；約束 C5-1～C5-5 見 `work/reviews/2026-11-15-NM5第五批F2視窗與WARNING裁示-tech-architect.md`；補充八（定稿第三版，待 append）；**補充九（待 append，風控審查見 `work/reviews/2026-11-19-補充九判定與F2字面定稿RC244至RC254-風控.md`）**，全文在 `work/reviews/2026-11-19-接線PR四題裁示與補充九定稿-tech-architect.md`。
+- 2026-11-19 第二輪：依補充九、風控 RC-237～RC-254、qa 審查 `work/reviews/2026-11-19-接線PR審查-qa.md` 修改（見各項「第二輪」）。
 - 程式路徑相對於 `apps/stock-desk/backend/`。
 - 標記：〔做〕不需裁示，本 PR 實作；〔流程〕不改程式，由 qa／coordinator 在合併時核對；〔待裁示〕要 TA（或指名的人）回答後才能做。
 
@@ -31,11 +32,11 @@
 
 ### W-3 schema 不存在／登記表為空時的行為〔做：測試〕
 - 依據：補充四第 2 點「正式主 DB 上的核心 schema 只能由 `bootstrap` 建立。其他路徑遇到 schema 不存在時拒絕寫入，不建表」；D-6 CG-2；S-7；補充七第 6 點（recorder 不呼叫 `bootstrap`、`create_objects`、`create_schema`）。
-- 改檔：`app/scheduler.py`（主 DB 檔不存在時不呼叫 recorder，見 I-3）；測試。
+- 改檔：測試（目標核對見 W-10，取代原「主 DB 檔不存在時不呼叫 recorder」）。
 - 測試（`tests/test_forecast_scheduler_wiring.py`）：
   - 主 DB 有其他表、沒有帳本 schema：job 拋 `SchemaIncompleteError`，`sqlite_master` 沒有任何 `forecast_`／`plan_` 物件，原有表內容不變；
-  - 主 DB 檔不存在：不建立檔案，不呼叫 recorder；
-  - schema 完整但登記表為空：`gate_closed`，`records_written = 0`，沒有任何快照或紀錄列；
+  - schema 完整但登記表為空（`test_an_empty_registry_closes_the_gate_and_writes_only_the_run_rows`）：`gate_closed`，`records_written = 0`；**不寫 `forecast_record`、`forecast_input_series`、`forecast_claim_registry` 列；`forecast_run` 與 `forecast_run_end`（`gate_closed`）照寫**（D-2 第 1～2 點；qa N-4）；
+  - `KeyboardInterrupt` 穿透 `_guarded`（`test_a_keyboard_interrupt_passes_through_the_guarded_job`；qa N-5）；
   - scheduler 不呼叫 `bootstrap`、`create_objects`、`create_schema`、`register_claim`（AST）。
 
 ### W-4 F-2 計數視窗（補充五第 1 點；CG-4 阻擋項）〔做〕
@@ -65,7 +66,7 @@
 
 ### W-7 已登記雜湊與「不得動」檔案零差異〔做：證明〕
 - 依據：派工的「不得動」清單；D-8 第 6 點；補充七「不改……已登記雜湊」。
-- 內容：`app/dirdef/`、`app/outlook/rules/*.yaml`、`uv.lock`、所有 `.gitattributes`、事先宣告、C-8 紀錄檔、`scripts/pipeline_acceptance_real.py`、`pipeline-acceptance.bat`、`work/dispatch/` 兩份 CEO 操作說明、`scripts/cg2_register.py`、`scripts/verify_cg2_instruction.py`、兩個 `cg2-*.bat` 及其測試：對 `origin/feat/nm5-cg2-registration` 零差異（交件附 `git diff --stat`）。definition／rules 雜湊以既有 M-4、M-5 測試證明不變（交件附測試名稱與結果）。
+- 內容：`app/dirdef/`、`app/outlook/rules/*.yaml`、`uv.lock`、所有 `.gitattributes`、事先宣告、C-8 紀錄檔、`scripts/pipeline_acceptance_real.py`、`pipeline-acceptance.bat`、`work/dispatch/` 兩份 CEO 操作說明、`scripts/cg2_register.py`、`scripts/verify_cg2_instruction.py`、兩個 `cg2-*.bat` 及其測試：對 `origin/feat/nm5-cg2-registration` 零差異（交件附 `git diff --stat`）。其中 `scripts/cg2_register.py`、`scripts/verify_cg2_instruction.py`、`cg2-preflight.bat`、`cg2-register.bat` 與只測它們的測試：本 PR 完全不動（不刪、不 skip、不重釘常數），**由退役 PR 刪除（補充九第 1 點）**；退役 PR 在 CEO 完成登記、coordinator 登記紀錄 commit 之後才開，接線 PR 先 merge 它再合併。在那之前 `test_r1_the_app_tree_constant_is_the_app_tree_of_this_checkout` 的紅燈照實保留。definition／rules 雜湊以既有 M-4、M-5 測試證明不變（交件附測試名稱與結果）。
 
 ### W-8 缺日（來源整列缺席）的特性測試（2026-11-19 補入，coordinator 轉 TA 裁示第 5 題）〔做〕
 - 依據：`work/reviews/2026-11-19-缺日靜默丟列與登記先後裁示-tech-architect.md` 第 5 題；ADR D-8 第 3 點（已接受的限制，修補留給驗證層 ADR）。
@@ -82,6 +83,30 @@
 - 測試：`tests/test_forecast_gap_disclosure.py`——常數與風控報告抽出的字面逐字相同；是最後一個元素；零 claim／有缺口／無缺口三種帳都出現且相同；其餘各行與加入前（測試內獨立組出的預期）逐行相同；`render_status` 中排在重審觸發之前；常數是單一字面、沒有在任何分支中使用（AST）。
 - 第二行（風控 RC-233、RC-234 定稿，`work/reviews/2026-11-19-重審觸發缺日加註定稿RC233至RC236-風控.md`「第二行定稿全文：」）：常數 `REVIEW_GAP_DISCLOSURE`，`render_review_trigger` 的最後一個元素（即 `render_status` 的最後一個元素），零／一／兩個 claim 都恰好一次；不進 `render_execution_status` 與 harness 輸出。`N_HAT_NOTE` 不改（補充八第 3 點 (f)），有測試釘住。測試 `tests/test_forecast_gap_disclosure.py::test_r1`～`test_r7`；`tests/test_forecast_report.py::d4_violations` 只對這一行的核可字面免除「n̂ 須附固定標示」一條，其餘規則照查。
 - 之後要增修這兩行須重送風控；PR 說明附 RC-230、RC-233／RC-234 出處。RC-231（n̂、c₁ 是否也受缺日影響）若答「會」，字面與適用範圍會再調整。
+
+### W-10 scheduler 的正式目標（補充九第 3 點，收緊；第二輪）〔做〕
+- 改檔：`app/scheduler.py`（`forecast_record_target`、`production_db_target`、`FORECAST_RECORD_REFUSALS`），取代原「只檢查檔案存在」。
+- 內容：建立 store 前依序核對 (a) 程序環境變數沒有 `STOCK_DESK_DB_PATH`（空字串也算有設）；(b) `<backend>` 由模組位置導出（`BACKEND_DIR`），`resolve_db_path()` 以 `Path.resolve(strict=True)` 解析成功、等於 `<backend>/data/stock-desk.db`、為一般檔案。任一不成立：不呼叫 recorder，記一行固定英文 WARNING（不含路徑），正常返回；不開 SQLite 連線、不建檔、不讀 `.env`。recorder 與 `ledger_store` 不檢查目標。
+- 測試：`test_s19a_a_refused_target_does_not_call_the_recorder`（環境變數有設、空字串、目標不同、檔案不存在、目標是目錄）、`test_s19a_each_refusal_is_one_fixed_line_without_a_path`、`test_s19a_the_default_target_calls_the_recorder`、`test_the_production_target_is_derived_from_the_module_location`、`test_s19a_the_scheduler_reads_no_env_file`（AST）與其 teeth。既有用暫存 DB 的測試改以 monkeypatch `production_db_target` 跑，job 沒有路徑參數（K-10）。
+
+### W-11 F-2 第一句完整視窗分母為 0（補充九第 4 點，收緊；第二輪）〔做〕
+- 改檔：`app/forecast/store.py`（`f2_status`）。完整視窗分母為 0 時不論分子判成立；視窗未滿 (f) 不變。原測試沒有「0/0 未成立」的預期，不需更新。
+- 測試：`test_s19a_a_full_window_with_no_final_session_and_nothing_counted_holds`、`test_s19a_a_short_range_with_nothing_counted_is_still_not_held`；既有 `test_a_window_with_no_final_session_holds_on_any_not_ready_day`。
+
+### W-12 F-2 第二句：第 0 相位格點遺失判定（補充九第 5 點，收緊；CG-4 阻擋項；第二輪）〔做〕
+- 改檔：`app/forecast/store.py`（唯讀查詢 `grid_loss_status`，回傳 G、L、三態判定、曾否成立；經 `_read`）；`app/forecast/report.py`（第二句各行取代原格點行，只做格式化）。
+- 測試（`tests/test_forecast_f2_window.py`）：`test_s19a_no_d_v_is_undecidable`、`test_s19a_d_v_whose_cutoff_has_not_passed_is_undecidable`、`test_s19a_one_of_five_is_not_held`、`test_s19a_two_of_nine_holds`、`test_s19a_an_earlier_prefix_held_and_ever_held_stays`、`test_the_grid_points_are_counted_only_once_their_cutoff_passed`、`test_the_grid_loss_query_needs_an_aware_now_and_only_reads`、`test_the_grid_loss_verdict_is_derived_in_store_py_only`（grep）、`test_the_report_prints_the_second_sentence_per_claim`、`test_the_undecidable_second_sentence_has_no_ever_held`。
+
+### W-13 F-2 段的風控定稿字面（RC-238、RC-239、RC-242、RC-247～RC-252；第二輪）〔做〕
+- 改檔：`app/forecast/report.py`（常數以腳本自風控報告抽出寫入，不手打）；`tests/approved_copy.py`（RC-244～254 報告依「項目：」標籤抽取，RC-237～243 報告依前一行標籤抽取，並斷言兩份報告的標籤恰為預期集合；RC-237 段標題、RC-238 分母 0 兩行列為作廢且不被使用）。
+- 輸出順序（RC-252）：`執行狀態（…）`、`執行次數：…`、`inputs_not_ready 日數（全部期間，台北日期）：…`（這三行維持原相對位置，在段標題之前）→ 段標題 → 第一句小標題 → 第一句各行 → 第二句小標題 → 第二句各行 → 行動句 → `GAP_DISCLOSURE` → 重審觸發各行 → `REVIEW_GAP_DISCLOSURE`。原「第 0 相位格點 {n} 個，其中沒有 late = 0 紀錄 {m} 個」行已移除（由第二句各行取代）。
+- 測試（`tests/test_forecast_gap_disclosure.py`）：`test_rc252_every_constant_is_the_approved_text`、`test_rc252_the_superseded_texts_are_not_used`、`test_rc252_the_fixed_lines_are_printed_in_order_whatever_the_ledger`（零 claim／有缺口／無缺口）、`test_rc252_the_whole_status_order`、`test_rc252_the_fixed_lines_are_single_literals_never_in_a_branch`、`test_rc252_no_new_line_trips_the_d4_checks`；RC-230 四件事的測試改套 RC-251 字面（`test_the_line_is_the_risk_approved_text`、`test_1`～`test_4`）；第一句各行在 `tests/test_forecast_f2_window.py::test_the_report_prints_*`（模板代入後逐字比對）。harness：`tests/test_forecast_pipeline_harness.py::test_the_output_holds_no_n_hat_while_report_status_does`（第一行加註恰一次、第二行零次、段內固定行恰一次且不進 `render_summary`）。
+- RC-240／qa N-1：`tests/test_forecast_report.py::test_rc240_the_n_hat_exemption_is_exactly_one_line`、`test_rc240_a_near_copy_of_the_exempt_line_is_still_caught`（多一字、改一字、少一字）。
+
+### W-14 qa 第一輪意見（第二輪）〔做〕
+- N-6：`tests/test_forecast_missing_session_characterization.py::test_a_missing_t_falls_back_to_the_previous_final_bar_late` 釘死唯一預期（`ok`＋兩筆 `late = 1` 的 T−1 紀錄），另加 `test_a_missing_t_after_t_minus_1_was_recorded_is_no_new_session`。
+- N-2：`tests/test_forecast_scheduler_wiring.py::test_n2_only_the_scheduler_imports_the_core_from_outside_it`、`test_n2_the_core_package_imports_are_as_they_stand`（forecast→outlook、dirdef；outlook→dirdef）、`test_n2_the_whole_app_scans_have_teeth`。
+- N-4、N-5：見 W-3。N-3：不做（TA 裁示不需要）。
 
 ---
 
@@ -101,7 +126,7 @@
     registration_record_commit=<40 位小寫十六進位> # 補充四第 4 點 (3) 的 coordinator 登記紀錄 commit
     ```
     檔頭可另有繁中說明段；上述五行各出現恰好一次。
-  - 是否加一個 CI 測試強制這個檔存在且格式正確（會讓本分支在填值前紅燈），列為待裁示 Q-2。
+  - 不加 CI 測試（補充九第 6 點；Q-2 裁示）。qa 在合併時人工核對：備份 sha256 等於補充四第 4 點 (3) 登記紀錄中的值，也等於登記回貼的 `backup_sha256`；路徑用家目錄相對寫法。**只填有出處的值；沒有出處的項目照實標「無出處」，不得推得或補填**（補充九第 6 點）。
 - **P-3 CG-4**：qa-reviewer PASS（含 Codex）＋ CI 綠燈；本 PR 觸及 `app/forecast/**`，合併前 `report verify --all` 必須全部一致（正式主 DB 由 CEO 本機執行；登記後、接線前帳內 0 筆紀錄，預期輸出「verify：沒有紀錄」，結束碼 0）。W-4、W-5 是 CG-4 阻擋項，PR 說明逐條列出測試名稱。
 - **P-4 S-14a 末項**：合併時 `work/` 中已有 coordinator 的登記紀錄 commit。
 - **P-5 S-17**：qa PASS＋CI 綠燈；CG-3 備份（P-2）；不遷移（K-12，既有 `schema_version` 恆為 1 與「沒有遷移函式」的測試）；還原依 D-8 第 3 點由操作者在 `work/` 記錄（流程，不寫程式）。
@@ -110,47 +135,58 @@
 
 ---
 
-## 三、自定解讀（小解讀，不影響寫入條件、排程行為或使用者看得到的內容；CEO 可推翻）
+## 三、自定解讀與其處置（補充九第 7 點）
 
-- **I-1 主 DB 路徑**：job 用 `resolve_db_path()`（`STOCK_DESK_DB_PATH` 或預設 `./data/stock-desk.db`），與所有其他 store 同一個主 DB。docker compose 設了 `STOCK_DESK_DB_PATH`，那個檔案沒有帳本 schema，所以會依補充四第 2 點拒絕寫入。本 PR 不另加「目標必須是 `<backend>/data/stock-desk.db`」的條件（ADR 只對 `bootstrap` 規定）。若 TA 認為 recorder 也要限定目標，見 Q-3。
-- **I-2 store 的取得**：scheduler 只 import `app.forecast.recorder`（K-3「只經 recorder 進入核心」照字面），所以 recorder 新增一個沒有時間參數的公開函式 `ledger_store(db_path)`，回傳以系統時鐘建立的 `ForecastStore`；K-10 的簽章測試照樣涵蓋它。
-- **I-3 主 DB 檔不存在**：job 不呼叫 recorder，記一行固定 WARNING（避免 SQLite 在連線時建立空檔）。這只會讓寫入更少，不放寬任何條件。
-- **I-4 misfire**：沿用 APScheduler 預設（與 sector 三個 job 相同，不另設 `misfire_grace_time`）；錯過的時點由 23:10 重試與啟動補跑涵蓋。啟動補跑不限平日（recorder 自己判 `no_new_session`）。
-- **I-5 F-2 起點含 S_c 當日**：「S_c 以後」讀為含 S_c（S_c 為平日時計入），比不含更嚴。
-- **I-6 F-2 沒有任何 `forecast_run`**：沒有起點，輸出「視窗未滿」，兩項分子 0。
-- **I-7 F-2 分母為 0**（範圍內沒有任何定案 session）：分子 > 0 就成立（fail-closed，同 TA 裁示表「s＝0」列）。
-- **I-8 WARNING 的判定範圍**：D-8 第 4 點「每個前瞻 claim 各自判定」，所以判全部前瞻 claim（含已被取代者），不只記錄中 claim；核心期間實際只有 2 個。判定在任何 outcome（含 `gate_closed`、`error`）的 end 列寫入之後都執行；end 列寫入本身失敗時不判定。
+- **I-1 主 DB 路徑**：由補充九第 3 點取代並擴充為「必須等於預設正式目標」（W-10）。
+- **I-2 store 的取得**：scheduler 經 `recorder.ledger_store(db_path)` 取得 store（K-3）；該函式沒有時間或時鐘參數，納入 K-10 的簽章測試（補充九第 7 點 (e)）。
+- **I-3 主 DB 檔不存在**：併入補充九第 3 點 (b)（W-10）。
+- **I-4 misfire**：同意，寫進 ADR（補充九第 7 點 (d)）：不另設 `misfire_grace_time`，沿用 APScheduler 預設；錯過的時點由 23:10 重試與啟動補跑涵蓋；啟動補跑不限平日。
+- **I-5 F-2 起點含 S_c 當日**：同意，寫進 ADR（補充九第 7 點 (a)）；含 S_c 的讀法**不寬於**字面。
+- **I-6 F-2 沒有任何 `forecast_run`**：同意，寫進 ADR（補充九第 7 點 (b)）：沒有 S_c、不評估，輸出「視窗未滿（尚無執行）」，兩項分子為 0。
+- **I-7 F-2 分母為 0**：不同意，改依補充九第 4 點（完整視窗分母為 0 一律判成立；W-11）。
+- **I-8 WARNING 的判定範圍**：同意，寫進 ADR（補充九第 7 點 (c)）：對全部前瞻 claim 判定（含已被取代者），在任何 outcome 的 end 列寫入之後判定；end 列寫入失敗時不判定；`report status` 只列記錄中 claim。
 - **I-9 job 結果的 log**：scheduler 每次執行記一行 INFO：`run_id`、`outcome`、`records_written`、`error_class`（皆非標籤，D-4 第 3 點）。
 
 ---
 
-## 四、待裁示（每題可以直接回答）
+## 四、已裁示（`work/reviews/2026-11-19-接線PR四題裁示與補充九定稿-tech-architect.md`）
 
-- **Q-1（TA，派工指定不得自定）CG-2 一鍵檔與其測試怎麼退役？** 本 PR 改了 `app/`，`tests/test_cg2_register_values.py::test_r1_the_app_tree_constant_is_the_app_tree_of_this_checkout` 在本分支必定失敗（`HEAD:apps/stock-desk/backend/app` 的 tree id 不再是 `9c157d86…`）。請選一項：
-  - (a) 本 PR 刪除 `scripts/cg2_register.py`、`scripts/verify_cg2_instruction.py`、`cg2-preflight.bat`、`cg2-register.bat` 與它們的全部測試（`tests/test_cg2_register_*.py`、`tests/cg2_register_*.py`）；
-  - (b) 只刪 R-1 tree id 那一支測試，其餘保留為歷史紀錄；
-  - (c) 檔案全部保留，把 R-1 測試標成 skip 並附理由；
-  - (d) 另開 PR 退役，本 PR 不動，接受這一支紅燈直到退役 PR 合併。
-  另請答：退役要不要 ADR 依據（新增補充，或只在本 PR 說明引用 devops-sre 的註記）？裁示前我完全不動這些檔案。
-- **Q-2（TA／coordinator）CG-3 紀錄要不要有 CI 測試把關？** 若要，我加一個測試：`work/dispatch/*-CG3備份紀錄-接線PR.md` 恰有一份，且五行格式（P-2）全對、兩個 sha256 相等。效果是本分支在 coordinator 填值前 CI 紅燈，填值後才綠，等於機械阻止提早合併。要／不要？
-- **Q-3（TA）recorder 是否也要限定正式目標？** 目前只靠「schema 不存在就拒絕」。要不要另加「scheduler 的目標必須是 `<backend>/data/stock-desk.db` 且未設 `STOCK_DESK_DB_PATH`」？加了之後 docker compose 部署的 scheduler 永遠不記錄（與現狀實際效果相同，但理由從「沒有 schema」變成「路徑不符」）。要／不要？（不加不影響本 PR 其他項目。）
-- **Q-4（TA）F-2 第二句（第 0 相位格點遺失率 > 20%）要不要在 `report status` 加「是否超過 20%」一欄？** 補充五只處理第一句；現行報告列「格點數」與「沒有 late = 0 紀錄的格點數」兩個計數，沒有門檻判定。加的話會多一句使用者面字面。要／不要？（不加不影響本 PR。）
+- **Q-1**：本 PR 不動一鍵檔；另開退役 PR（補充九第 1 點），見 W-7。
+- **Q-2**：不加 CI 測試（補充九第 6 點），見 P-2。
+- **Q-3**：只在 scheduler 加目標限定（補充九第 3 點），見 W-10。
+- **Q-4**：在 `store.py` 導出第二句判定（補充九第 5 點），見 W-12。
 
 ---
 
-## 五、新增的使用者面字面（操作者報告 `python -m app.forecast.report status`；log 以外，送風控）
+## 五、使用者面字面（操作者報告 `python -m app.forecast.report status`）與其出處
 
-實作後在交件報告逐字列出最終版本；預計為（段標題實作時改掉「連續」二字，因 D-4 第 5 點禁「連續…計數」類字樣，既有 `d4_violations` 測試擋下）：
-- 段標題：`ADR-0030 失效條件 F-2（每 20 個平日為一個視窗，逐平日滾動；只含執行狀態，不含任何標籤或對照）：`
-- 有起點但還沒有任何合格平日時：`  {claim_id}：視窗未滿`
-- 執行狀態段末行（風控 RC-230 已定稿，非新擬）：`加註：核心不偵測資料來源缺少的交易日；F-2 計數與格點數值可能與日後驗證時重算的結果不同，F-2 計數可能偏低。`
-- 每個 claim 一行（完整視窗）：`  {claim_id}：最近一個完整視窗 {起}～{迄}，沒有 late = 0 紀錄的定案 session 數 {a}，inputs_not_ready 日數 {b}，分母 {d}，{成立／未成立}；自起點以來曾否成立：{是／否}`
-- 每個 claim 一行（視窗未滿）：`  {claim_id}：視窗未滿（自起點以來 {k} 個平日：{起}～{迄}），沒有 late = 0 紀錄的定案 session 數 {a}，inputs_not_ready 日數 {b}，{成立／視窗未滿}`
-- 沒有任何執行時：`  {claim_id}：視窗未滿（尚無執行）`
-- 移除的舊字面：`F-2 計數（最近 20 個平日：… 起至 …）：`、`  inputs_not_ready 日數：…`、`  {claim_id}：最新快照中出現、但沒有 late = 0 紀錄的定案 session 數：…`。
+全部以腳本自下列風控報告抽出寫入 `app/forecast/report.py`，測試亦自同一報告抽出比對，不手打。之後增修須重送風控。
 
-log 行（英文、只進 log，不送風控，列出備查）：
+| 常數 | 用途 | 出處 |
+|---|---|---|
+| `F2_TITLE` | 段標題 | `work/reviews/2026-11-19-補充九判定與F2字面定稿RC244至RC254-風控.md`「項目：RC-248 段標題（取代 RC-237）」 |
+| `F2_FIRST_HEADING` | 第一句小標題（一律印出） | 同上「項目：RC-248 第一句小標題」 |
+| `F2_FULL_LINE` | 第一句完整視窗（分母大於 0） | `work/reviews/2026-11-19-接線PR-F2視窗字面判定RC237至RC243-風控.md`「RC-238 完整視窗（分母大於 0）：」 |
+| `F2_FULL_ZERO_LINE` | 第一句完整視窗（分母為 0） | RC-244～254 報告「項目：RC-247 第一句完整視窗分母為 0（取代 RC-238 分母為 0 那一行）」 |
+| `F2_SHORT_LINE` | 第一句視窗未滿 | RC-237～243 報告「RC-239 視窗未滿：」 |
+| `F2_NO_WEEKDAY_LINE` | 有起點但沒有可計入的平日 | RC-237～243 報告「RC-242（suggested…）：」（coordinator 定案套用，CEO 可推翻） |
+| `F2_NO_RUN_LINE` | 尚無執行 | 維持原字面 `  {claim_id}：視窗未滿（尚無執行）`（RC-239 佔位符說明：維持現狀） |
+| `F2_SECOND_HEADING` | 第二句小標題（一律印出） | RC-244～254 報告「項目：RC-248 第二句小標題」 |
+| `F2_SECOND_LINE` | 第二句有判定（G 大於 0） | 同上「項目：RC-249 第二句有判定（G 大於 0）」 |
+| `F2_SECOND_UNDECIDABLE_LINE` | 第二句無從判定（G 為 0；不含「曾否成立」） | 同上「項目：RC-249 第二句無從判定（G 為 0）」 |
+| `F2_ACTION_LINE` | 行動句（一律印出） | 同上「項目：RC-250 行動句」 |
+| `GAP_DISCLOSURE` | 執行狀態段末行加註 | 同上「項目：RC-251 第一行加註（修訂 RC-230）」 |
+| `REVIEW_GAP_DISCLOSURE` | 重審觸發段末行加註 | `work/reviews/2026-11-19-重審觸發缺日加註定稿RC233至RC236-風控.md`「第二行定稿全文：」（未改） |
+| `N_HAT_NOTE` | n̂ 固定標示 | 未改（補充八第 3 點 (f)） |
+
+作廢不用：RC-237 段標題、RC-238「完整視窗（分母為 0）」（有測試確認不被使用）。
+
+log 行（英文、只進 log；RC-246：不含路徑，也不含要求修改設定的祈使句）：
+- `forecast_record: STOCK_DESK_DB_PATH is set in the process environment; the run is skipped`
+- `forecast_record: the main database does not resolve to an existing file; the run is skipped`
+- `forecast_record: the main database is not the default production database; the run is skipped`
+- `forecast_record: the main database is not a regular file; the run is skipped`
 - `forecast_record: review trigger holds; claim_id=<id> trigger=<T1|T2|T1+T2>`
 - `forecast_record: the review trigger check failed; the run outcome is unchanged`
-- `forecast_record: the main database file does not exist; the run is skipped`
 - `forecast_record run: run_id=<n> outcome=<outcome> records_written=<n> error_class=<class|none>`
+- 移除：`forecast_record: the main database file does not exist; the run is skipped`（由上列四句取代）。
