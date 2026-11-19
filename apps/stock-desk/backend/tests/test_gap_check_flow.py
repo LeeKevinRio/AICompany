@@ -217,7 +217,7 @@ def test_only_the_one_select_and_the_readonly_pragma_run_and_only_on_main_and_th
 
     def spying(database: Any, *args: Any, **kwargs: Any) -> sqlite3.Connection:
         targets.append(str(database))
-        conn = real_connect(database, *args, **kwargs)
+        conn: sqlite3.Connection = real_connect(database, *args, **kwargs)
         conn.set_trace_callback(statements.append)
         return conn
 
@@ -810,7 +810,8 @@ def test_e2e_a_normal_end_every_line_of_stdout_is_whitelisted_and_stderr_is_empt
     done, root = _drive(tmp_path, "ok")
     lines = done.stdout.splitlines()
     assert (done.returncode, done.stderr) == (0, "")
-    assert_closed(lines) and values(lines)["result"] == "no_gaps_found"
+    assert_closed(lines)
+    assert values(lines)["result"] == "no_gaps_found"
     (paste,) = _paste_backs(root)
     assert paste.read_bytes().decode("utf-8-sig").splitlines() == lines
     assert _copies(root) == []
@@ -852,7 +853,8 @@ def test_e2e_an_interrupt_while_deleting_that_leaves_the_copy_shows_the_copy_sto
     lines = done.stdout.splitlines()
     assert done.stderr == "" and done.returncode == 3
     assert lines[0] == INTERRUPTED and lines[-1] == COPY_STOP
-    assert_closed(lines) and not any(x.startswith("result=") for x in lines)
+    assert_closed(lines)
+    assert not any(x.startswith("result=") for x in lines)
     assert _paste_backs(root) == []
 
 

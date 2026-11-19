@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from datetime import date, timedelta
+from email.message import Message
 from io import BytesIO
 from typing import Any
 
@@ -307,8 +308,8 @@ def test_a_307_answer_comes_back_as_a_status_not_a_followed_redirect() -> None:
         "https://www.twse.com.tw/x",
         307,
         "Temporary Redirect",
-        {},
-        BytesIO(SECURITY_PAGE),  # type: ignore[arg-type]
+        Message(),
+        BytesIO(SECURITY_PAGE),
     )
     status, body = gc.http_get("https://www.twse.com.tw/x", opener=_Opener(error))
     assert (status, body) == (307, SECURITY_PAGE)
