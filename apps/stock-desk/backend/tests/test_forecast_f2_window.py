@@ -471,3 +471,78 @@ def test_f2_is_derived_in_store_py_only() -> None:
     text = (APP_ROOT / "forecast" / "report.py").read_text(encoding="utf-8")
     for counted in ("weekday(", "next_weekday", "_weekdays_after", "bisect", "on_time_sessions"):
         assert counted not in text
+
+
+# --- F-2 second sentence: the phase-0 grid point loss (supplement 9 point 5, S-19a) -------------
+
+
+def _grid_ledger(ledger: Ledger, sessions: int, lost_points: Sequence[int]) -> list[date]:
+    """h3 records on every session but the given phase-0 grid points (by point index)."""
+    days = weekdays(MONDAY, sessions)
+    points = days[::3]
+    ledger.run(at(MONDAY))
+    recorded_window(ledger, days, skip=[points[i] for i in lost_points])
+    return days
+
+
+def test_s19a_no_d_v_is_undecidable(ledger: Ledger) -> None:
+    ledger.run(at(MONDAY))
+    ledger.snapshot(weekdays(MONDAY, 10))
+    status = store(ledger).grid_loss_status(CLAIM_H3, now=after_cutoff(date(2026, 10, 30)))
+    assert (status.counted, status.lost, status.verdict, status.ever_held) == (
+        0,
+        0,
+        "undecidable",
+        False,
+    )
+
+
+def test_s19a_d_v_whose_cutoff_has_not_passed_is_undecidable(ledger: Ledger) -> None:
+    _grid_ledger(ledger, 1, [])
+    status = store(ledger).grid_loss_status(CLAIM_H3, now=at(MONDAY, 23, 59))
+    assert (status.counted, status.verdict) == (0, "undecidable")
+    later = store(ledger).grid_loss_status(CLAIM_H3, now=after_cutoff(MONDAY))
+    assert (later.counted, later.lost, later.verdict) == (1, 0, "not_held")
+
+
+def test_s19a_one_of_five_is_not_held(ledger: Ledger) -> None:
+    days = _grid_ledger(ledger, 13, [4])  # points 0,3,...,12: the last one lost
+    status = store(ledger).grid_loss_status(CLAIM_H3, now=after_cutoff(days[-1]))
+    assert (status.counted, status.lost, status.verdict) == (5, 1, "not_held")
+    assert not status.ever_held  # prefix 5: 1 x 5 = 5, not more than 5
+
+
+def test_s19a_two_of_nine_holds(ledger: Ledger) -> None:
+    days = _grid_ledger(ledger, 25, [4, 8])
+    status = store(ledger).grid_loss_status(CLAIM_H3, now=after_cutoff(days[-1]))
+    assert (status.counted, status.lost, status.verdict) == (9, 2, "holds")
+    assert status.ever_held
+
+
+def test_s19a_an_earlier_prefix_held_and_ever_held_stays(ledger: Ledger) -> None:
+    days = _grid_ledger(ledger, 13, [1])  # the second point lost: prefix 2 has 1 x 5 > 2
+    status = store(ledger).grid_loss_status(CLAIM_H3, now=after_cutoff(days[-1]))
+    assert (status.counted, status.lost, status.verdict) == (5, 1, "not_held")
+    assert status.ever_held
+
+
+def test_the_grid_points_are_counted_only_once_their_cutoff_passed(ledger: Ledger) -> None:
+    days = _grid_ledger(ledger, 13, [])
+    status = store(ledger).grid_loss_status(CLAIM_H3, now=at(days[-1], 23, 0))
+    assert status.counted == 4  # the point on days[-1] is not counted yet
+
+
+def test_the_grid_loss_query_needs_an_aware_now_and_only_reads(
+    ledger: Ledger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _grid_ledger(ledger, 4, [])
+    with pytest.raises(ForecastStoreError):
+        store(ledger).grid_loss_status(CLAIM_H3, now=datetime(2026, 10, 9))
+    with pytest.raises(ForecastStoreError):
+        store(ledger).grid_loss_status("market|h3|x|dirdef-v1.0|forward", now=after_cutoff(MONDAY))
+
+    def no_write(self: ForecastStore) -> sqlite3.Connection:
+        raise AssertionError("grid_loss_status opened a write connection")
+
+    monkeypatch.setattr(ForecastStore, "_connect", no_write)
+    store(ledger).grid_loss_status(CLAIM_H3, now=after_cutoff(MONDAY))

@@ -73,7 +73,8 @@ phase-0 grid point loss count), and ``review_trigger`` derives d_1 and whether
 T1 or T2 holds (D-8 point 4: only from this module's read-only queries);
 ``f2_status`` derives the counts and the verdict of failure condition F-2's
 first sentence over its rolling 20-weekday windows (supplement 5 point 1:
-only here).
+only here); ``grid_loss_status`` derives the second sentence's G, L and
+verdict over the phase-0 grid (supplement 9 point 5: only here).
 For the operator report (``report.py``): ``registered_material`` (the stored
 rule bytes and definition JSON, D-5 points 2-3), ``runs``,
 ``snapshot_digests``, ``on_time_sessions`` and ``ledger_schema_status``.
@@ -535,6 +536,29 @@ class F2Status:
     weekdays: int
     full: bool
     window: F2Window | None
+    ever_held: bool
+
+
+#: ADR-0030 supplement 9 point 5: F-2's second sentence holds when L x 5 > G (over 20 %).
+GRID_LOSS_FACTOR: Final = 5
+
+GridLossVerdict = Literal["holds", "not_held", "undecidable"]
+
+
+@dataclass(frozen=True)
+class GridLossStatus:
+    """F-2 second sentence for one claim, as :meth:`ForecastStore.grid_loss_status` derives it.
+
+    ``counted`` is G (phase-0 grid points whose ``late_cutoff_at`` has passed),
+    ``lost`` is L (those without a ``late = 0`` record); ``verdict`` is
+    ``undecidable`` when G = 0, else ``holds`` exactly when L x 5 > G;
+    ``ever_held`` whether any prefix j of the counted points had L_j x 5 > j.
+    """
+
+    claim_id: str
+    counted: int
+    lost: int
+    verdict: GridLossVerdict
     ever_held: bool
 
 
@@ -1598,6 +1622,47 @@ class ForecastStore:
             full=True,
             window=windows[-1],
             ever_held=any(item.holds for item in windows),
+        )
+
+    def grid_loss_status(self, claim_id: str, *, now: datetime) -> GridLossStatus:
+        """F-2 second sentence: the phase-0 grid point loss of one claim (supplement 9 point 5).
+
+        The grid is :meth:`phase0_grid` (n-hat's grid). Counted are the points
+        P with ``late_cutoff_at(P) <= now``, in date order: G of them; L of
+        them have no ``late = 0`` record of the claim. G = 0 -- no D_v, or
+        D_v's cutoff not passed -- is ``undecidable``, never "not held".
+        Otherwise it holds when L x 5 > G in integers (exactly 20 % does not).
+        It has ever held when, for some prefix j = 1..G of the counted points,
+        its losses L_j satisfy L_j x 5 > j; that is never withdrawn. Counted
+        from D_v, no window, no minimum number of points; recomputed from the
+        current grid every time. ``now`` is the report's clock. Read-only.
+        """
+        if not isinstance(now, datetime) or now.utcoffset() is None:
+            raise ForecastStoreError("now must be a timezone-aware datetime")
+        with self._read() as conn:
+            registered = self._claim(conn, claim_id) is not None
+        if not registered:
+            raise ForecastStoreError("claim_id is not registered")
+        grid = self.phase0_grid(claim_id)
+        counted = [point for point in grid.points if late_cutoff_at(point) <= now]
+        lost = 0
+        ever_held = False
+        for index, point in enumerate(counted, start=1):
+            if point not in grid.on_time:
+                lost += 1
+            ever_held = ever_held or lost * GRID_LOSS_FACTOR > index
+        if not counted:
+            verdict: GridLossVerdict = "undecidable"
+        elif lost * GRID_LOSS_FACTOR > len(counted):
+            verdict = "holds"
+        else:
+            verdict = "not_held"
+        return GridLossStatus(
+            claim_id=claim_id,
+            counted=len(counted),
+            lost=lost,
+            verdict=verdict,
+            ever_held=ever_held,
         )
 
     def registered_material(self, claim_id: str) -> RegisteredMaterial:
