@@ -99,7 +99,7 @@
 
 ### W-13 F-2 段的風控定稿字面（RC-238、RC-239、RC-242、RC-247～RC-252；第二輪）〔做〕
 - 改檔：`app/forecast/report.py`（常數以腳本自風控報告抽出寫入，不手打）；`tests/approved_copy.py`（RC-244～254 報告依「項目：」標籤抽取，RC-237～243 報告依前一行標籤抽取，並斷言兩份報告的標籤恰為預期集合；RC-237 段標題、RC-238 分母 0 兩行列為作廢且不被使用）。
-- 輸出順序（RC-252）：`執行狀態（…）`、`執行次數：…`、`inputs_not_ready 日數（全部期間，台北日期）：…`（這三行維持原相對位置，在段標題之前）→ 段標題 → 第一句小標題 → 第一句各行 → 第二句小標題 → 第二句各行 → 行動句 → `GAP_DISCLOSURE` → 重審觸發各行 → `REVIEW_GAP_DISCLOSURE`。原「第 0 相位格點 {n} 個，其中沒有 late = 0 紀錄 {m} 個」行已移除（由第二句各行取代）。
+- 輸出順序（RC-252）：`執行狀態（…）`、`執行次數：…`、`inputs_not_ready 日數（全部期間，台北日期）：…`（這三行維持原相對位置，在段標題之前）→ 最近一次執行（RC-259）→ 段標題 → 第一句小標題 → 第一句各行 → 第二句小標題 → 第二句各行 → 行動句 → `GAP_DISCLOSURE` → 重審觸發各行 → `REVIEW_GAP_DISCLOSURE`。原「第 0 相位格點 {n} 個，其中沒有 late = 0 紀錄 {m} 個」行已移除（由第二句各行取代）。
 - 測試（`tests/test_forecast_gap_disclosure.py`）：`test_rc252_every_constant_is_the_approved_text`、`test_rc252_the_superseded_texts_are_not_used`、`test_rc252_the_fixed_lines_are_printed_in_order_whatever_the_ledger`（零 claim／有缺口／無缺口）、`test_rc252_the_whole_status_order`、`test_rc252_the_fixed_lines_are_single_literals_never_in_a_branch`、`test_rc252_no_new_line_trips_the_d4_checks`；RC-230 四件事的測試改套 RC-251 字面（`test_the_line_is_the_risk_approved_text`、`test_1`～`test_4`）；第一句各行在 `tests/test_forecast_f2_window.py::test_the_report_prints_*`（模板代入後逐字比對）。harness：`tests/test_forecast_pipeline_harness.py::test_the_output_holds_no_n_hat_while_report_status_does`（第一行加註恰一次、第二行零次、段內固定行恰一次且不進 `render_summary`）。
 - RC-240／qa N-1：`tests/test_forecast_report.py::test_rc240_the_n_hat_exemption_is_exactly_one_line`、`test_rc240_a_near_copy_of_the_exempt_line_is_still_caught`（多一字、改一字、少一字）。
 
@@ -107,6 +107,14 @@
 - N-6：`tests/test_forecast_missing_session_characterization.py::test_a_missing_t_falls_back_to_the_previous_final_bar_late` 釘死唯一預期（`ok`＋兩筆 `late = 1` 的 T−1 紀錄），另加 `test_a_missing_t_after_t_minus_1_was_recorded_is_no_new_session`。
 - N-2：`tests/test_forecast_scheduler_wiring.py::test_n2_only_the_scheduler_imports_the_core_from_outside_it`、`test_n2_the_core_package_imports_are_as_they_stand`（forecast→outlook、dirdef；outlook→dirdef）、`test_n2_the_whole_app_scans_have_teeth`。
 - N-4、N-5：見 W-3。N-3：不做（TA 裁示不需要）。
+
+### W-15 最近一次留下執行紀錄的執行（風控 RC-259）〔做〕
+- 改檔：`app/forecast/report.py`（`LATEST_RUN_LINE`／`LATEST_RUN_NONE_LINE`，字面以腳本自 `work/reviews/2026-11-19-收盤定案時點定案與補充十判定RC255至RC264-風控.md` 的「項目：RC-259 …」抽出）。取值經既有唯讀查詢 `store.latest_run`（走 `_read`）：`run_id` 最大一筆的 `started_at` 換台北時間 `YYYY-MM-DD HH:MM`，outcome 原值，沒有 end 列印「沒有 end 列」；`report.py` 只做格式化。位置：`inputs_not_ready 日數（全部期間，台北日期）` 之後、F-2 段標題之前。
+- 測試（`tests/test_forecast_gap_disclosure.py`）：`test_rc259_the_constants_are_the_approved_text`、`test_rc259_without_a_run_row_the_none_variant_is_printed`、`test_rc259_the_latest_run_is_the_highest_run_id_in_taipei_time`（ok、inputs_not_ready、沒有 end 列）、`test_rc259_both_variants_carry_the_note_and_pass_the_d4_checks`；harness 完整輸出恰一行、`render_summary` 不含（`tests/test_forecast_pipeline_harness.py::test_the_output_holds_no_n_hat_while_report_status_does`）。
+
+### 待規格：補充十第 2、3 點（RC-255：須與 job 註冊同一次合併落地）
+- 第 2 點（每次執行前強制 live 更新並核對 `B.as_of ≥ t0`）：等 data-engineer 的方法規格，未動手。
+- 第 3 點（啟動補跑時段 [13:30, 22:10)）：等補充十最終版文字，未動手。
 
 ---
 
@@ -164,6 +172,7 @@
 
 | 常數 | 用途 | 出處 |
 |---|---|---|
+| `LATEST_RUN_LINE`／`LATEST_RUN_NONE_LINE` | 最近一次留下執行紀錄的執行（有／沒有執行紀錄） | `work/reviews/2026-11-19-收盤定案時點定案與補充十判定RC255至RC264-風控.md`「項目：RC-259 最近一次執行（帳內有執行紀錄時）」「項目：RC-259 最近一次執行（帳內沒有執行紀錄時）」 |
 | `F2_TITLE` | 段標題 | `work/reviews/2026-11-19-補充九判定與F2字面定稿RC244至RC254-風控.md`「項目：RC-248 段標題（取代 RC-237）」 |
 | `F2_FIRST_HEADING` | 第一句小標題（一律印出） | 同上「項目：RC-248 第一句小標題」 |
 | `F2_FULL_LINE` | 第一句完整視窗（分母大於 0） | `work/reviews/2026-11-19-接線PR-F2視窗字面判定RC237至RC243-風控.md`「RC-238 完整視窗（分母大於 0）：」 |
