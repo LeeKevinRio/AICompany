@@ -1777,9 +1777,13 @@ def test_s4a_the_job_passes_the_index_loader_itself(
 ) -> None:
     from app import scheduler as scheduler_module
 
-    db = tmp_path / "main.db"
+    # Supplement 9 point 3: the default production target, pointed at tmp_path.
+    monkeypatch.delenv("STOCK_DESK_DB_PATH", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    db = (tmp_path / "data" / "stock-desk.db").resolve()
     sqlite3.connect(db).close()
-    monkeypatch.setenv("STOCK_DESK_DB_PATH", str(db))
+    monkeypatch.setattr(scheduler_module, "production_db_target", lambda: db)
     monkeypatch.setattr(scheduler_module, "get_index_resolver", lambda: {})
     seen: list[Mapping[str, object]] = []
 

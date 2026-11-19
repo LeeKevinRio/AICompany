@@ -66,7 +66,10 @@ One more weekday cron job is the forecast ledger core's recorder (ADR-0030):
     core, and only through ``app.forecast.recorder`` (K-3), imported at module
     level so the recorder's provenance is taken once per process (supplement
     3 (revised) point 2). It never creates the ledger schema: without it the
-    run is refused (supplement 4 point 2).
+    run is refused (supplement 4 point 2). It records only into the default
+    production database ``<backend>/data/stock-desk.db`` with
+    ``STOCK_DESK_DB_PATH`` unset (supplement 9 point 3): a deployment that
+    sets the variable, docker compose included, does not record.
 
 Robustness rules, because a scheduler that dies silently is worse than no
 scheduler:
@@ -624,8 +627,53 @@ def run_dividend_sync(
     return result
 
 
-#: The fixed log line of a ``forecast_record`` tick that found no main DB file.
-FORECAST_RECORD_NO_DB = "forecast_record: the main database file does not exist; the run is skipped"
+#: ADR-0030 supplement 9 point 3: the variable whose presence (even empty) refuses the run.
+FORECAST_RECORD_DB_ENV = "STOCK_DESK_DB_PATH"
+#: The backend directory, from this module's location (never the working directory).
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+#: One fixed WARNING line per refusal of supplement 9 point 3 (no path in any of them).
+FORECAST_RECORD_REFUSALS: dict[str, str] = {
+    "env_db_path": (
+        "forecast_record: STOCK_DESK_DB_PATH is set in the process environment; the run is skipped"
+    ),
+    "target_unresolved": (
+        "forecast_record: the main database does not resolve to an existing file;"
+        " the run is skipped"
+    ),
+    "target_not_default": (
+        "forecast_record: the main database is not the default production database;"
+        " the run is skipped"
+    ),
+    "target_not_regular": (
+        "forecast_record: the main database is not a regular file; the run is skipped"
+    ),
+}
+
+
+def production_db_target() -> Path:
+    """``<backend>/data/stock-desk.db``, ``<backend>`` from this module's location."""
+    return BACKEND_DIR / "data" / "stock-desk.db"
+
+
+def forecast_record_target() -> Path | str:
+    """The checked main DB of ``forecast_record``, or the key of the refusal (supplement 9 point 3).
+
+    In order: (a) ``STOCK_DESK_DB_PATH`` is not in the process environment
+    (an empty value counts as set); (b) ``resolve_db_path()`` resolves with
+    ``Path.resolve(strict=True)``, equals :func:`production_db_target` and is
+    a regular file. Nothing is opened or created and no ``.env`` file is read.
+    """
+    if FORECAST_RECORD_DB_ENV in os.environ:
+        return "env_db_path"
+    try:
+        resolved = resolve_db_path().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return "target_unresolved"
+    if resolved != production_db_target():
+        return "target_not_default"
+    if not resolved.is_file():
+        return "target_not_regular"
+    return resolved
 
 
 def forecast_record_trigger() -> OrTrigger:
@@ -652,21 +700,23 @@ def run_forecast_record() -> RunResult | None:
     up when the job runs. There is no T, ``as_of``, clock or rule argument
     (K-10, S-6): the store clock is the system clock (``ledger_store``).
 
-    The main DB is the one every store uses (``resolve_db_path``). When that
-    file does not exist the run is skipped with one WARNING line -- SQLite
-    would otherwise create an empty file on connect; nothing else is created
-    either way. The ledger schema is created only by ``python -m
-    app.forecast.claims bootstrap --production`` (ADR-0030 supplement 4 point
-    2): without it the recorder's first write refuses (``SchemaIncompleteError``
-    propagates to the scheduler's own job error log) and no table is created.
-    One INFO line reports the run's outcome -- no label (D-4 point 3).
+    Before any store exists the target is checked (ADR-0030 supplement 9
+    point 3, :func:`forecast_record_target`): with ``STOCK_DESK_DB_PATH`` set,
+    or a main DB that is not the default production file, the run is skipped
+    with one fixed WARNING line and nothing is opened or created. Only the
+    scheduler checks the target; the recorder and ``ledger_store`` do not.
+    The ledger schema is created only by ``python -m app.forecast.claims
+    bootstrap --production`` (supplement 4 point 2): without it the recorder's
+    first write refuses (``SchemaIncompleteError`` propagates to the
+    scheduler's own job error log) and no table is created. One INFO line
+    reports the run's outcome -- no label (D-4 point 3).
     """
-    db_path = resolve_db_path()
-    if not db_path.is_file():
-        logger.warning(FORECAST_RECORD_NO_DB)
+    target = forecast_record_target()
+    if isinstance(target, str):
+        logger.warning(FORECAST_RECORD_REFUSALS[target])
         return None
     result = record_forecasts(
-        ledger_store(db_path),
+        ledger_store(target),
         load_benchmark=load_market_benchmark,
         resolver=get_index_resolver(),
     )
