@@ -311,6 +311,26 @@ def test_a_window_with_no_final_session_holds_on_any_not_ready_day(ledger: Ledge
     assert status.window.denominator == 0 and status.window.holds
 
 
+def test_s19a_a_full_window_with_no_final_session_and_nothing_counted_holds(
+    ledger: Ledger,
+) -> None:
+    # Supplement 9 point 4: denominator 0, numerator 0 -- held, and ever held.
+    window = weekdays(MONDAY, F2_WINDOW_WEEKDAYS)
+    ledger.run(at(MONDAY))
+    status = store(ledger).f2_status(CLAIM_H3, now=after_cutoff(window[-1]))
+    assert status.full and status.window is not None
+    assert (status.window.denominator, status.window.numerator) == (0, 0)
+    assert status.window.holds and status.ever_held
+
+
+def test_s19a_a_short_range_with_nothing_counted_is_still_not_held(ledger: Ledger) -> None:
+    # Supplement 9 point 4 applies to full windows only: (f) is unchanged.
+    ledger.run(at(MONDAY))
+    status = store(ledger).f2_status(CLAIM_H3, now=after_cutoff(weekdays(MONDAY, 5)[-1]))
+    assert not status.full and status.window is not None
+    assert status.window.numerator == 0 and not status.window.holds
+
+
 # --- (c) rolling and "ever held" ----------------------------------------------------------------
 
 

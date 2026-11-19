@@ -1520,7 +1520,8 @@ class ForecastStore:
         without a ``late = 0`` record of the claim, and the Taipei dates in
         the range with at least one ``inputs_not_ready`` run (one per date).
         (e) The denominator is min(20, final sessions in the range); a full
-        window holds when numerator > 30 % of it. (f) With fewer than 20
+        window holds when numerator > 30 % of it, and always when the
+        denominator is 0 (ADR-0030 supplement 9 point 4; full windows only). (f) With fewer than 20
         weekdays the range is every weekday since S_c and holds when the
         numerator exceeds 6. ``now`` is the caller's reading of the clock (the
         report's), not a stored value. Read-only.
@@ -1563,7 +1564,8 @@ class ForecastStore:
             if full:
                 limit = min(F2_WINDOW_WEEKDAYS, within(sessions, first, last))
                 denominator = limit
-                holds = numerator * F2_RATIO_DENOMINATOR > limit * F2_RATIO_NUMERATOR
+                # Supplement 9 point 4: no final session at all in a full window holds.
+                holds = limit == 0 or numerator * F2_RATIO_DENOMINATOR > limit * F2_RATIO_NUMERATOR
             else:
                 holds = numerator > F2_SHORT_WINDOW_LIMIT
             return F2Window(
