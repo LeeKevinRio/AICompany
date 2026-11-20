@@ -25,6 +25,9 @@ import pytest
 from app.forecast import report
 from app.forecast.canonical import canonical_timestamp
 from app.forecast.store import (
+    F2_RATIO_DENOMINATOR,
+    F2_RATIO_NUMERATOR,
+    F2_SHORT_WINDOW_LIMIT,
     F2_WINDOW_WEEKDAYS,
     ForecastStore,
     ForecastStoreError,
@@ -600,3 +603,113 @@ def test_the_grid_loss_verdict_is_derived_in_store_py_only() -> None:
     source = (APP_ROOT / "forecast" / "report.py").read_text(encoding="utf-8")
     for computed in ("GRID_LOSS_FACTOR", "* 5", "*5", "late_cutoff_at", ".points", "on_time"):
         assert computed not in source
+
+
+# --- qa N-11: a short range that held is never revoked by the first full window ------------------
+#
+# Property: before the first full window, F-2 holds when the numerator is >= 7
+# (F2_SHORT_WINDOW_LIMIT + 1). The first full window starts at the same S_c and
+# covers the short range, so its numerator is at least as large, while its
+# denominator is at most 20 (or 0, which always holds). 7 > 30 % of 20, so that
+# window holds, and "F-2 ever held since the start" stays "yes" once the full
+# windows begin. Checked on synthetic ledgers grown over time and, for every
+# numerator 7..20 x denominator 0..20, on the real ``f2_status``.
+
+#: The smallest short-range numerator that holds (f).
+SHORT_HOLDS_FROM = F2_SHORT_WINDOW_LIMIT + 1
+
+
+def _not_ready(ledger: Ledger, days: Sequence[date]) -> None:
+    for day in days:
+        ledger.run(at(day, 22, 10), outcome="inputs_not_ready")
+
+
+@pytest.mark.parametrize(
+    ("case", "short_days", "missed", "not_ready", "final"),
+    [
+        # 7 missed sessions in the first 10 weekdays; every weekday a session (denominator 20).
+        pytest.param("all-sessions", 10, 7, 0, 20, id="denominator-20"),
+        # Holiday-heavy: only 12 of the 20 weekdays are sessions (denominator 12 < 20).
+        pytest.param("holiday-heavy", 10, 7, 0, 12, id="denominator-12"),
+        # No final session at all, 7 inputs_not_ready days (denominator 0).
+        pytest.param("no-session", 10, 0, 7, 0, id="denominator-0"),
+        # Both terms: 4 missed and 3 inputs_not_ready days, held at 15 weekdays.
+        pytest.param("mixed", 15, 4, 3, 20, id="mixed-terms"),
+        # Exactly at the limit, on the last short day (19 weekdays).
+        pytest.param("late-short", 19, 7, 0, 19, id="denominator-19"),
+    ],
+)
+def test_n11_a_held_short_range_is_still_held_after_the_first_full_window(
+    ledger: Ledger,
+    case: str,
+    short_days: int,
+    missed: int,
+    not_ready: int,
+    final: int,
+) -> None:
+    days = weekdays(MONDAY, F2_WINDOW_WEEKDAYS + 10)
+    sessions = days[:final] if final < F2_WINDOW_WEEKDAYS else days
+    short = days[:short_days]
+    ledger.run(at(MONDAY, 9, 0))
+    # Time 1: the short range, as it stood after its last weekday.
+    early = [day for day in sessions if day <= short[-1]]
+    if early:
+        recorded_window(ledger, early, skip=early[:missed])
+    _not_ready(ledger, short[:not_ready])
+    before = store(ledger).f2_status(CLAIM_H3, now=after_cutoff(short[-1]))
+    assert not before.full and before.window is not None
+    assert before.window.numerator == missed + not_ready >= SHORT_HOLDS_FROM
+    assert before.window.holds and before.ever_held
+    # Time 2: the later weekdays are recorded on time; nothing more is missed.
+    late = [day for day in sessions if day > short[-1]]
+    if late:
+        recorded_window(ledger, late)
+    first_full = days[F2_WINDOW_WEEKDAYS - 1]
+    at_first = store(ledger).f2_status(CLAIM_H3, now=after_cutoff(first_full))
+    assert at_first.full and at_first.window is not None
+    assert (at_first.window.first, at_first.window.last) == (MONDAY, first_full)
+    assert at_first.window.numerator >= before.window.numerator
+    assert at_first.window.denominator == min(F2_WINDOW_WEEKDAYS, final)
+    assert at_first.window.holds and at_first.ever_held
+    # Later full windows may not hold, but "ever held" is not revoked.
+    later = store(ledger).f2_status(CLAIM_H3, now=after_cutoff(days[-1]))
+    assert later.full and later.ever_held
+
+
+@pytest.mark.parametrize("denominator", range(F2_WINDOW_WEEKDAYS + 1))
+@pytest.mark.parametrize("numerator", range(SHORT_HOLDS_FROM, F2_WINDOW_WEEKDAYS + 1))
+def test_n11_arithmetic_every_numerator_7_to_20_holds_on_every_denominator_0_to_20(
+    numerator: int, denominator: int
+) -> None:
+    # The full-window rule (e) with supplement 9 point 4, in the store's own constants.
+    holds = denominator == 0 or numerator * F2_RATIO_DENOMINATOR > denominator * F2_RATIO_NUMERATOR
+    assert holds
+
+
+@pytest.mark.parametrize("denominator", range(F2_WINDOW_WEEKDAYS + 1))
+@pytest.mark.parametrize("numerator", range(SHORT_HOLDS_FROM, F2_WINDOW_WEEKDAYS + 1))
+def test_n11_the_store_holds_every_numerator_7_to_20_on_every_denominator_0_to_20(
+    tmp_path: Path, numerator: int, denominator: int
+) -> None:
+    # The same grid through the real ``f2_status``: ``denominator`` final sessions in
+    # the first full window, ``min(numerator, denominator)`` of them missed, the rest
+    # of the numerator as inputs_not_ready days.
+    built = Ledger(path=file_ledger(tmp_path))
+    built.claim(CLAIM_H3, horizon=3, registered=at(date(2026, 9, 1), 9, 0))
+    window = weekdays(MONDAY, F2_WINDOW_WEEKDAYS)
+    built.run(at(MONDAY, 9, 0))
+    sessions = window[:denominator]
+    missed = min(numerator, denominator)
+    if sessions:
+        recorded_window(built, sessions, skip=sessions[:missed])
+    _not_ready(built, window[F2_WINDOW_WEEKDAYS - (numerator - missed) :])
+    status = store(built).f2_status(CLAIM_H3, now=after_cutoff(window[-1]))
+    assert status.full and status.window is not None
+    assert (status.window.numerator, status.window.denominator) == (numerator, denominator)
+    assert status.window.holds and status.ever_held
+
+
+def test_n11_six_is_not_enough_on_a_full_window_of_20() -> None:
+    # The property is tight: the limit of (f) and the 30 % rule meet between 6 and 7.
+    assert not 6 * F2_RATIO_DENOMINATOR > F2_WINDOW_WEEKDAYS * F2_RATIO_NUMERATOR
+    assert SHORT_HOLDS_FROM == 7
