@@ -1,18 +1,20 @@
 """The CG-2 registration one-click files stay retired (ADR-0030 supplement 9 point 1, S-19a).
 
 * The two scripts and the two launchers do not exist, on disk or in the git index.
-* No file git tracks under ``apps/stock-desk`` holds any of the four retired names,
-  except this file (it has to spell them out) and the entries of
-  :data:`PENDING_RULING`, each pending a tech-architect ruling.
+* No file git tracks under ``apps/stock-desk`` refers to a retired file, by the
+  discriminating pattern :data:`RETIRED_REFERENCE` (tech-architect reading,
+  2026-11-20 topic 2). The only file excluded is this one, by exact path: it has
+  to spell the retired names out.
 
 The scan reads the working-tree bytes of ``git ls-files`` under ``apps/stock-desk``,
 so untracked and ignored files (``.env``, ``data/*.db``, virtual environments,
 caches) are never opened. ``work/`` lies outside ``apps/stock-desk`` and is not
-scanned. The only path excluded is this file itself, by exact path.
+scanned.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 from typing import Final
@@ -29,23 +31,24 @@ RETIRED_FILES: Final = (
     "cg2-register.bat",
 )
 
-#: The four names S-19a says grep must not find (case-sensitive, as grep does).
-RETIRED_NAMES: Final = (
-    b"cg2_register",
-    b"cg2-register",
-    b"cg2-preflight",
-    b"verify_cg2_instruction",
+#: A reference to a retired file (case-sensitive, as grep is). ``cg2_register``
+#: not followed by ``s`` covers the script (``cg2_register.py``, a bare module name
+#: such as ``scripts.cg2_register``) and the retired test helpers and tests
+#: (``cg2_register_world``, ``test_cg2_register_flow``, ...). It is stricter than
+#: the example ``cg2_register\.py|cg2_register_`` and leaves out the same names.
+RETIRED_REFERENCE: Final = re.compile(
+    rb"cg2_register(?!s)|cg2-register|cg2-preflight|verify_cg2_instruction"
 )
 
-#: Hits kept for now: path relative to ``apps/stock-desk`` -> the exact stripped lines.
-#: Both are test function names where ``cg2_registers`` merely starts with a retired
-#: name; neither refers to a retired file. Pending tech-architect ruling.
-PENDING_RULING: Final[dict[str, frozenset[bytes]]] = {
-    "backend/tests/test_dirdef_v1_0_fields.py": frozenset(
-        {b"def test_cg2_registers_exactly_dirdef_v1_0_and_the_two_rule_sets() -> None:"}
+#: Out of scope: test names where ``cg2_registers`` only happens to start with
+#: ``cg2_register``. They refer to no retired file and must not be renamed
+#: (tech-architect, 2026-11-20 topic 2, note 2); the pattern above leaves them out.
+NOT_A_REFERENCE: Final = {
+    "backend/tests/test_dirdef_v1_0_fields.py": (
+        b"def test_cg2_registers_exactly_dirdef_v1_0_and_the_two_rule_sets() -> None:"
     ),
-    "backend/tests/test_outlook_rule_files.py": frozenset(
-        {b"def test_cg2_registers_both_files_with_their_bytes_hash() -> None:"}
+    "backend/tests/test_outlook_rule_files.py": (
+        b"def test_cg2_registers_both_files_with_their_bytes_hash() -> None:"
     ),
 }
 
@@ -61,7 +64,7 @@ def _tracked_files() -> list[str]:
 
 
 def _hits(root: Path, names: list[str], exclude: Path | None) -> dict[str, frozenset[bytes]]:
-    """Map each file under ``root`` holding a retired name to its stripped hit lines."""
+    """Map each file under ``root`` referring to a retired file to its stripped hit lines."""
     found: dict[str, frozenset[bytes]] = {}
     for name in names:
         path = root / name
@@ -70,7 +73,7 @@ def _hits(root: Path, names: list[str], exclude: Path | None) -> dict[str, froze
         lines = frozenset(
             line.strip()
             for line in path.read_bytes().splitlines()
-            if any(retired in line for retired in RETIRED_NAMES)
+            if RETIRED_REFERENCE.search(line)
         )
         if lines:
             found[name] = lines
@@ -84,40 +87,51 @@ def test_the_four_retired_files_do_not_exist() -> None:
     assert tracked.isdisjoint(RETIRED_FILES)
 
 
-def test_no_tracked_file_names_a_retired_file_outside_the_pending_ruling_list() -> None:
-    hits = _hits(STOCK_DESK, _tracked_files(), THIS_FILE)
-    # Equality, not inclusion: a new hit fails, and so does a pending entry that is
-    # gone (the list has to shrink with it).
-    assert hits == PENDING_RULING
+def test_no_tracked_file_refers_to_a_retired_file() -> None:
+    assert _hits(STOCK_DESK, _tracked_files(), THIS_FILE) == {}
+
+
+def test_the_two_cg2_registers_test_names_are_still_there_and_out_of_scope() -> None:
+    for name, line in NOT_A_REFERENCE.items():
+        held = [x.strip() for x in (STOCK_DESK / name).read_bytes().splitlines()]
+        assert line in held, name
+        assert b"cg2_register" in line
+        assert RETIRED_REFERENCE.search(line) is None
 
 
 def test_the_scan_covers_this_folder_and_excludes_only_this_file() -> None:
     tracked = _tracked_files()
     relative = THIS_FILE.relative_to(STOCK_DESK).as_posix()
-    # The scan sees the backend sources, the launchers and this file (once committed).
     assert "backend/pyproject.toml" in tracked and "dev-up.bat" in tracked
-    # This file does hold every retired name, so excluding it is needed ...
-    source = THIS_FILE.read_bytes()
-    assert all(retired in source for retired in RETIRED_NAMES)
-    # ... and it is the only file excluded: scanning with nothing excluded adds it alone.
-    with_self = _hits(STOCK_DESK, [*tracked, relative], None)
-    assert set(with_self) - set(PENDING_RULING) == {relative}
+    # Every retired file name matches the pattern ...
+    assert all(RETIRED_REFERENCE.search(name.encode()) for name in RETIRED_FILES)
+    # ... this file holds them, so excluding it is needed, and it is the only file
+    # excluded: scanning with nothing excluded adds this file alone.
+    assert _hits(STOCK_DESK, sorted({*tracked, relative}), None).keys() == {relative}
 
 
-def test_the_scan_finds_each_retired_name(tmp_path: Path) -> None:
-    for index, retired in enumerate(RETIRED_NAMES):
-        (tmp_path / f"f{index}.txt").write_bytes(b"ok\n  see " + retired + b".x  \r\nok\n")
-    (tmp_path / "clean.txt").write_bytes(b"cg2_registration dev-up.bat cg2\n")
+def test_the_pattern_matches_each_retired_name(tmp_path: Path) -> None:
+    probes = (
+        b"cg2_register.py",
+        b"tests.cg2_register_world",
+        b"import scripts.cg2_register",
+        b"cg2-register.bat",
+        b"cg2-preflight.bat",
+        b"verify_cg2_instruction",
+    )
+    for index, probe in enumerate(probes):
+        (tmp_path / f"f{index}.txt").write_bytes(b"ok\n  see " + probe + b"  \r\nok\n")
+    (tmp_path / "clean.txt").write_bytes(
+        b"cg2_registration cg2_registers_x CG2_REGISTER dev-up.bat cg2-registry\n"
+    )
     names = sorted(p.name for p in tmp_path.iterdir())
-    hits = _hits(tmp_path, names, None)
-    assert hits == {
-        f"f{index}.txt": frozenset({b"see " + retired + b".x"})
-        for index, retired in enumerate(RETIRED_NAMES)
+    assert _hits(tmp_path, names, None) == {
+        f"f{index}.txt": frozenset({b"see " + probe}) for index, probe in enumerate(probes)
     }
 
 
 def test_the_scan_is_case_sensitive_and_skips_the_excluded_file(tmp_path: Path) -> None:
-    (tmp_path / "upper.txt").write_bytes(b"CG2_REGISTER CG2-PREFLIGHT\n")
+    (tmp_path / "upper.txt").write_bytes(b"CG2-REGISTER CG2-PREFLIGHT\n")
     (tmp_path / "self.py").write_bytes(b"cg2-register\n")
     (tmp_path / "other.py").write_bytes(b"cg2-register\n")
     names = ["upper.txt", "self.py", "other.py", "missing.txt"]
