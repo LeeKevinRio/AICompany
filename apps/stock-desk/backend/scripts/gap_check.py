@@ -1,9 +1,13 @@
 """Off-ledger, read-only missing-day comparison of the ``^TWII`` cache (supplement 8 point 5).
 
+Authority: ADR-0030 supplement 8 point 5, as read and tightened by supplement 10 point 7.
+
 What it does (one run, started by ``gap-check.bat``): preflight, a SQLite backup-API copy of the
-main database (the source is opened read-only), ONE ``SELECT trade_date`` on the copy, deletion
-of the copy, the official TWSE trading-day calendar month by month (``MI_5MINS_HIST``, date
-column only), the comparison, and a whitelisted ``paste-back.txt`` plus the same lines on screen.
+main database (the source is opened ``mode=ro&immutable=1``, and only when it has no ``-wal`` or
+``-journal`` file and does not change while it is copied), ONE ``SELECT trade_date`` on the copy,
+deletion of the copy, the official TWSE trading-day calendar month by month
+(``MI_5MINS_HIST``, date column only), the comparison, and a whitelisted ``paste-back.txt`` plus
+the same lines on screen.
 
 Boundaries (point 5 (c), RC-220):
 
@@ -127,6 +131,7 @@ RunStopKind = Literal[
     "git_unusable",
     "git_dirty",
     "head_unpublished",
+    "db_in_use",
     "db_unreadable",
     "copy_unreadable",
     "no_rows",
@@ -156,6 +161,14 @@ STOP_SENTENCES: Final[Mapping[RunStopKind, str]] = MappingProxyType(
         # Verbatim from pipeline_acceptance_real.py (STOP_SENTENCES):
         "no_rows": "STOP: the cache copy holds no TWII rows.",
         "unparseable_row": "STOP: a TWII row of the cache copy cannot be read.",
+        # Verbatim from the risk-control report (RC-271, S-1), extracted by script:
+        "db_in_use": (
+            "STOP: the database may be in use, or it changed while it was being "
+            "copied, so the check did not continue. Close the stock-desk backend, "
+            "scheduler and frontend windows, then run this again. Do not delete or "
+            "change any file yourself; if this line appears again, tell the "
+            "coordinator and do not run this again."
+        ),
         # Verbatim from cg2_register.py (STOPS["db_unreadable"]):
         "db_unreadable": (
             "STOP: the main database could not be read in read-only mode."
@@ -519,31 +532,66 @@ def render(comparison: Comparison, *, git_head: str, script_sha256_lf: str) -> l
 
 
 def db_uri(db: Path) -> str:
-    """The read-only URI: ``mode=ro``, plus ``immutable=1`` when no ``-wal`` / ``-journal`` exists.
+    """The read-only, immutable URI: ``mode=ro&immutable=1``, always (supplement 10 point 7 (a)).
 
-    A ``mode=ro`` connection to a WAL database creates a ``-wal`` and a ``-shm`` beside it when
-    they are absent (measured, hand-over report). With neither a ``-wal`` nor a ``-journal`` the
-    database file alone holds every committed row, so ``immutable=1`` reads it with no side file
-    and no lock. With either present it is read through SQLite (they may hold rows not yet in the
-    file). The one place that decides this, for the main database and for the copy alike.
+    A plain ``mode=ro`` connection to a WAL database creates or changes a ``-wal`` / ``-shm`` file
+    beside it (measured, hand-over report). ``immutable=1`` reads the database file alone, with no
+    lock and no side file; it is safe only while no writer is active, which is why
+    :func:`make_copy` stops on a ``-wal`` / ``-journal`` file and on any change of the file. There
+    is no plain ``mode=ro`` path for the main database any more.
     """
+    return f"{Path(db).resolve().as_uri()}?mode=ro&immutable=1"
+
+
+SIDE_FILE_SUFFIXES: Final = ("-wal", "-journal")
+FileSignature = tuple[int, int]
+
+
+def has_side_files(db: Path) -> bool:
+    """True when a ``-wal`` or ``-journal`` file sits beside ``db`` (a ``stat``; no connection)."""
     path = Path(db).resolve()
-    query = "mode=ro"
-    if not any(path.with_name(f"{path.name}{suffix}").exists() for suffix in ("-wal", "-journal")):
-        query += "&immutable=1"
-    return f"{path.as_uri()}?{query}"
+    return any(path.with_name(f"{path.name}{suffix}").exists() for suffix in SIDE_FILE_SUFFIXES)
+
+
+def file_signature(db: Path) -> FileSignature:
+    """``(st_size, st_mtime_ns)`` of ``db``; a ``stat`` only, no connection is opened."""
+    info = Path(db).stat()
+    return info.st_size, info.st_mtime_ns
 
 
 def make_copy(main_db: Path, copy_dir: Path) -> Path:
-    """A consistent copy by the SQLite backup API; the source is opened read-only (``mode=ro``)."""
+    """A consistent copy by the SQLite backup API; the source is opened ``mode=ro&immutable=1``.
+
+    Supplement 10 point 7 (a): with a ``-wal`` or ``-journal`` beside the main database it stops
+    before any connection is opened and before any copy exists. The main database's
+    ``(st_size, st_mtime_ns)`` is taken before and after the backup (connections closed); a
+    difference, or a side file that appeared, is the same stop (the caller deletes the copy before
+    the stop is shown). A backup that fails with the file unchanged is ``copy_failed``; a failure
+    with a changed file or a new side file is reported as the changed file (``db_in_use``).
+    """
+    if has_side_files(main_db):
+        raise RunStop("db_in_use")
+    try:
+        before = file_signature(main_db)
+    except OSError:
+        raise RunStop("db_unreadable") from None
     copy_dir.mkdir(parents=True)
     target = copy_dir / DB_NAME
+    failed = False
     try:
         with closing(sqlite3.connect(db_uri(main_db), uri=True)) as source:
             with closing(sqlite3.connect(str(target))) as dest:
                 source.backup(dest)
     except (sqlite3.Error, OSError):
-        raise RunStop("db_unreadable") from None
+        failed = True
+    try:
+        changed = has_side_files(main_db) or file_signature(main_db) != before
+    except OSError:
+        changed = True  # fail closed: a file that cannot be examined counts as changed
+    if changed:
+        raise RunStop("db_in_use")
+    if failed:
+        raise RunStop("db_unreadable")
     return target
 
 

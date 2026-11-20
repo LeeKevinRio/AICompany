@@ -11,7 +11,6 @@ from __future__ import annotations
 import ast
 import os
 import re
-import shutil
 import socket
 import sqlite3
 import subprocess
@@ -43,6 +42,35 @@ UNEXPECTED: str = gc.UNEXPECTED
 INTERRUPTED: str = gc.INTERRUPTED
 STOPS: dict[str, str] = dict(gc.STOP_SENTENCES)
 COPY_STOP = STOPS["copy_not_deleted"]
+
+
+REPORT_NAME = "2026-11-20-補充十修訂版與三句STOP判定RC265至RC274-風控.md"
+
+
+def report_path() -> Path:
+    """The risk-control report that fixes the three sentences (found under ``work/reviews``)."""
+    override = os.environ.get("GAP_CHECK_RC_REPORT")
+    if override:
+        return Path(override)
+    for folder in Path(__file__).resolve().parents:
+        candidate = folder / "work" / "reviews" / REPORT_NAME
+        if candidate.is_file():
+            return candidate
+    raise AssertionError(f"the risk-control report was not found: work/reviews/{REPORT_NAME}")
+
+
+def report_sentences() -> dict[str, set[str]]:
+    """Item label (``S-1`` ...) to the set of ``定稿全文`` texts below its ``項目：`` line."""
+    lines = report_path().read_text(encoding="utf-8").splitlines()
+    found: dict[str, set[str]] = {}
+    for index, line in enumerate(lines):
+        match = re.match(r"項目：(S-[0-9])\b", line)
+        if match:
+            following = lines[index + 1]
+            prefix = "定稿全文：`"
+            assert following.startswith(prefix) and following.endswith("`"), following
+            found.setdefault(match.group(1), set()).add(following[len(prefix) : -1])
+    return found
 
 
 @pytest.fixture(autouse=True)
@@ -294,6 +322,7 @@ def test_ast_the_sql_is_exactly_one_select_of_trade_date_from_the_cache_for_twii
         if isinstance(n, ast.Constant)
         and isinstance(n.value, str)
         and id(n) not in docstrings
+        and n.value not in gc.FIXED_SENTENCES  # a fixed sentence is prose, not SQL
         and sqlish.search(n.value)
     ]
     assert hits == [gc.SELECT_SQL]
@@ -668,6 +697,14 @@ def test_every_stop_screen_is_closed(tmp_path: Path, capsys: Any) -> None:
         assert_closed(lines)
 
 
+def test_the_changed_file_stop_is_the_risk_control_sentence_s1_verbatim() -> None:
+    found = report_sentences()
+    assert found["S-1"] and len(found["S-1"]) == 1  # every occurrence in the report is identical
+    (sentence,) = found["S-1"]
+    assert STOPS["db_in_use"] == sentence
+    assert sentence.startswith("STOP: the database may be in use, or it changed while it was being")
+
+
 def test_the_fixed_sentences_are_ascii_without_values_and_the_new_one_tells_the_coordinator() -> (
     None
 ):
@@ -906,52 +943,308 @@ def test_contrast_a_plain_readonly_connection_to_a_wal_database_does_add_side_fi
         )  # why immutable=1
 
 
-def test_backup_source_with_a_live_wal_keeps_the_db_and_wal_bytes_and_reads_the_wal_rows(
-    tmp_path: Path,
+def test_a_live_wal_writer_stops_the_run_before_any_connection_is_opened(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Replaces the former "plain mode=ro with a live -wal" tests: that path no longer exists.
+    world = make_world(tmp_path, write_db=False)
+    writer = write_main_db(world.db, ["2026-11-02", "2026-11-03"], wal=True, keep_open=True)
+    assert writer is not None
+    connects = _count_connects(monkeypatch)
+    try:
+        names = _names(world.db.parent)
+        assert {"stock-desk.db-wal", "stock-desk.db-shm"} <= set(names)
+        before = _state(world.db.parent)
+        only_stop(world, capsys, "db_in_use")
+        assert connects == []  # no connection of any kind was opened
+        assert _names(world.db.parent) == names  # no side file added or removed
+        assert _state(world.db.parent) == before  # bytes and mtime of every file
+    finally:
+        writer.close()
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-journal"])
+def test_a_wal_or_journal_beside_the_main_database_stops_with_no_connection_and_no_copy(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch, suffix: str
+) -> None:
+    world = make_world(tmp_path)
+    Path(f"{world.db}{suffix}").write_bytes(b"x")
+    before = _state(world.db.parent)
+    connects = _count_connects(monkeypatch)
+    only_stop(world, capsys, "db_in_use")
+    assert connects == [] and _state(world.db.parent) == before
+    assert not world.work.exists() or not any(world.work.iterdir())
+
+
+def _count_connects(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    seen: list[str] = []
+
+    def refusing(database: Any, *_a: Any, **_k: Any) -> sqlite3.Connection:
+        seen.append(str(database))
+        raise AssertionError("a connection was opened")
+
+    monkeypatch.setattr(gc.sqlite3, "connect", refusing)
+    return seen
+
+
+OLD_NS = 1_000_000_000_000_000_000  # an mtime far in the past, so any later write differs
+
+
+def _grow(db: Path, real_connect: Any) -> None:
+    with closing(real_connect(str(db))) as conn:
+        conn.executemany(
+            "INSERT INTO price_bars_cache VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(f"Z{i}", "TW", "2026-11-02", "1", "1", "1", "1", 1, "TWD", "y", "a", "b")
+             for i in range(3000)],
+        )  # fmt: skip
+        conn.commit()
+
+
+def _touch_same_size(db: Path, real_connect: Any) -> None:
+    size = db.stat().st_size
+    with closing(real_connect(str(db))) as conn:
+        conn.execute("UPDATE portfolio SET cash = '1111111.11'")  # same length as the old value
+        conn.commit()
+    assert db.stat().st_size == size  # the write really is a same-size, mtime-only one
+
+
+def _side_wal(db: Path, _real_connect: Any) -> None:
+    Path(f"{db}-wal").write_bytes(b"x")
+
+
+def _side_journal(db: Path, _real_connect: Any) -> None:
+    Path(f"{db}-journal").write_bytes(b"x")
+
+
+MUTATIONS = {
+    "size": _grow,
+    "mtime_only": _touch_same_size,
+    "wal_appears": _side_wal,
+    "journal_appears": _side_journal,
+}
+
+
+def _mutate_during_backup(
+    monkeypatch: pytest.MonkeyPatch, world: World, how: str, *, then_fail: bool = False
+) -> None:
+    """Change the main database while the backup runs: between the source open and the copy."""
+    real_connect = sqlite3.connect
+    calls: list[str] = []
+
+    def connect(database: Any, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        calls.append(str(database))
+        if len(calls) == 2:  # the second connection is the copy's: the backup is under way
+            MUTATIONS[how](world.db, real_connect)
+            if then_fail:
+                raise sqlite3.OperationalError("synthetic failure while copying")
+        conn: sqlite3.Connection = real_connect(database, *args, **kwargs)
+        return conn
+
+    monkeypatch.setattr(gc.sqlite3, "connect", connect)
+
+
+@pytest.mark.parametrize("how", sorted(MUTATIONS))
+def test_a_change_of_the_main_database_during_the_copy_deletes_the_copy_then_stops(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    world = make_world(tmp_path)
+    os.utime(world.db, ns=(OLD_NS, OLD_NS))
+    _mutate_during_backup(monkeypatch, world, how)
+    events: list[str] = []
+    copy_dir = world.work / "copy"
+
+    def remover(path: Path) -> None:
+        events.append(f"delete:{path.name}")
+        gc.remove_path(path)
+
+    real_say = gc.say
+
+    def say(text: str) -> None:
+        events.append("say")
+        assert not copy_dir.exists()  # the copy is gone before the stop is shown
+        real_say(text)
+
+    monkeypatch.setattr(gc, "say", say)
+    code, lines, err = run(world, capsys, remover=remover)
+    assert (code, lines, err) == (3, [STOPS["db_in_use"]], "")
+    assert events[-1] == "say" and "delete:stock-desk.db" in events
+    assert events.index("say") == len(events) - 1  # nothing was shown before the deletes
+    assert not any(x.startswith(("result=", "months_", "period_")) for x in lines)
+    assert world.calendar.urls == [] and not world.opened
+    no_residue(world)
+
+
+@pytest.mark.parametrize("how", sorted(MUTATIONS))
+def test_when_the_delete_also_fails_the_copy_stop_is_shown_not_the_changed_file_stop(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    world = make_world(tmp_path)
+    os.utime(world.db, ns=(OLD_NS, OLD_NS))
+    _mutate_during_backup(monkeypatch, world, how)
+
+    def remover(path: Path) -> None:
+        if path.name == "stock-desk.db":
+            raise PermissionError("locked")
+        gc.remove_path(path)
+
+    code, lines, err = run(world, capsys, remover=remover)
+    assert (code, lines, err) == (3, [COPY_STOP], "")
+    assert STOPS["db_in_use"] not in lines
+    assert world.calendar.urls == [] and not world.opened
+    assert not list(world.work_root.glob("*/" + gc.PASTE_BACK_NAME))
+
+
+@pytest.mark.parametrize("how", sorted(MUTATIONS))
+def test_a_failed_backup_with_a_changed_main_database_shows_the_changed_file_stop(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    world = make_world(tmp_path)
+    os.utime(world.db, ns=(OLD_NS, OLD_NS))
+    _mutate_during_backup(monkeypatch, world, how, then_fail=True)
+    only_stop(world, capsys, "db_in_use")
+
+
+def test_a_failed_backup_with_an_unchanged_main_database_is_the_copy_could_not_be_made(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = make_world(tmp_path)
+    before = _state(world.db.parent)
+
+    def failing(database: Any, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        raise sqlite3.OperationalError("synthetic: no space left")
+
+    monkeypatch.setattr(gc.sqlite3, "connect", failing)
+    only_stop(world, capsys, "db_unreadable")
+    assert _state(world.db.parent) == before
+
+
+def test_the_main_database_is_signed_by_stat_before_and_after_and_never_opened_for_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db = tmp_path / "main" / "stock-desk.db"
-    writer = write_main_db(db, ["2026-11-02", "2026-11-03"], wal=True, keep_open=True)
-    assert writer is not None
+    write_main_db(db, ["2026-11-02"])
+    signatures: list[Any] = []
+    real = gc.file_signature
+
+    def spy(path: Path) -> Any:
+        signatures.append(real(path))
+        return signatures[-1]
+
+    monkeypatch.setattr(gc, "file_signature", spy)
+    gc.make_copy(db, tmp_path / "copy")
+    assert len(signatures) == 2 and signatures[0] == signatures[1]
+    assert signatures[0] == (db.stat().st_size, db.stat().st_mtime_ns)
+
+
+def test_the_main_database_uri_is_always_read_only_and_immutable(tmp_path: Path) -> None:
+    db = tmp_path / "stock-desk.db"
+    write_main_db(db, ["2026-11-02"])
+    expected = f"{db.resolve().as_uri()}?mode=ro&immutable=1"
+    assert gc.db_uri(db) == expected
+    for suffix in ("-wal", "-journal"):  # no plain mode=ro branch remains
+        Path(f"{db}{suffix}").write_bytes(b"x")
+        assert gc.db_uri(db) == expected
+    uri_parts = [
+        n.value
+        for n in ast.walk(_tree())
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and "mode=ro" in n.value
+        and n.value.lstrip().startswith("?")
+    ]  # fmt: skip
+    assert uri_parts == ["?mode=ro&immutable=1"]  # the only place a URI query is written
+
+
+# --- measured premise of the stat and side-file check (supplement 10 point 7) -------------
+
+
+def _sig(db: Path) -> tuple[int, int]:
+    info = db.stat()
+    return info.st_size, info.st_mtime_ns
+
+
+def _wal_db(db: Path) -> None:
+    with closing(sqlite3.connect(str(db))) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE t (a TEXT)")
+        conn.execute("INSERT INTO t VALUES ('x')")
+        conn.commit()
+
+
+def test_measured_in_wal_mode_a_writer_that_begins_to_write_makes_a_wal_file_appear(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "stock-desk.db"
+    _wal_db(db)
+    assert _names(tmp_path) == ["stock-desk.db"] and not gc.has_side_files(db)
+    before = _sig(db)
+    writer = sqlite3.connect(str(db))
     try:
-        writer.execute(
-            "INSERT INTO price_bars_cache VALUES"
-            " ('^TWII','TW','2026-11-04','1','1','1','1',1,'TWD','yfinance','a','b')"
-        )
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute("INSERT INTO t VALUES ('y')")
+        assert gc.has_side_files(db)  # the side-file check sees the writer ...
+        assert _sig(db) == before  # ... while the stat comparison alone would not
         writer.commit()
-        names = _names(db.parent)
-        assert {"stock-desk.db-wal", "stock-desk.db-shm"} <= set(names)
-        before = _state(db.parent)
-        copy = gc.make_copy(db, tmp_path / "copy")
-        after = _state(db.parent)
-        assert _names(db.parent) == names  # no side file added or removed
-        for name in ("stock-desk.db", "stock-desk.db-wal"):
-            assert after[name] == before[name]  # bytes and mtime
-        assert sorted(d.isoformat() for d in gc.read_trade_dates(copy)) == [
-            "2026-11-02", "2026-11-03", "2026-11-04"
-        ]  # fmt: skip
-        assert _names(copy.parent) == ["stock-desk.db"]
+        assert gc.has_side_files(db) and _sig(db) == before  # committed, not yet checkpointed
     finally:
         writer.close()
 
 
-def test_backup_source_with_a_wal_and_no_shm_changes_neither_db_nor_wal(tmp_path: Path) -> None:
-    live = tmp_path / "live" / "stock-desk.db"
-    writer = write_main_db(live, ["2026-11-02"], wal=True, keep_open=True)
-    assert writer is not None
-    crashed = tmp_path / "crashed"
-    crashed.mkdir()
+def test_measured_in_wal_mode_a_write_finished_inside_the_window_changes_the_stat(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "stock-desk.db"
+    _wal_db(db)
+    os.utime(db, ns=(OLD_NS, OLD_NS))
+    before = _sig(db)
+    with closing(sqlite3.connect(str(db))) as writer:
+        writer.execute("INSERT INTO t VALUES ('y')")
+        writer.commit()
+    assert not gc.has_side_files(db)  # the last connection closed: checkpointed, -wal removed
+    assert _sig(db) != before  # the checkpoint wrote the main file: the stat comparison sees it
+
+
+def test_measured_in_rollback_mode_a_writer_makes_a_journal_and_a_commit_changes_the_stat(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "stock-desk.db"
+    with closing(sqlite3.connect(str(db))) as conn:
+        conn.execute("CREATE TABLE t (a TEXT)")
+        conn.execute("INSERT INTO t VALUES ('aaaa')")
+        conn.commit()
+    os.utime(db, ns=(OLD_NS, OLD_NS))
+    before = _sig(db)
+    writer = sqlite3.connect(str(db))
     try:
-        shutil.copy(live, crashed / "stock-desk.db")
-        shutil.copy(f"{live}-wal", crashed / "stock-desk.db-wal")
+        writer.execute("BEGIN")
+        writer.execute("UPDATE t SET a = 'bbbb'")
+        assert gc.has_side_files(db) and _sig(db) == before  # -journal seen, stat not yet
+        writer.commit()
     finally:
         writer.close()
-    before = _state(crashed)
-    copy = gc.make_copy(crashed / "stock-desk.db", tmp_path / "copy")
-    after = _state(crashed)
-    for name in ("stock-desk.db", "stock-desk.db-wal"):
-        assert after[name] == before[name]
-    assert set(after) - set(before) <= {"stock-desk.db-shm"}  # at most the wal-index is created
-    assert [d.isoformat() for d in gc.read_trade_dates(copy)] == ["2026-11-02"]
+    assert not gc.has_side_files(db)  # the journal is gone again ...
+    assert _sig(db)[0] == before[0] and _sig(db)[1] != before[1]  # ... same size, new mtime
+
+
+def test_known_limit_a_same_size_write_that_restores_the_mtime_is_not_detected(
+    tmp_path: Path,
+) -> None:
+    # A limit of the method, written down rather than hidden: nothing in a (size, mtime) pair or
+    # in the absence of side files can tell a same-size in-place write that also restores the
+    # file's mtime from no write at all. It needs a deliberate utime call; an ordinary write moves
+    # the mtime (measured: 200 back-to-back commits gave 200 different mtime_ns values).
+    db = tmp_path / "stock-desk.db"
+    with closing(sqlite3.connect(str(db))) as conn:
+        conn.execute("CREATE TABLE t (a TEXT)")
+        conn.execute("INSERT INTO t VALUES ('aaaa')")
+        conn.commit()
+    os.utime(db, ns=(OLD_NS, OLD_NS))
+    before = _sig(db)
+    with closing(sqlite3.connect(str(db))) as writer:
+        writer.execute("UPDATE t SET a = 'bbbb'")
+        writer.commit()
+    os.utime(db, ns=(OLD_NS, OLD_NS))
+    assert not gc.has_side_files(db) and _sig(db) == before
+    with closing(sqlite3.connect(gc.db_uri(db), uri=True)) as reader:
+        assert reader.execute("SELECT a FROM t").fetchall() == [("bbbb",)]  # it did change
 
 
 # --- the launcher ---------------------------------------------------------------------------------
