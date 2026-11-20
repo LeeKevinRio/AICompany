@@ -660,7 +660,7 @@ def _shown_before(world: World, capsys: Any, stage: str) -> str:
     if stage == "status":
         return ""
     _, status_text = reference(world, capsys, "status")
-    return status_text + fs.SEPARATOR + "\n"
+    return str(status_text + fs.SEPARATOR + "\n")
 
 
 @pytest.mark.parametrize("stage", ["status", "verify"])
