@@ -44,7 +44,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import ClassVar, Protocol
+from zoneinfo import ZoneInfo
 
+from app.data.freshness import TW_POLICY
 from app.data.interface import (
     DataStatus,
     Market,
@@ -52,6 +54,7 @@ from app.data.interface import (
     PriceBar,
     ProviderResult,
 )
+from app.data.service import LiveRefreshOutcome
 from app.leverage.index_mapping import (
     MAPPING_VERIFIED_ON,
     IndexRef,
@@ -215,6 +218,22 @@ class IndexSeriesService:
     ) -> ProviderResult:
         """The cache-only read (ADR-0010 D-1), passed through; it never claims ``fresh``."""
         return self._inner.get_cached_bars(symbol, market, start, end)
+
+    def refresh_daily_bars_live(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> LiveRefreshOutcome:
+        """The forced live refresh (ADR-0030 supplement 10 point 2), passed through.
+
+        An inner service without the method is a structural gap: ``ok=False``
+        with :data:`NO_LIVE_REFRESH_METHOD_REASON`, nothing asked, nothing
+        written. ``PriceService`` itself is not widened; the method is read off
+        the inner object (:class:`LiveRefreshService`).
+        """
+        refresh = getattr(self._inner, "refresh_daily_bars_live", None)
+        if not callable(refresh):
+            return LiveRefreshOutcome.failed(NO_LIVE_REFRESH_METHOD_REASON)
+        outcome: LiveRefreshOutcome = refresh(symbol, market, start, end)
+        return outcome
 
 
 def load_index_bars(
@@ -409,6 +428,125 @@ def load_market_benchmark(
         reason=result.reason,
         notes=notes,
         is_within_ttl=result.is_within_ttl,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Forced benchmark refresh (ADR-0030 supplement 10 point 2)
+# --------------------------------------------------------------------------- #
+#
+# The scheduler's job ``forecast_record`` asks the live source for the market
+# benchmark before every run, then checks the newest cached bar itself. These
+# reasons are operator facts for that check, in English; none of them is shown
+# to a reader. This module does not import ``app.forecast`` (K-2): the length
+# of the range is handed in by the scheduler.
+
+#: ``MARKET_BENCHMARK`` has no entry for the market: nothing is asked.
+NO_BENCHMARK_FOR_REFRESH_REASON = "no benchmark index is configured for the market"
+#: The resolver has no service for the market: nothing is asked.
+NO_SERVICE_FOR_REFRESH_REASON = "no index service is configured for the market"
+#: The service has no ``refresh_daily_bars_live``: nothing is asked.
+NO_LIVE_REFRESH_METHOD_REASON = "the index service has no live refresh method"
+#: The live refresh did not succeed and gave no reason of its own.
+LIVE_REFRESH_FAILED_REASON = "the live refresh did not succeed"
+#: The cache-only read-back after a successful refresh returned no bar.
+EMPTY_READBACK_REASON = "the cache read-back after the live refresh returned no bar"
+
+
+class LiveRefreshService(Protocol):
+    """The slice of a service :func:`force_refresh_benchmark` needs beside ``PriceService``."""
+
+    def refresh_daily_bars_live(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> LiveRefreshOutcome: ...
+
+    def get_cached_bars(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> ProviderResult: ...
+
+
+@dataclass(frozen=True)
+class ForcedBenchmarkRefresh:
+    """What :func:`force_refresh_benchmark` did: the live outcome and the newest cached bar.
+
+    ``latest_cached_bar`` is the newest-by-date bar the cache holds for the
+    same range, read back (cache only) after a successful live refresh; it is
+    ``None`` whenever ``live.ok`` is false or the read-back is empty, and
+    ``reason`` then says which. No label, no prediction (ADR-0030 D-4 point 3).
+    """
+
+    live: LiveRefreshOutcome
+    latest_cached_bar: PriceBar | None
+    reason: str | None
+
+    @property
+    def ok(self) -> bool:
+        """The live refresh succeeded and the read-back has a newest bar."""
+        return self.live.ok and self.latest_cached_bar is not None
+
+
+def _system_now() -> datetime:
+    """The system clock (UTC); the only time :func:`force_refresh_benchmark` reads."""
+    return datetime.now(UTC)
+
+
+def force_refresh_benchmark(
+    resolver: IndexServiceResolver, *, market: Market, lookback_days: int
+) -> ForcedBenchmarkRefresh:
+    """Refresh ``market``'s benchmark series live, then read back its newest cached bar.
+
+    ADR-0030 supplement 10 point 2. ``end`` is the Taipei date of the system
+    clock and ``start`` is ``end`` minus ``lookback_days`` -- the same formula
+    the recorder uses for its own request, so both ask for one range. There is
+    no ``now``, ``as_of``, ``start`` or ``end`` parameter: ``lookback_days`` is
+    a length, not a point in time.
+
+    The benchmark's series is refreshed with ``refresh_daily_bars_live``;
+    only when that is ``ok`` is the same range read back with
+    ``get_cached_bars`` (no write, no live call) and its newest bar returned.
+    This function does not compare that bar with any time: the check is the
+    scheduler's.
+
+    A structural gap -- no benchmark, no service, no live refresh method, an
+    empty read-back -- is reported as not ``ok`` with an English reason.
+    Every exception (a currency lookup that cannot answer included) propagates.
+    """
+    benchmark = MARKET_BENCHMARK.get(market)
+    if benchmark is None:
+        return ForcedBenchmarkRefresh(
+            live=LiveRefreshOutcome.failed(NO_BENCHMARK_FOR_REFRESH_REASON),
+            latest_cached_bar=None,
+            reason=NO_BENCHMARK_FOR_REFRESH_REASON,
+        )
+    service = resolver.get(market)
+    if service is None:
+        return ForcedBenchmarkRefresh(
+            live=LiveRefreshOutcome.failed(NO_SERVICE_FOR_REFRESH_REASON),
+            latest_cached_bar=None,
+            reason=NO_SERVICE_FOR_REFRESH_REASON,
+        )
+    refresh = getattr(service, "refresh_daily_bars_live", None)
+    if not callable(refresh):
+        return ForcedBenchmarkRefresh(
+            live=LiveRefreshOutcome.failed(NO_LIVE_REFRESH_METHOD_REASON),
+            latest_cached_bar=None,
+            reason=NO_LIVE_REFRESH_METHOD_REASON,
+        )
+    end = _system_now().astimezone(ZoneInfo(TW_POLICY.timezone)).date()
+    start = date.fromordinal(end.toordinal() - lookback_days)
+    symbol = benchmark.series_symbol
+    live: LiveRefreshOutcome = refresh(symbol, market, start, end)
+    if not live.ok:
+        return ForcedBenchmarkRefresh(
+            live=live, latest_cached_bar=None, reason=live.reason or LIVE_REFRESH_FAILED_REASON
+        )
+    readback = service.get_cached_bars(symbol, market, start, end)
+    if not readback.bars:
+        return ForcedBenchmarkRefresh(
+            live=live, latest_cached_bar=None, reason=EMPTY_READBACK_REASON
+        )
+    return ForcedBenchmarkRefresh(
+        live=live, latest_cached_bar=max(readback.bars, key=lambda bar: bar.date), reason=None
     )
 
 
