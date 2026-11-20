@@ -47,7 +47,7 @@
      - 不另設白名單，也不在執行期重做 D-4 檢查：輸出由 `report status` 原樣產生，D-4 合規由既有測試（`tests/test_forecast_report.py` 的 `d4_violations`）把關。腳本對 `report` 的輸出不增刪、不改寫任何一行，不 import `tests`，也不讀 `work/` 下的任何檔案。
      - 比照 RC-158a、RC-162：攔截 `BaseException`，更換 `sys.excepthook`、`threading.excepthook`、`sys.unraisablehook`，關閉警告與 logging。畫面不出現 traceback、路徑或例外文字。`status.txt` 只在取得完整輸出之後才寫入；失敗或中斷時不留下不完整的檔。
      - 同一份內容另存為 `~/stock-desk-status/<時間>/status.txt`（`utf-8-sig`），以記事本開啟，不覆蓋舊檔。該資料夾落在 git 工作樹內時 STOP，不寫檔。
-     - 新增的 STOP、ERROR 與提示語，字面送風控定稿。
+     - 新增的 STOP、ERROR、提示語與固定行，字面送風控定稿（已定稿者見風控 RC-291、RC-298、RC-299）。
    - 不得：在 `apps/stock-desk/` 內寫入任何檔案；import harness；建立排程。
 3. **讀者、頻率與紀錄**
    - 讀者：行動句（RC-250）與最近一次執行（RC-259、RC-264 (a)）的第一讀者是 CEO，coordinator 是第二讀者。
@@ -65,17 +65,17 @@
 4. **重算核對（`report verify --all`，F-3 的發現途徑）**
    - 同一支一鍵檔在 `status` 之後，固定接著執行 `report verify --all`（同一個 `--db`）。兩段依序輸出，中間以一行固定分隔句分開，存在同一個 `status.txt`。不接受參數的規定照舊，也不提供只跑其中一段的方式。
    - `verify --all` 是 D-5 第 3 點的重算：每筆紀錄只輸出 `claim_id`、T、一致與否（不一致時附問題代碼）、程式與執行環境是否與寫入時相同，以及一行結語。不輸出標籤、基準預測、暫定對照或紀錄的其他內容。讀取方式與 `status` 相同。
-   - 結束碼：`verify` 的 1（有不一致）屬正常完成，照常顯示並存檔；3、4 與其他結束碼依第 2 點改印固定句。
-   - 頻率與紀錄同第 3 點，每次執行都含這一段。
+   - 結束碼：`verify` 的 1（有不一致）屬正常完成，照常顯示並存檔，並在第二段之後另印風控定稿的固定行動句。`status` 的結束碼為 3、4 時只印固定句，不執行 `verify`，不寫檔。`status` 成功而 `verify` 的結束碼為 3、4 時，顯示並存檔第一段與分隔句，第二段改為風控定稿的固定 STOP 句。其他結束碼、例外或中斷，依第 2 點印固定 ERROR 句，不寫檔。
+   - 頻率與紀錄同第 3 點，每次執行都含這一段。本一鍵檔只涵蓋 F-2 與 F-3 的發現，不涵蓋其他失效條件；任何 CEO 文件都不得寫成它涵蓋所有失效條件。
    - 接線 PR 合併前置清單中「CEO 本機執行 `report verify --all`」那一次，以本一鍵檔執行（帳內沒有紀錄，預期結語為「verify：沒有紀錄」），貼回依第 3 點保存。本一鍵檔必須在那一次執行之前合併。
-   - 看到「不一致」或結語「verify：有不一致（F-3：停止記錄並查明）」時，CEO 只告訴 coordinator，不自己停止程式、刪改資料或設定；停止記錄與查明，由 coordinator 升級 tech-architect 與 devops-sre 處理。這句與分隔句的字面，由 creative-lead 起草，送風控。
+   - 看到「不一致」或結語「verify：有不一致（F-3：停止記錄並查明）」時，CEO 只告訴 coordinator，不自己停止程式、刪改資料或設定；停止記錄與查明，由 coordinator 當天升級 tech-architect 與 devops-sre 處理。分隔句、不一致時的行動句，以及第二段的 STOP 句，字面依風控 RC-298、RC-299 定稿；這幾行是腳本另加的固定行，不改寫 `report` 的任何一行。
    - 執行時間：devops-sre 以合成 ledger 量測紀錄 0、250、500 筆（兩個 claim 合計）時 `verify --all` 的執行時間，寫進交件，供說明文件引用。500 筆時超過 10 分鐘，退回 tech-architect 重議頻率或拆分。
 
 - **S-21a（逐條可檢查）**
   - AST：腳本中的子命令字面只有 `status` 與 `verify`，`verify` 只帶 `--all`；不讀 `sys.argv`，不 import harness，不 import `app.forecast.report` 以外的 `app.forecast` 模組。
   - 設了 `STOCK_DESK_DB_PATH`（含空字串）時 STOP，不開任何連線（測試）。
-  - 合成 ledger 上，第一段輸出與 `python -m app.forecast.report status --db` 逐字相同，第二段與 `verify --all --db` 逐字相同，兩段之間只有固定分隔句；`verify` 結束碼 1 時照常顯示並存檔，3、4 時只印固定句（測試）。
-  - AST 確認腳本不 import `tests`、不讀 `work/` 下的任何檔案；以含最近一次執行、F-2 兩句與兩行缺日加註的合成 ledger 執行腳本，輸出經 `tests/test_forecast_report.py` 的 `d4_violations` 檢查為空（測試）。該合成 ledger 另含已過 `valid_until_session_estimate`、帶標籤與基準預測的紀錄，並斷言輸出不含任何標籤值、基準預測值或 `content_hash`（測試）。
+  - 合成 ledger 上，第一段輸出與 `python -m app.forecast.report status --db` 逐字相同，第二段與 `verify --all --db` 逐字相同，兩段之間只有固定分隔句；`verify` 結束碼 1 時照常顯示並存檔，並在第二段之後印固定行動句；`status` 結束碼 3、4 時只印固定句且不執行 `verify`；`status` 成功而 `verify` 結束碼 3、4 時，第一段與分隔句照常顯示並存檔，第二段為固定 STOP 句（測試）。
+  - AST 確認腳本不 import `tests`、不讀 `work/` 下的任何檔案；以含最近一次執行、F-2 兩句與兩行缺日加註的合成 ledger 執行腳本，輸出經 `tests/test_forecast_report.py` 的 `d4_violations` 檢查為空（測試）。該合成 ledger 另含已過 `valid_until_session_estimate`、帶標籤與基準預測的紀錄，並斷言兩段輸出與所有固定行都不含任何標籤值、基準預測值或 `content_hash`（測試）。
   - e2e 擷取 stdout 與 stderr：例外、執行緒例外、警告、注入 `KeyboardInterrupt`，畫面都只有固定句（測試）。
   - `app/` 零差異。
   - 本一鍵檔 PR 開在產品線上，先於接線 PR 合併；上面第四項中需要接線版 `report` 的測試（最近一次執行、F-2 兩句、兩行缺日加註），隨接線 PR 加入。qa 核對一鍵檔 PR 的合併 commit，早於接線前那一次 `verify --all` 貼回的 commit。
