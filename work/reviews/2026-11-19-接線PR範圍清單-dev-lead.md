@@ -130,6 +130,24 @@
 - 改檔：`app/scheduler.py`（`forecast_record_catch_up_at`、`FORECAST_RECORD_NO_CATCH_UP_FROM`／`_UNTIL`）。啟動時刻加 3 分鐘落在週一至週五台北時間 [13:30, 22:10) 時不設補跑，`add_job` 省略 `next_run_time` 參數（不傳 `None`）。
 - 測試（`tests/test_scheduler_forecast_refresh.py`）：平日 13:27、13:30、22:06 啟動不設補跑；13:26、22:07、22:10、週六 16:00 設補跑；不設補跑時 job 仍依排程、沒有被暫停。
 
+### W-18 qa 第二、三輪複審意見（`work/reviews/2026-11-20-接線PR第二三輪複審-qa.md`；第四輪，只補測試，不改 `app/`）〔做〕
+- N-9：`tests/test_scheduler_forecast_integration.py`。`run_forecast_record` 接真的 `IndexSeriesService(MarketDataService(scope="index", cache_first=True, primary=IndexProviderBridge(假來源)))` 與真的 recorder，帳本先登記兩個核心 claim。只替換 `get_index_resolver`、`production_db_target` 與時鐘（scheduler `_utc_now`、`app.services.index._system_now`、服務時鐘、store 時鐘；store 時鐘經把 `ledger_store` 指向同一檔、帶同一個時鐘的 `ForecastStore` 注入）。測試：`test_n9_a_normal_run_records_with_bars_fetched_by_this_run`、`test_n9_a_t_bar_cached_at_17_45_is_replaced_by_this_runs`、`test_n9_a_failing_source_records_nothing_and_does_not_use_the_cache`（raise、unavailable）、`test_n9_an_answer_without_t_and_a_17_45_t_bar_in_the_cache_skips_the_run`、`test_n9_an_answer_without_t_and_no_t_in_the_cache_records_t_minus_1_late`、`test_n9_the_rig_replaces_only_the_resolver_the_target_and_the_clocks`。
+- N-12：`tests/test_forecast_gap_disclosure.py::test_n12_report_mentions_a_holiday_only_in_the_rc248_first_heading` 與 `test_n12_the_report_holiday_scan_has_teeth`（`report.py` 提到休市的行只能有一行，位於 `F2_FIRST_HEADING` 賦值內、是自風控報告抽出的 RC-248 第一句小標題的一段字面）。
+- N-10：`tests/test_service_force_refresh.py` 的 `FORBIDDEN_HELPERS` 加入 `get_daily_bars`、`get_cached_bars`（新方法本來就沒有呼叫）；`tests/test_scheduler_forecast_refresh.py` 的 log 掃描加入 `log`、`critical`，各有 teeth。
+- N-11：`tests/test_forecast_f2_window.py::test_n11_a_held_short_range_is_still_held_after_the_first_full_window`（分母 20、12、0、19 與兩項混合，帳隨時間增長）、`test_n11_arithmetic_every_numerator_7_to_20_holds_on_every_denominator_0_to_20`（純算術）、`test_n11_the_store_holds_every_numerator_7_to_20_on_every_denominator_0_to_20`（同一格點逐一建帳經 `f2_status`）、`test_n11_six_is_not_enough_on_a_full_window_of_20`。全部成立：視窗未滿時已成立者，第一個完整視窗必然成立，「自起點以來 F-2 曾否成立」進入完整視窗後為「是」，不會撤銷。
+
+### PR 說明用的材料（第四輪）
+- **S-20a「recorder、store 寫入路徑、harness 零差異」的基準**是第一輪 head `d01bd9eeb89ed97c9dea695a30d7bbf24ee98a7d`，不是登記 PR（`9d5bbf48`）。
+  - `app/forecast/recorder.py` 相對登記 PR 是 +67／−3，內容是第一輪已審的 `ledger_store` 與 `warn_review_triggers`；相對 `d01bd9ee` 零差異。
+  - `tests/forecast_pipeline_harness.py`、`scripts/pipeline_acceptance_real.py`、`pipeline-acceptance.bat` 相對 `d01bd9ee` 零差異。
+  - `app/forecast/store.py` 相對 `d01bd9ee` 的差異只在唯讀查詢（`f2_status` 的分母 0 規則、`grid_loss_status`，補充九第 4、5 點），寫入路徑沒有變。`tests/test_forecast_pipeline_harness.py` 相對 `d01bd9ee` 的 +17 是第二輪 RC-259 那一行的斷言（測試，不是 harness 本體）。
+- **`price_bars_cache` 的寫入點**：唯一的 SQL 寫入點是 `PriceBarCache.put`（`app/data/cache.py`），`app/` 內的呼叫端三處：
+  - `app/data/service.py:398`（`get_daily_bars` 的 ladder）：`as_of` 是 provider 回傳 bar 自帶的值；對 `^TWII`，yfinance adapter 在請求發出前取 `datetime.now(UTC)`，逐列寫入。`fetched_at` 是服務時鐘。
+  - `app/data/service.py:597`（本 PR 新增的 `refresh_daily_bars_live`）：同上，複製 ladder 的寫法。
+  - `app/demo/seed.py:438`（`seed_demo`，非正式路徑）：`as_of` 是 seed 的 `moment`（未注入時為執行當下）；只寫 demo 標的（`2330`、`0050`、`00631L`），不寫任何 `^` 代號，不在排程、啟動或 API 路徑上。
+  - 行號以第四輪 head 為準。
+- **N-13（已知取捨）**：強制更新失敗時，scheduler 只記第一行固定 WARNING，不記例外的類別、訊息或 traceback（風控 RC-267 (a)）。provider 層的失敗另由 `MarketDataService._try_provider` 的 logger（`app.data.service`）記錄，對照時間可以查到。
+
 ---
 
 ## 二、不改程式、由 qa／coordinator 在合併時核對〔流程〕
