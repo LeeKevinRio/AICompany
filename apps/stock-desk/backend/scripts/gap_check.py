@@ -132,7 +132,7 @@ RunStopKind = Literal[
     "git_dirty",
     "head_unpublished",
     "db_in_use",
-    "db_unreadable",
+    "copy_failed",
     "copy_unreadable",
     "no_rows",
     "unparseable_row",
@@ -169,15 +169,16 @@ STOP_SENTENCES: Final[Mapping[RunStopKind, str]] = MappingProxyType(
             "change any file yourself; if this line appears again, tell the "
             "coordinator and do not run this again."
         ),
-        # Verbatim from cg2_register.py (STOPS["db_unreadable"]):
-        "db_unreadable": (
-            "STOP: the main database could not be read in read-only mode."
-            " Do not change any setting or file yourself; tell the coordinator."
+        # Verbatim from the risk-control report (RC-272, S-3; replaces the cg2_register.py line):
+        "copy_failed": (
+            "STOP: a copy of the database could not be made, so the check did not "
+            "continue. Do not change any setting or file yourself; tell the "
+            "coordinator."
         ),
-        # New in this script:
+        # Verbatim from the risk-control report (S-2), extracted by script:
         "copy_unreadable": (
-            "STOP: the database copy could not be read."
-            " Do not change any setting or file yourself; tell the coordinator."
+            "STOP: the database copy could not be read. Do not change any setting or "
+            "file yourself; tell the coordinator."
         ),
     }
 )
@@ -574,7 +575,7 @@ def make_copy(main_db: Path, copy_dir: Path) -> Path:
     try:
         before = file_signature(main_db)
     except OSError:
-        raise RunStop("db_unreadable") from None
+        raise RunStop("copy_failed") from None
     copy_dir.mkdir(parents=True)
     target = copy_dir / DB_NAME
     failed = False
@@ -591,7 +592,7 @@ def make_copy(main_db: Path, copy_dir: Path) -> Path:
     if changed:
         raise RunStop("db_in_use")
     if failed:
-        raise RunStop("db_unreadable")
+        raise RunStop("copy_failed")
     return target
 
 

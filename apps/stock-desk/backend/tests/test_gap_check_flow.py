@@ -456,10 +456,10 @@ def test_the_real_port_check_asks_only_loopback_8000(monkeypatch: pytest.MonkeyP
 # --- the reading stops -------------------------------------------------------------------------
 
 
-def test_stop_the_main_database_cannot_be_read(tmp_path: Path, capsys: Any) -> None:
+def test_stop_a_copy_of_the_main_database_could_not_be_made(tmp_path: Path, capsys: Any) -> None:
     world = make_world(tmp_path, write_db=False)
     world.db.write_bytes(b"this is not a database" * 100)
-    only_stop(world, capsys, "db_unreadable")
+    only_stop(world, capsys, "copy_failed")
 
 
 def test_stop_the_copy_has_no_cache_table(tmp_path: Path, capsys: Any) -> None:
@@ -697,12 +697,26 @@ def test_every_stop_screen_is_closed(tmp_path: Path, capsys: Any) -> None:
         assert_closed(lines)
 
 
-def test_the_changed_file_stop_is_the_risk_control_sentence_s1_verbatim() -> None:
+@pytest.mark.parametrize(
+    ("item", "kind"),
+    [("S-1", "db_in_use"), ("S-2", "copy_unreadable"), ("S-3", "copy_failed")],
+)
+def test_the_three_stops_are_the_risk_control_sentences_verbatim(item: str, kind: str) -> None:
     found = report_sentences()
-    assert found["S-1"] and len(found["S-1"]) == 1  # every occurrence in the report is identical
-    (sentence,) = found["S-1"]
-    assert STOPS["db_in_use"] == sentence
-    assert sentence.startswith("STOP: the database may be in use, or it changed while it was being")
+    assert set(found) == {"S-1", "S-2", "S-3"}
+    assert len(found[item]) == 1  # every occurrence of the item in the report is identical
+    (sentence,) = found[item]
+    assert STOPS[kind] == sentence  # not one character different
+
+
+def test_the_old_cg2_wording_is_gone_and_the_stop_kinds_are_the_expected_set() -> None:
+    assert "db_unreadable" not in STOPS
+    assert "the main database could not be read" not in "\n".join(STOPS.values())
+    assert set(STOPS) == {
+        "env_db_path", "env_file_db_path", "no_db", "port_listening", "work_in_git",
+        "git_unusable", "git_dirty", "head_unpublished", "db_in_use", "copy_failed",
+        "copy_unreadable", "no_rows", "unparseable_row", "copy_not_deleted",
+    }  # fmt: skip
 
 
 def test_the_fixed_sentences_are_ascii_without_values_and_the_new_one_tells_the_coordinator() -> (
@@ -712,9 +726,10 @@ def test_the_fixed_sentences_are_ascii_without_values_and_the_new_one_tells_the_
     assert STOPS["copy_unreadable"].endswith(
         "Do not change any setting or file yourself; tell the coordinator."
     )
-    assert STOPS["db_unreadable"].endswith(
+    assert STOPS["copy_failed"].endswith(
         "Do not change any setting or file yourself; tell the coordinator."
     )
+    assert STOPS["db_in_use"].endswith("tell the coordinator and do not run this again.")
     assert (
         gc.UNEXPECTED
         == "ERROR: unexpected failure; no paste-back file was made. Tell the coordinator."
@@ -1114,7 +1129,7 @@ def test_a_failed_backup_with_an_unchanged_main_database_is_the_copy_could_not_b
         raise sqlite3.OperationalError("synthetic: no space left")
 
     monkeypatch.setattr(gc.sqlite3, "connect", failing)
-    only_stop(world, capsys, "db_unreadable")
+    only_stop(world, capsys, "copy_failed")
     assert _state(world.db.parent) == before
 
 
