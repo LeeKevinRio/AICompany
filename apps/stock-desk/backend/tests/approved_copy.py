@@ -41,6 +41,12 @@ LATEST_RUN_ITEMS: Final = {
     "no_run": "RC-259 最近一次執行（帳內沒有執行紀錄時）",
 }
 
+#: RC-331～RC-335: the recorder's disk-differs WARNING (RC-331 replaces the old wording).
+DISK_DIFFERS_APPROVAL: Final = (
+    REVIEWS / "2026-11-20-警告行新字面與驗收書面紀錄確認RC331至RC335-風控.md"
+)
+DISK_DIFFERS_ITEM: Final = "RC-331 磁碟與載入程式不同時的 WARNING（取代 `recorder.py` 現行字面）"
+
 #: The labels of F2_LINES_APPROVAL still in force, and the two that are not.
 F2_LINES_IN_FORCE: Final = {
     "full": "RC-238 完整視窗（分母大於 0）",
@@ -145,3 +151,11 @@ def fill(template: str, *choices: int, **values: object) -> str:
 
 def placeholders(template: str) -> list[str]:
     return _PLACEHOLDER.findall(template)
+
+
+def disk_differs_line() -> str:
+    """RC-331: the recorder's WARNING when the sources on disk differ from the loaded ones."""
+    texts = labelled_texts(DISK_DIFFERS_APPROVAL, item_prefix="項目：")
+    # The record also holds RC-334 (b)'s question to the CEO (not a log line).
+    assert len(texts) == 2 and DISK_DIFFERS_ITEM in texts
+    return texts[DISK_DIFFERS_ITEM]

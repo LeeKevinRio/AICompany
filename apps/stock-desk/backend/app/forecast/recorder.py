@@ -228,7 +228,7 @@ logger = logging.getLogger(__name__)
 #: The one WARNING line of a run whose sources on disk are not the loaded ones.
 DISK_DIFFERS_WARNING: Final = (
     "forecast_record: the sources or the runtime on disk differ from the loaded program;"
-    " this run keeps the loaded provenance; restart the scheduler process to load them"
+    " this run keeps the loaded provenance"
 )
 
 
