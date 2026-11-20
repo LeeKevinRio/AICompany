@@ -4,6 +4,7 @@
 - 合併時機：補充四第 4 點 (4)、第 6 點；補充七第 7 點——CG-2 登記 PR 合併、CEO 正式登記、coordinator 在 `work/` 留登記紀錄之後才合併。登記完成前不合併。
 - 規格來源：`docs/adr/0030-stock-desk-預測紀錄帳核心-最小記錄器.md`（以下簡稱 ADR）全文；約束 C5-1～C5-5 見 `work/reviews/2026-11-15-NM5第五批F2視窗與WARNING裁示-tech-architect.md`；補充八（定稿第三版，待 append）；**補充九（待 append，風控審查見 `work/reviews/2026-11-19-補充九判定與F2字面定稿RC244至RC254-風控.md`）**，全文在 `work/reviews/2026-11-19-接線PR四題裁示與補充九定稿-tech-architect.md`。
 - 2026-11-19 第二輪：依補充九、風控 RC-237～RC-254、qa 審查 `work/reviews/2026-11-19-接線PR審查-qa.md` 修改（見各項「第二輪」）。
+- 2026-11-20 第三輪：依補充十修訂版（`work/reviews/2026-11-20-取數條件與缺日比對餘題裁示-補充十修訂版-tech-architect.md`）第 2、3 點與 S-20a、data-engineer 方法規格（`work/research/2026-11-19-指數強制更新方法規格-data-engineer.md`）、風控 RC-267 (a)（`work/reviews/2026-11-20-補充十修訂版與三句STOP判定RC265至RC274-風控.md`）實作 W-16、W-17。
 - 程式路徑相對於 `apps/stock-desk/backend/`。
 - 標記：〔做〕不需裁示，本 PR 實作；〔流程〕不改程式，由 qa／coordinator 在合併時核對；〔待裁示〕要 TA（或指名的人）回答後才能做。
 
@@ -112,9 +113,22 @@
 - 改檔：`app/forecast/report.py`（`LATEST_RUN_LINE`／`LATEST_RUN_NONE_LINE`，字面以腳本自 `work/reviews/2026-11-19-收盤定案時點定案與補充十判定RC255至RC264-風控.md` 的「項目：RC-259 …」抽出）。取值經既有唯讀查詢 `store.latest_run`（走 `_read`）：`run_id` 最大一筆的 `started_at` 換台北時間 `YYYY-MM-DD HH:MM`，outcome 原值，沒有 end 列印「沒有 end 列」；`report.py` 只做格式化。位置：`inputs_not_ready 日數（全部期間，台北日期）` 之後、F-2 段標題之前。
 - 測試（`tests/test_forecast_gap_disclosure.py`）：`test_rc259_the_constants_are_the_approved_text`、`test_rc259_without_a_run_row_the_none_variant_is_printed`、`test_rc259_the_latest_run_is_the_highest_run_id_in_taipei_time`（ok、inputs_not_ready、沒有 end 列）、`test_rc259_both_variants_carry_the_note_and_pass_the_d4_checks`；harness 完整輸出恰一行、`render_summary` 不含（`tests/test_forecast_pipeline_harness.py::test_the_output_holds_no_n_hat_while_report_status_does`）。
 
-### 待規格：補充十第 2、3 點（RC-255：須與 job 註冊同一次合併落地）
-- 第 2 點（每次執行前強制 live 更新並核對 `B.as_of ≥ t0`）：等 data-engineer 的方法規格，未動手。
-- 第 3 點（啟動補跑時段 [13:30, 22:10)）：等補充十最終版文字，未動手。
+### W-16 每次執行的取數條件（補充十第 2 點；RC-255、RC-267 (a)；第三輪）〔做〕
+- 改檔（只新增，`git diff --numstat` 對兩檔的刪除行數為 0）：
+  - `app/data/service.py`：`LiveRefreshOutcome`（frozen dataclass，含 `failed()`）與 `MarketDataService.refresh_daily_bars_live(symbol, market, start, end)`。依 `get_daily_bars` 的 ladder 段規則走一次，不經 layer 0 與 cooldown、不回落快取；事前快取檢查的標籤 `force_refresh_cache`，即時回答與讀回沿用 `provider`、`incremental_readback`；`CurrencyLookupError` 照常往外拋。
+  - `app/services/index.py`：`IndexSeriesService.refresh_daily_bars_live` 穿透方法、`LiveRefreshService` Protocol、`ForcedBenchmarkRefresh`、`force_refresh_benchmark(resolver, *, market, lookback_days)`（`end` 為系統時鐘的台北日期、`start = end − lookback_days`；結構性缺漏回 `ok=False`，其他例外往外拋；不 import `app.forecast`）。
+  - `app/scheduler.py`：`run_forecast_record` 改為五步（目標核對 → t0 → 強制更新 → 核對 (i)(ii)(iii) → recorder），強制更新與 recorder 共用同一個 resolver 物件；`market=recorder.MARKET`、`lookback_days=FETCH_CALENDAR_DAYS + FETCH_SLACK_DAYS`。
+- 三行固定英文 WARNING（只以固定字串記錄：不帶參數、`exc_info`、`extra` 或例外文字，RC-267 (a)）：
+  - `FORECAST_RECORD_REFRESH_FAILED`：`forecast_record: the live index refresh did not succeed; the run is skipped and the cache is not used`
+  - `FORECAST_RECORD_BAR_PREDATES_RUN`：`forecast_record: the newest cached index bar predates this run's start; the run is skipped`
+  - `FORECAST_RECORD_SERIES_ENDS_EARLY`：`forecast_record: the refreshed index series ends before the latest weekday session (an exchange holiday or a row missing at the source); the run continues`
+- 新增檔案：`tests/force_refresh_helpers.py`、`tests/test_service_force_refresh.py`、`tests/test_services_index_force_refresh.py`、`tests/test_scheduler_forecast_refresh.py`。
+- 測試：service 各項與四種起始狀態的等價測試、AST 守門（`test_service_force_refresh.py`）；範圍、無時間參數、結構性缺漏與例外、穿透、K-2 import graph、強制更新後 recorder 不再發出即時請求（有／缺 T 日列）、競態的文件化行為（`test_services_index_force_refresh.py`）；四種不呼叫 recorder 的情形各記哪一行與 RC-267 (a) 的 `getMessage`／`args`／`exc_info`／例外文字檢查、第三行、`BaseException` 不被吞、傳入值、AST 檢查 WARNING 呼叫（`test_scheduler_forecast_refresh.py`）。
+- 既有 scheduler 測試隨 job 修改：`test_forecast_scheduler_wiring.py` 中會走到 recorder 的 7 支改為先替換成成功的強制更新（`_refresh_ok`），`test_the_job_also_runs_three_minutes_after_start_up` 改釘固定的啟動時刻；`test_forecast_recorder.py::test_s4a_the_job_passes_the_index_loader_itself` 同樣加上成功的強制更新。斷言都沒有放寬。
+
+### W-17 啟動補跑的時段（補充十第 3 點；RC-255；第三輪）〔做〕
+- 改檔：`app/scheduler.py`（`forecast_record_catch_up_at`、`FORECAST_RECORD_NO_CATCH_UP_FROM`／`_UNTIL`）。啟動時刻加 3 分鐘落在週一至週五台北時間 [13:30, 22:10) 時不設補跑，`add_job` 省略 `next_run_time` 參數（不傳 `None`）。
+- 測試（`tests/test_scheduler_forecast_refresh.py`）：平日 13:27、13:30、22:06 啟動不設補跑；13:26、22:07、22:10、週六 16:00 設補跑；不設補跑時 job 仍依排程、沒有被暫停。
 
 ---
 
