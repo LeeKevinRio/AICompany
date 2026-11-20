@@ -4,21 +4,21 @@
 - 日期：2026-11-20
 - 底稿：`work/reviews/2026-11-20-CEO讀取執行狀態途徑裁示與補充十一-tech-architect.md`「## 補充十一」一節
 - 套用：`work/reviews/2026-11-20-補充十一D4檢查位置裁示-tech-architect.md` 的兩組「原 → 新」替換
-- 狀態：**尚未經風控判定，不得寫入 ADR。**〔本次裁示轉存檔〕〔風控判定報告〕兩個佔位待風控判定後換成實際檔名。
+- 狀態：**定稿，待寫入 ADR。** 依風控 RC-284～RC-302 附條件核可；tech-architect 最後確認的 C2 修正版與 R1～R9 已套用（其中 C2、R3、R4 待風控單項確認）。
 
 ## 檔頭補充紀錄行
 
-- 補充紀錄：2026-11-20 append 補充十一（CEO 讀取執行狀態與重算核對的途徑；tech-architect 裁示；收緊：補上 F-2、行動句、最近一次執行與缺日加註的實際讀取途徑，以及 F-3 的發現途徑，並新增接線 PR 合併（CG-4）的前置條件；不改本文、補充八至補充十的字面、`app/`、事先宣告 v0.32、規則檔、定義物件與已登記雜湊；新增 CEO 看得到的固定句與說明文件，送風控；CEO 可推翻；來源 〔本次裁示轉存檔〕、〔風控判定報告〕）
+- 補充紀錄：2026-11-20 append 補充十一（CEO 讀取執行狀態與重算核對的途徑；tech-architect 裁示；收緊：補上 F-2、行動句、最近一次執行與缺日加註的實際讀取途徑，以及 F-3 的發現途徑，並新增接線 PR 合併（CG-4）的前置條件，RC-246 通知的時點改為接線 PR 合併之前，取代補充九第 3 點末款；不改本文、補充八至補充十的字面、`app/`、事先宣告 v0.32、規則檔、定義物件與已登記雜湊；依風控 RC-284～RC-302 附條件核可，固定句字面依 RC-291、RC-298、RC-299 定稿，CEO 說明文件與 RC-246 通知另送風控；CEO 可推翻；來源 `work/reviews/2026-11-20-CEO讀取執行狀態途徑裁示與補充十一-tech-architect.md`、`work/reviews/2026-11-20-補充十一D4檢查位置裁示-tech-architect.md`、`work/reviews/2026-11-20-補充十一替換確認與verify及鎖裁示-tech-architect.md`、`work/reviews/2026-11-20-補充十一最後確認-tech-architect.md`、`work/reviews/2026-11-20-補充十一與退役通知判定RC284至RC297-風控.md`、`work/reviews/2026-11-20-補充十一增修確認與三句固定行RC298至RC302-風控.md`）
 
 ## 正文
 
 ## 補充十一：CEO 讀取執行狀態與重算核對的途徑（2026-11-20）
 
 - 決策者：tech-architect。
-- 來源：〔本次裁示轉存檔〕、〔風控判定報告〕。另讀 `feat/nm5-wiring` 的 `app/forecast/report.py`（`_parser`、`run_command`、`main`）、`app/forecast/store.py`（`_open_connection`、`_read`）。
+- 來源：`work/reviews/2026-11-20-CEO讀取執行狀態途徑裁示與補充十一-tech-architect.md`、`work/reviews/2026-11-20-補充十一D4檢查位置裁示-tech-architect.md`、`work/reviews/2026-11-20-補充十一替換確認與verify及鎖裁示-tech-architect.md`、`work/reviews/2026-11-20-補充十一最後確認-tech-architect.md`、`work/reviews/2026-11-20-補充十一與退役通知判定RC284至RC297-風控.md`、`work/reviews/2026-11-20-補充十一增修確認與三句固定行RC298至RC302-風控.md`。另讀 `feat/nm5-wiring` 的 `app/forecast/report.py`（`_parser`、`run_command`、`main`、`render_verify`）、`app/forecast/store.py`（`_open_connection`、`_read`）。
 - 性質：收緊。第 1 點新增接線 PR 合併（CG-4）的前置條件；第 4 點把 `report verify --all` 納入同一支一鍵檔。
   - 不改本文、補充八至補充十的字面、`app/`、事先宣告 v0.32、規則檔、定義物件與已登記雜湊。
-  - 新增的固定句與 CEO 說明文件送風控。CEO 可推翻。
+  - 依風控 RC-284～RC-302 附條件核可；固定句字面依 RC-291、RC-298、RC-299 定稿。CEO 說明文件與 RC-246 通知的字面另送風控。CEO 可推翻。
 
 1. **現況與定位**
    - F-2（兩句）、行動句、最近一次執行、兩行缺日加註，都只出現在 `report status`。
@@ -26,6 +26,7 @@
    - 沒有人執行 `report status` 時，F-2 成立不會被發現。
    - 「曾否成立」每次都由帳內資料重算，晚看不會遺失；記錄本身不受影響。但 CEO 更新程式的時點無法另外控制，所以本點列為 CG-4（接線 PR 合併）的前置條件，見下一款。
    - 本點是 RC-246 通知（含併入的 RC-264、RC-265～RC-267）的前置條件。第 2 點的一鍵檔合併、第 3 點的說明文件經風控核可之前，不得送出該通知。CEO 平常以 `dev-up.bat` 啟動時就會更新程式，不能靠「CEO 不更新」來擋，所以第 2 點的一鍵檔必須在接線 PR 合併之前合併（接線前的 `verify --all` 也由它執行，見第 4 點），該通知與第 3 點的說明文件也必須在接線 PR 合併之前交給 CEO；三件未完成，接線 PR 不得合併。
+   - 前款的通知時點（接線 PR 合併之前），取代補充九第 3 點末款與風控 RC-246、RC-264 原訂的「接線 PR 合併後、CEO 更新到含接線的程式之前」；經風控 RC-298～RC-302 那一輪判定同意。補充九的字面不改，時點以本款為準。
 2. **狀態報告一鍵檔**
    - 檔案：
      - `apps/stock-desk/forecast-status.bat` 與 `apps/stock-desk/backend/scripts/forecast_status.py`，放在 `app/` 以外。
@@ -41,11 +42,12 @@
      - scheduler 執行中也可以讀；主 DB 為 WAL 模式，讀取不會使 `forecast_record` 的寫入失敗。在台北時間 22:00～22:30、23:00～23:30 執行時，最近一次執行可能顯示「沒有 end 列」（執行仍在進行），說明文件須請 CEO 避開這兩段時間；看到這種情形時，30 分鐘後再執行一次，仍是如此就告訴 coordinator。
    - 前置檢查：
      - 程序環境變數中有 `STOCK_DESK_DB_PATH`（含空字串）時 STOP，不開任何連線。
-     - 不讀 `.env`，不做 port 與 git 檢查。
+     - 不讀 `.env`，不做 port 檢查，也不檢查 repo 的 git 狀態；與 git 有關的只有存檔資料夾是否落在 git 工作樹內（見「輸出」）。
      - 主 DB 不存在、schema 不完整或讀取失敗時，不顯示 `report` 的拒絕句：腳本攔下 `report` 寫到 stderr 的全部文字，依結束碼改印風控定稿的固定 STOP 句；`report` 的 stderr 內容不得出現在畫面或檔案中。
    - 輸出：
-     - 不另設白名單，也不在執行期重做 D-4 檢查：輸出由 `report status` 原樣產生，D-4 合規由既有測試（`tests/test_forecast_report.py` 的 `d4_violations`）把關。腳本對 `report` 的輸出不增刪、不改寫任何一行，不 import `tests`，也不讀 `work/` 下的任何檔案。
+     - 不另設白名單，也不在執行期重做 D-4 檢查：兩段輸出分別由 `report status`、`report verify --all` 原樣產生，D-4 合規由既有測試（`tests/test_forecast_report.py` 的 `d4_violations`）把關。腳本對 `report` 的輸出不增刪、不改寫任何一行，只在第 4 點規定的位置另加固定行；不 import `tests`，也不讀 `work/` 下的任何檔案。
      - 比照 RC-158a、RC-162：攔截 `BaseException`，更換 `sys.excepthook`、`threading.excepthook`、`sys.unraisablehook`，關閉警告與 logging。畫面不出現 traceback、路徑或例外文字。`status.txt` 只在取得完整輸出之後才寫入；失敗或中斷時不留下不完整的檔。
+     - 執行順序：(1) 環境變數檢查；(2) 決定存檔資料夾並做 git 工作樹檢查，此時不建立資料夾；(3) 執行 `status`，stdout 與 stderr 都先攔進記憶體；(4) `status` 回傳 0 時，印出第一段與分隔句，再執行 `verify --all`，同樣攔進記憶體；(5) `verify` 回傳後，印出第二段，結束碼 1 時接著印行動句，3、4 時改印 STOP 句（第 4 點）；(6) 把已印出的內容一次寫入 `status.txt`（先寫暫存檔，完成後再改名），內容與畫面逐字相同，最後以記事本開啟。(1)、(2) 的 STOP 都在開任何連線之前；(3)～(6) 任一步失敗或中斷時，已印出的內容不收回，接著印固定 ERROR 句，不留下 `status.txt` 或暫存檔。
      - 同一份內容另存為 `~/stock-desk-status/<時間>/status.txt`（`utf-8-sig`），以記事本開啟，不覆蓋舊檔。該資料夾落在 git 工作樹內時 STOP，不寫檔。
      - 新增的 STOP、ERROR、提示語與固定行，字面送風控定稿（已定稿者見風控 RC-291、RC-298、RC-299）。
    - 不得：在 `apps/stock-desk/` 內寫入任何檔案；import harness；建立排程。
@@ -65,7 +67,7 @@
 4. **重算核對（`report verify --all`，F-3 的發現途徑）**
    - 同一支一鍵檔在 `status` 之後，固定接著執行 `report verify --all`（同一個 `--db`）。兩段依序輸出，中間以一行固定分隔句分開，存在同一個 `status.txt`。不接受參數的規定照舊，也不提供只跑其中一段的方式。
    - `verify --all` 是 D-5 第 3 點的重算：每筆紀錄只輸出 `claim_id`、T、一致與否（不一致時附問題代碼）、程式與執行環境是否與寫入時相同，以及一行結語。不輸出標籤、基準預測、暫定對照或紀錄的其他內容。讀取方式與 `status` 相同。
-   - 結束碼：`verify` 的 1（有不一致）屬正常完成，照常顯示並存檔，並在第二段之後另印風控定稿的固定行動句。`status` 的結束碼為 3、4 時只印固定句，不執行 `verify`，不寫檔。`status` 成功而 `verify` 的結束碼為 3、4 時，顯示並存檔第一段與分隔句，第二段改為風控定稿的固定 STOP 句。其他結束碼、例外或中斷，依第 2 點印固定 ERROR 句，不寫檔。
+   - 結束碼：`status` 回傳 0 才算成功。`status` 的結束碼為 3、4 時，只印 RC-291 對應的固定 STOP 句，不執行 `verify`，不寫檔。`status` 成功而 `verify` 的結束碼為 0 或 1 時，兩段照常顯示並存檔；1（有不一致）屬正常完成，並在第二段之後另印風控定稿的固定行動句。`status` 成功而 `verify` 的結束碼為 3、4 時，照常顯示第一段與分隔句，第二段改為風控定稿的固定 STOP 句（RC-299）。這兩種情形的 `status.txt` 都照寫，內容與畫面逐字相同（含行動句或 STOP 句）。其他情形，包括任一段的其他結束碼、`SystemExit`（例如 argparse 的 2）、其他例外、中斷與寫檔失敗，依第 2 點印固定 ERROR 句，不寫檔；已印出的內容不收回。
    - 頻率與紀錄同第 3 點，每次執行都含這一段。本一鍵檔只涵蓋 F-2 與 F-3 的發現，不涵蓋其他失效條件；任何 CEO 文件都不得寫成它涵蓋所有失效條件。
    - 接線 PR 合併前置清單中「CEO 本機執行 `report verify --all`」那一次，以本一鍵檔執行（帳內沒有紀錄，預期結語為「verify：沒有紀錄」），貼回依第 3 點保存。本一鍵檔必須在那一次執行之前合併。
    - 看到「不一致」或結語「verify：有不一致（F-3：停止記錄並查明）」時，CEO 只告訴 coordinator，不自己停止程式、刪改資料或設定；停止記錄與查明，由 coordinator 當天升級 tech-architect 與 devops-sre 處理。分隔句、不一致時的行動句，以及第二段的 STOP 句，字面依風控 RC-298、RC-299 定稿；這幾行是腳本另加的固定行，不改寫 `report` 的任何一行。
@@ -76,7 +78,8 @@
   - 設了 `STOCK_DESK_DB_PATH`（含空字串）時 STOP，不開任何連線（測試）。
   - 合成 ledger 上，第一段輸出與 `python -m app.forecast.report status --db` 逐字相同，第二段與 `verify --all --db` 逐字相同，兩段之間只有固定分隔句；`verify` 結束碼 1 時照常顯示並存檔，並在第二段之後印固定行動句；`status` 結束碼 3、4 時只印固定句且不執行 `verify`；`status` 成功而 `verify` 結束碼 3、4 時，第一段與分隔句照常顯示並存檔，第二段為固定 STOP 句（測試）。
   - AST 確認腳本不 import `tests`、不讀 `work/` 下的任何檔案；以含最近一次執行、F-2 兩句與兩行缺日加註的合成 ledger 執行腳本，輸出經 `tests/test_forecast_report.py` 的 `d4_violations` 檢查為空（測試）。該合成 ledger 另含已過 `valid_until_session_estimate`、帶標籤與基準預測的紀錄，並斷言兩段輸出與所有固定行都不含任何標籤值、基準預測值或 `content_hash`（測試）。
-  - e2e 擷取 stdout 與 stderr：例外、執行緒例外、警告、注入 `KeyboardInterrupt`，畫面都只有固定句（測試）。
+  - e2e 擷取 stdout 與 stderr：例外、執行緒例外、警告、注入 `KeyboardInterrupt`，注入點涵蓋 `status` 執行中與 `verify` 執行中；畫面除已印出的第一段與分隔句外只有固定句，不出現 traceback、路徑或例外文字，也不留下 `status.txt` 或暫存檔。正常完成與 `verify` 結束碼 1、3、4 時，`status.txt` 與畫面逐字相同（測試）。
   - `app/` 零差異。
   - 本一鍵檔 PR 開在產品線上，先於接線 PR 合併；上面第四項中需要接線版 `report` 的測試（最近一次執行、F-2 兩句、兩行缺日加註），隨接線 PR 加入。qa 核對一鍵檔 PR 的合併 commit，早於接線前那一次 `verify --all` 貼回的 commit。
   - qa 核對：RC-246 通知送出的 commit，晚於一鍵檔的合併 commit，也晚於說明文件的風控核可，而且早於接線 PR 的合併 commit。
+  - qa 核對：本補充 append 進 ADR-0030 的 commit，早於一鍵檔 PR 的合併 commit。
