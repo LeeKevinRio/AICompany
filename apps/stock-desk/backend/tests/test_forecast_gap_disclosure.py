@@ -253,6 +253,9 @@ HOLIDAY_MENTIONS = frozenset(
         "portfolio/valuation.py",
         # The risk-approved F-2 heading "平日指週一至週五，不扣休市日" (RC-248): wording, not data.
         "forecast/report.py",
+        # The fixed WARNING of supplement 10 point 2 ("... (an exchange holiday or a row
+        # missing at the source) ..."): wording, not data; pinned to that one line below.
+        "scheduler.py",
     }
 )
 
@@ -264,6 +267,14 @@ def test_no_holiday_data_is_added_to_app() -> None:
         if any(word in path.read_text(encoding="utf-8").lower() for word in ("holiday", "休市"))
     }
     assert mentions == HOLIDAY_MENTIONS
+    scheduler_lines = [
+        line.strip()
+        for line in (APP_ROOT / "scheduler.py").read_text(encoding="utf-8").splitlines()
+        if "holiday" in line.lower() or "休市" in line
+    ]
+    assert scheduler_lines == [
+        '" (an exchange holiday or a row missing at the source); the run continues"'
+    ]
     data_files = sorted(
         path.relative_to(APP_ROOT).as_posix()
         for path in APP_ROOT.rglob("*")
