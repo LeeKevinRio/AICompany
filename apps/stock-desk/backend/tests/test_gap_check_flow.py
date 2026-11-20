@@ -1,4 +1,6 @@
-"""Flow, output-path and read-only tests of ``scripts/gap_check.py`` (supplement 8 point 5 (c)).
+"""Flow, output-path and read-only tests of ``scripts/gap_check.py``.
+
+Authority: ADR-0030 supplement 8 point 5 (c), as read and tightened by supplement 10 point 7.
 
 Every test runs on ``tmp_path`` worlds (:mod:`tests.gap_check_world`): a synthetic "main"
 database with OHLCV values and other tables, a fake backend folder, a fake home, a fake git, a
@@ -261,6 +263,10 @@ def test_only_the_one_select_runs_on_the_copy_no_pragma_and_nothing_on_main(
     copy_path = str(world.work / "copy" / "stock-desk.db")
     copy_uri = Path(copy_path).resolve().as_uri() + "?mode=ro&immutable=1"
     assert targets == [main_uri, copy_path, copy_uri]
+
+
+def test_the_header_names_supplement_10_point_7_as_part_of_the_authority() -> None:
+    assert "supplement 8 point 5" in gc.__doc__ and "supplement 10 point 7" in gc.__doc__
 
 
 def test_the_copy_lives_under_the_gap_check_work_folder_outside_any_git_work_tree(
