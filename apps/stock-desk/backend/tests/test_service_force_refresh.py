@@ -73,6 +73,9 @@ FORBIDDEN_HELPERS = {
     "_fall_back_to_cache",
     "_cached_result",
     "_refused_answer",
+    # qa N-10: nor the two public entries (layer 0 / the cache-only read).
+    "get_daily_bars",
+    "get_cached_bars",
 }
 
 

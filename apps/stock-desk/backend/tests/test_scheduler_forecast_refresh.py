@@ -338,7 +338,7 @@ def _log_violations(function: ast.FunctionDef) -> list[str]:
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and node.func.attr in ("warning", "exception", "error")
+            and node.func.attr in ("warning", "exception", "error", "log", "critical")
         ):
             argument = node.args[0] if len(node.args) == 1 else None
             fixed = isinstance(argument, ast.Name) or (
@@ -376,6 +376,10 @@ def test_the_log_scan_has_teeth() -> None:
         "def run_forecast_record():\n    logger.warning(LINE + str(error))\n",
         "def run_forecast_record():\n    logger.exception(LINE)\n",
         "def run_forecast_record():\n    logger.warning(LINE, extra={'e': error})\n",
+        # qa N-10: logger.log and logger.critical are scanned too.
+        "def run_forecast_record():\n    logger.log(logging.WARNING, LINE)\n",
+        "def run_forecast_record():\n    logger.log(logging.WARNING, '%s', error)\n",
+        "def run_forecast_record():\n    logger.critical(LINE)\n",
     ):
         function = ast.parse(source).body[0]
         assert isinstance(function, ast.FunctionDef)
