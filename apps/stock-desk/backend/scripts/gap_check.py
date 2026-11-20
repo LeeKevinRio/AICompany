@@ -97,7 +97,6 @@ PROMPT: Final = "Close the stock-desk backend, scheduler and frontend windows, t
 
 #: The one statement run on the copy (point 5 (c)): one column, one table, one symbol.
 SELECT_SQL: Final = "SELECT trade_date FROM price_bars_cache WHERE symbol = '^TWII'"
-READ_ONLY_PRAGMA: Final = "PRAGMA query_only=ON"
 
 #: Official calendar: TWSE index history, one JSON per month; only the date column is read.
 CALENDAR_SOURCE: Final = "twse_mi_5mins_hist"
@@ -604,7 +603,6 @@ def read_trade_dates(copy_path: Path) -> list[date]:
     """
     try:
         with closing(sqlite3.connect(db_uri(copy_path), uri=True)) as conn:
-            conn.execute(READ_ONLY_PRAGMA)
             rows = conn.execute(SELECT_SQL).fetchall()
     except sqlite3.Error:
         raise RunStop("copy_unreadable") from None

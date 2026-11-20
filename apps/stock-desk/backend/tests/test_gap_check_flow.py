@@ -235,7 +235,7 @@ def test_the_database_files_and_the_data_folder_are_unchanged_after_the_run(
     assert sorted(p.name for p in world.db.parent.iterdir()) == listing
 
 
-def test_only_the_one_select_and_the_readonly_pragma_run_and_only_on_main_and_the_copy(
+def test_only_the_one_select_runs_on_the_copy_no_pragma_and_nothing_on_main(
     tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     world = make_world(tmp_path)
@@ -253,7 +253,9 @@ def test_only_the_one_select_and_the_readonly_pragma_run_and_only_on_main_and_th
     code, _lines, _err = run(world, capsys)
     assert code == 0
     assert statements.count(gc.SELECT_SQL) == 1
-    assert set(statements) <= {gc.SELECT_SQL, gc.READ_ONLY_PRAGMA}
+    assert statements == [gc.SELECT_SQL]  # one statement in all: no PRAGMA, nothing else
+    assert not any("PRAGMA" in statement.upper() for statement in statements)
+    assert not hasattr(gc, "READ_ONLY_PRAGMA")
     main_uri = f"{world.db.resolve().as_uri()}?mode=ro&immutable=1"
     copy_path = str(world.work / "copy" / "stock-desk.db")
     copy_uri = Path(copy_path).resolve().as_uri() + "?mode=ro&immutable=1"
@@ -300,7 +302,7 @@ def test_ast_the_sql_is_exactly_one_select_of_trade_date_from_the_cache_for_twii
         and isinstance(n.func, ast.Attribute)
         and n.func.attr == "execute"
     ]
-    assert sorted(ast.unparse(n.args[0]) for n in executes) == ["READ_ONLY_PRAGMA", "SELECT_SQL"]
+    assert [ast.unparse(n.args[0]) for n in executes] == ["SELECT_SQL"]  # no PRAGMA
     assert all(len(n.args) == 1 for n in executes)  # no parameters, no second form
     assert not any(
         isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
