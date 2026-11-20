@@ -145,6 +145,8 @@ class State:
     folder: Path | None = None
     temp: Path | None = None
     final: Path | None = None
+    #: Folders this run created above the run folder (nearest first); only these may be removed.
+    created_parents: list[Path] = field(default_factory=list)
     #: True once the temporary file was renamed to ``status.txt`` (RC-303: nothing after it fails).
     committed: bool = False
 
@@ -200,6 +202,10 @@ def show(state: State, text: str) -> None:
 
 def save(state: State, wanted: Path) -> None:
     """Write what was shown to a temporary file, then rename it to ``status.txt``."""
+    for parent in (wanted.parent, *wanted.parent.parents):
+        if parent.exists():
+            break
+        state.created_parents.append(parent)
     state.folder = new_folder(wanted)
     state.temp = state.folder / TEMP_NAME
     state.final = state.folder / STATUS_NAME
@@ -271,11 +277,14 @@ def cleanup(state: State) -> None:
     if state.final is not None:
         state.final.unlink(missing_ok=True)
     if state.folder is not None:
-        state.folder.rmdir()
+        state.folder.rmdir()  # made by this run, so it holds nothing of anybody else
+    for (
+        parent
+    ) in state.created_parents:  # only what this run created; a folder that was there stays
         try:
-            state.folder.parent.rmdir()  # the status root, when this run was the first to make it
+            parent.rmdir()
         except OSError:
-            pass  # it holds the folders of earlier runs
+            pass
 
 
 def main(**injected: Any) -> int:
