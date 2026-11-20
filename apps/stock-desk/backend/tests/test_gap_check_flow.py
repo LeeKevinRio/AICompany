@@ -316,6 +316,18 @@ def test_ast_the_sql_is_exactly_one_select_of_trade_date_from_the_cache_for_twii
         and n.func.attr in ("executemany", "executescript")
         for n in ast.walk(tree)
     )  # fmt: skip
+    assert _sqlish_strings(tree) == [gc.SELECT_SQL]
+
+
+SQLISH = re.compile(r"(?i)\b(select|insert|update|delete|create|drop|attach|from)\b|price_bars")
+
+
+def _sqlish_strings(tree: ast.Module) -> list[str]:
+    """String constants (not docstrings) with SQL-like words; only S-1 is let through verbatim.
+
+    The risk-control sentence S-1 contains the word "delete" as prose and is pinned verbatim to
+    the report by another test, so it alone is excluded; every other fixed sentence is checked.
+    """
     docstrings = {
         id(node.body[0].value)
         for node in ast.walk(tree)
@@ -324,17 +336,25 @@ def test_ast_the_sql_is_exactly_one_select_of_trade_date_from_the_cache_for_twii
         and isinstance(node.body[0], ast.Expr)
         and isinstance(node.body[0].value, ast.Constant)
     }
-    sqlish = re.compile(r"(?i)\b(select|insert|update|delete|create|drop|attach|from)\b|price_bars")
-    hits = [
+    return [
         n.value
         for n in ast.walk(tree)
         if isinstance(n, ast.Constant)
         and isinstance(n.value, str)
         and id(n) not in docstrings
-        and n.value not in gc.FIXED_SENTENCES  # a fixed sentence is prose, not SQL
-        and sqlish.search(n.value)
+        and n.value != STOPS["db_in_use"]
+        and SQLISH.search(n.value)
     ]
-    assert hits == [gc.SELECT_SQL]
+
+
+@pytest.mark.parametrize("word", ["select", "delete"])
+def test_the_sql_guard_has_teeth_against_another_fixed_sentence_with_a_sql_word(word: str) -> None:
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    old = "STOP: the cache copy holds no TWII rows."
+    assert source.count(old) == 1
+    tampered = ast.parse(source.replace(old, f"STOP: {word} the cache copy."))
+    assert _sqlish_strings(tampered) == [gc.SELECT_SQL, f"STOP: {word} the cache copy."]
+    assert _sqlish_strings(_tree()) == [gc.SELECT_SQL]
 
 
 def test_the_select_names_the_real_cache_columns() -> None:
