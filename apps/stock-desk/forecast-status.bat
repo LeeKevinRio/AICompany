@@ -23,6 +23,7 @@ if errorlevel 1 (
 cd /d "%BACKEND_DIR%"
 if errorlevel 1 (
   echo [ERROR] Cannot find the backend folder next to this file.
+  echo Do not move or change any file or folder yourself; tell the coordinator.
   goto fail
 )
 
