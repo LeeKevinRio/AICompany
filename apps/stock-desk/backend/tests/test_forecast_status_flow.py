@@ -21,7 +21,7 @@ import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
@@ -29,6 +29,7 @@ from typing import Any, Final
 import pytest
 
 from app.forecast import report
+from app.forecast.store import ForecastStore
 from tests.forecast_status_world import (
     SCRIPT_PATH,
     STAMP_FOLDER,
@@ -135,6 +136,26 @@ def extract_sentence(path: Path, label: str) -> str:
     prefix = "定稿全文：`"
     assert following.startswith(prefix) and following.endswith("`"), following
     return following[len(prefix) : -1]
+
+
+REPORT_RC310 = "2026-11-20-補充十一E1確認與缺少uv提示定稿RC305至RC312-風控.md"
+RC310_LABEL = (
+    "項目：RC-310 `.bat` 找不到 `uv` 時的第一行（`forecast-status.bat` 與 `gap-check.bat` 共用；"
+    "下一行固定為 `Tell the coordinator.`）"
+)
+
+
+def missing_uv() -> str:
+    """The RC-310 sentence, extracted from the risk-control report (never typed here)."""
+    return extract_sentence(report_file(REPORT_RC310), RC310_LABEL)
+
+
+def test_rc310_the_missing_uv_line_is_the_risk_control_sentence_verbatim() -> None:
+    lines = _bat_lines(BAT)
+    assert lines[17] == "  echo " + missing_uv()  # line 18
+    assert lines[18] == "  echo Tell the coordinator."  # line 19, unchanged
+    assert missing_uv() == "[MISSING] uv was not found. Do not install or update anything yourself."
+    assert not any("install from" in x or "http" in x for x in lines)
 
 
 @pytest.mark.parametrize("name", SENTENCE_NAMES)
@@ -282,6 +303,23 @@ def test_ast_there_is_one_screen_port_and_it_is_the_say_function() -> None:
                 owners.append(func.name)
     assert sorted(set(owners)) == ["_fixed_hook", "say"] and owners.count("say") == 2
     assert not [n for n in tree.body if isinstance(n, ast.Expr) and "print" in ast.unparse(n)]
+
+
+def test_e3_output_goes_only_through_sys_stdout_write_and_the_bat_has_no_chcp() -> None:
+    tree = _tree()
+    attributes = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and ast.unparse(node.value) == "sys.stdout"
+    }
+    assert attributes == {"write", "flush"}  # no ``buffer``, no ``reconfigure``, no ``print``
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    assert "print" not in names
+    assert not [
+        n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "reconfigure"
+    ]
+    assert not any(isinstance(n, ast.Name) and n.id == "print" for n in ast.walk(tree))
+    assert "chcp" not in BAT.read_bytes().decode("ascii").lower()
 
 
 def test_ast_say_is_called_only_by_the_stops_the_show_function_and_the_handlers() -> None:
@@ -517,24 +555,39 @@ def test_the_main_database_is_only_read_and_nothing_is_written_outside_the_statu
     assert str(BACKEND) not in "".join(spy.writes)
 
 
-def test_the_script_reads_the_ledger_through_a_query_only_connection(
+def test_every_read_connection_refuses_a_write_while_it_is_open(
     world: World, capsys: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # An attempt to write through any connection the run opens must fail inside SQLite.
-    connections: list[sqlite3.Connection] = []
-    original = sqlite3.connect
+    """The write is tried inside ``ForecastStore._read`` (the connection is closed afterwards)."""
+    original = ForecastStore._read
+    refusals: list[str] = []
 
-    def connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
-        conn: sqlite3.Connection = original(*args, **kwargs)
-        connections.append(conn)
-        return conn
+    @contextmanager
+    def probing(self: ForecastStore) -> Iterator[sqlite3.Connection]:
+        with original(self) as conn:
+            with pytest.raises(sqlite3.OperationalError) as refused:
+                conn.execute("CREATE TABLE intruder (x)")
+            refusals.append(str(refused.value))
+            yield conn
 
-    monkeypatch.setattr(sqlite3, "connect", connect)
-    run(world, capsys)
-    assert connections
-    for conn in connections:
-        with pytest.raises(sqlite3.Error):
-            conn.execute("CREATE TABLE intruder (x)")
+    monkeypatch.setattr(ForecastStore, "_read", probing)
+    code, _, err = run(world, capsys)
+    assert (code, err) == (0, "")
+    assert refusals and all("readonly" in text for text in refusals)
+    with closing(sqlite3.connect(world.db)) as conn:  # nothing was created in the database
+        assert (
+            conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'intruder'").fetchone() is None
+        )
+
+
+def test_the_write_probe_has_teeth_on_a_connection_that_is_not_query_only(world: World) -> None:
+    # Control: the same statement succeeds on a plain connection, so the probe above can fail.
+    with closing(sqlite3.connect(world.db, isolation_level=None)) as conn:
+        conn.execute("CREATE TABLE intruder (x)")
+    with closing(sqlite3.connect(world.db, isolation_level=None)) as conn:
+        conn.execute("PRAGMA query_only = ON")
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute("CREATE TABLE intruder_two (x)")
 
 
 def test_verify_exit_1_is_shown_and_saved_with_the_action_sentence_after_the_closing_line(
@@ -617,7 +670,7 @@ def test_verify_exit_3_or_4_keeps_part_one_and_the_separator_then_the_stop_sente
         return verify_code
 
     code, out, err = run(world, capsys, report_main=recording(world, verify=verify))
-    assert (code, err) == (0, "")
+    assert (code, err) == (3, "")  # E2: a STOP sentence is on the screen, so the tool ends with 3
     assert out == status_text + fs.SEPARATOR + "\n" + fs.STOP_VERIFY + "\n"
     assert saved(world) == out and world.opened == [world.status_file]
     assert "partial" not in out and SECRET not in saved(world)
@@ -802,6 +855,61 @@ def test_a_status_root_that_cannot_be_made_is_the_error_sentence_after_the_shown
     assert world.status_root.read_text() == "a file where the folder should be"
 
 
+@pytest.mark.parametrize("failure", ["rename", "stage"])
+@pytest.mark.parametrize("preexisting", ["empty-root", "root-with-old-run"])
+def test_n3_a_failed_run_removes_only_what_it_created(
+    world: World, capsys: Any, monkeypatch: pytest.MonkeyPatch, failure: str, preexisting: str
+) -> None:
+    world.status_root.mkdir()
+    old_file = world.status_root / "20260101-000000" / fs.STATUS_NAME
+    if preexisting == "root-with-old-run":
+        old_file.parent.mkdir()
+        old_file.write_bytes(b"an earlier run")
+    if failure == "rename":
+
+        def broken(*_args: Any) -> None:
+            raise OSError(SECRET)
+
+        monkeypatch.setattr(os, "replace", broken)
+    else:  # the run fails after ``verify`` but its own folder was already made
+        monkeypatch.setattr(fs, "open", broken_open, raising=False)
+    code, out, err = run(world, capsys)
+    assert (code, err) == (1, "") and out.endswith(UNEXPECTED + "\n")
+    assert world.status_root.is_dir()  # it was there before, empty or not: it stays
+    assert not world.folder.exists()  # the run's own folder is gone
+    if preexisting == "root-with-old-run":
+        assert old_file.read_bytes() == b"an earlier run"
+    else:
+        assert list(world.status_root.iterdir()) == []
+
+
+def broken_open(*_args: Any, **_kwargs: Any) -> Any:
+    raise OSError(SECRET)
+
+
+def test_n3_a_failed_run_removes_every_folder_it_made_above_its_own(
+    world: World, capsys: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    deep = tmp_path / "newly" / "made" / "home"
+    monkeypatch.setattr(fs, "open", broken_open, raising=False)
+    code, out, err = run(world, capsys, home=deep)
+    assert (code, err) == (1, "") and out.endswith(UNEXPECTED + "\n")
+    assert not (tmp_path / "newly").exists()  # all three folders above the root were this run's
+
+
+def test_n3_a_folder_that_existed_above_the_root_is_never_removed(
+    world: World, capsys: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "kept" / "home"
+    home.mkdir(parents=True)
+    (home / "mine.txt").write_text("not the tool's")
+    monkeypatch.setattr(fs, "open", broken_open, raising=False)
+    code, _, _ = run(world, capsys, home=home)
+    assert code == 1
+    assert (home / "mine.txt").read_text() == "not the tool's"
+    assert [p.name for p in home.iterdir()] == ["mine.txt"]
+
+
 @pytest.mark.parametrize("exc", [OSError(SECRET), RuntimeError(SECRET), KeyboardInterrupt()])
 def test_rc303_an_opener_that_fails_leaves_the_saved_file_the_screen_and_the_exit_code(
     world: World, capsys: Any, exc: BaseException
@@ -861,7 +969,8 @@ def test_the_ledger_has_passed_records_with_labels_and_the_screen_still_has_none
     passed, unpassed = _passed_and_unpassed(world.db)
     assert passed > 0 and unpassed > 0  # records that ``records`` / ``compare`` would label
     forbidden = _forbidden_values(world.db)
-    assert any(len(v) == 64 for v in forbidden) and "bullish" in forbidden | set(LABEL_WORDS)
+    assert any(len(v) == 64 for v in forbidden)  # the content hashes
+    assert {str(r["label"]) for r in _records(world.db)} & {"bullish", "bearish", "range"}
     verdicts: list[str] = []
     for stage_code in (None, 1, 3):
         if stage_code is None:
@@ -979,6 +1088,36 @@ def test_e2e_a_real_interpreter_run_on_a_synthetic_backend_shows_and_saves_the_t
     assert sorted(p.name for p in backend.iterdir()) == ["data", "scripts"]
 
 
+def test_n5_the_screen_equals_two_real_python_m_report_runs_word_for_word(
+    tmp_path: Path, built: Path
+) -> None:
+    script, backend, home = _fake_backend(tmp_path, built)
+    db = backend / "data" / "stock-desk.db"
+    env = _child_env(home)
+    tool = _exec(_driver(script, PUBLISH), home, tmp_path)
+    assert tool.returncode == 0 and tool.stderr == b""
+    status = subprocess.run(
+        [sys.executable, "-X", "utf8", "-m", "app.forecast.report", "status", "--db", str(db)],
+        capture_output=True, timeout=300, cwd=BACKEND, env=env,
+    )  # fmt: skip
+    assert status.returncode == 0 and status.stderr == b""
+    # ``verify`` needs the synthetic registry published (as in every other test); the module is
+    # still started as ``__main__`` of ``app.forecast.report``, which is what ``-m`` does.
+    verify_driver = (
+        "import runpy, sys\n"
+        f"sys.path.insert(0, {str(BACKEND)!r})\n" + PUBLISH + "sys.argv = ['report', 'verify', "
+        f"'--all', '--db', {str(db)!r}]\n"
+        "runpy.run_module('app.forecast.report', run_name='__main__', alter_sys=True)\n"
+    )
+    verify = subprocess.run(
+        [sys.executable, "-W", "ignore", "-X", "utf8", "-c", verify_driver],
+        capture_output=True, timeout=300, cwd=tmp_path, env=env,
+    )  # fmt: skip
+    assert verify.returncode == 0 and verify.stderr == b""
+    expected = status.stdout + (fs.SEPARATOR + "\n").encode() + verify.stdout
+    assert tool.stdout.replace(b"\r\n", b"\n") == expected.replace(b"\r\n", b"\n")
+
+
 def test_e2e_the_environment_variable_stops_a_real_interpreter(tmp_path: Path, built: Path) -> None:
     script, _, home = _fake_backend(tmp_path, built)
     env = _child_env(home, **{fs.ENV_VAR: ""})
@@ -1028,7 +1167,7 @@ def test_e2e_an_exception_or_an_interrupt_shows_only_what_was_shown_and_the_fixe
         assert lines[-2] == fs.SEPARATOR and lines[0].startswith("執行狀態")
         assert lines.count(sentence) == 1
     assert b"secret" not in done.stdout and b"Traceback" not in done.stdout
-    assert list(home.iterdir()) == [] or not list(home.rglob("*.*"))  # no status.txt, no temp
+    assert list(home.rglob("*")) == []  # no status.txt, no temporary file, no folder
 
 
 def test_e2e_threads_warnings_unraisables_and_uncaught_errors_print_the_fixed_sentence() -> None:
@@ -1118,6 +1257,10 @@ def test_the_bat_differs_from_the_precedent_only_in_the_listed_lines() -> None:
             "REM The script copies the database files and reads only the copy; this launcher never",
             "REM The script only reads the main database (no copy, no write); this launcher never",
         ),
+        (
+            "  echo [MISSING] uv - install from https://docs.astral.sh/uv/getting-started/installation/",
+            "  echo " + missing_uv(),
+        ),
         ("  echo After installing, run this script again.", "  echo Tell the coordinator."),
         (PRECEDENT_COMMAND, COMMAND),
     ]
@@ -1136,6 +1279,7 @@ def test_the_bat_has_no_non_cmd_redirect_and_only_r2_lines_besides_its_own() -> 
         'set "UV_ENV_FILE="',
         COMMAND,
         "  echo Tell the coordinator.",
+        "  echo " + missing_uv(),
         "",
     }
     assert [x for x in commands if x not in r2 and x not in own] == []
