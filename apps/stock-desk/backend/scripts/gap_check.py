@@ -111,7 +111,8 @@ LOOKBACK_DAYS: Final = 500
 #: Rate limit (the 2026-10-16 probe design: stop on 403/429/503, no redirect followed;
 #: data-engineer 2026-11-19: 307 pages come with dense requests and recover at 5-12 s). Ruled
 #: 2026-11-20 (supplement 10 point 7, tech-architect B-7): at least 8 s between requests, and 20 s
-#: after a failed one; the stop conditions are unchanged and the number of requests stays 17.
+#: after a failed one; the stop conditions are unchanged and the number of requests is unchanged
+#: (17 or 18, depending on the run date: the period touches that many calendar months).
 REQUEST_INTERVAL_SECONDS: Final = 8.0
 BACKOFF_INTERVAL_SECONDS: Final = 20.0
 #: Time bound of the calendar part (RC-273; pinned by tests). A check period touches 17 or 18
