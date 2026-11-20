@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import difflib
 import json
 import os
 import re
@@ -1239,33 +1240,68 @@ def test_the_bat_is_a_crlf_launcher_that_clears_uv_env_file_first() -> None:
     assert "%*" not in raw.decode("ascii") and "%1" not in raw.decode("ascii")  # no arguments
 
 
+REPORT_RC318 = "2026-11-20-兩份CEO文件判定RC313至RC324-風控.md"
+
+
+def backend_missing_extra() -> str:
+    """The RC-318 sentence, extracted from the risk-control report (never typed here)."""
+    lines = report_file(REPORT_RC318).read_text(encoding="utf-8").splitlines()
+    hits = [i for i, x in enumerate(lines) if x.startswith("項目：RC-318 ")]
+    assert len(hits) == 1, hits
+    assert "`[ERROR] Cannot find the backend folder next to this file.`" in lines[hits[0]]
+    following = lines[hits[0] + 1]
+    assert following.startswith("定稿全文：`") and following.endswith("`"), following
+    return following[len("定稿全文：`") : -1]
+
+
 def test_the_bat_differs_from_the_precedent_only_in_the_listed_lines() -> None:
     new, old = _bat_lines(BAT), _bat_lines(PRECEDENT_BAT)
-    assert len(new) == len(old)
-    differing = [(o, n) for o, n in zip(old, new, strict=True) if o != n]
-    assert differing == [
-        ("title stock-desk pipeline-acceptance", "title stock-desk forecast-status"),
-        (
-            "REM One-click real-data pipeline acceptance: a thin launcher. All logic lives in",
-            "REM One-click forecast status report: a thin launcher. All logic lives in",
-        ),
-        (
-            "REM backend\\scripts\\pipeline_acceptance_real.py (ADR-0030 supplement 6 and its addenda).",  # noqa: E501
-            "REM backend\\scripts\\forecast_status.py (ADR-0030 supplement 11 points 2 and 4).",
-        ),
-        (
-            "REM The script copies the database files and reads only the copy; this launcher never",
-            "REM The script only reads the main database (no copy, no write); this launcher never",
-        ),
-        (
-            "  echo [MISSING] uv - install from https://docs.astral.sh/uv/getting-started/installation/",
-            "  echo " + missing_uv(),
-        ),
-        ("  echo After installing, run this script again.", "  echo Tell the coordinator."),
-        (PRECEDENT_COMMAND, COMMAND),
+    matcher = difflib.SequenceMatcher(a=old, b=new, autojunk=False)
+    changes = [
+        (tuple(old[i1:i2]), tuple(new[j1:j2]))
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes()
+        if tag != "equal"
     ]
+    assert changes == [
+        (("title stock-desk pipeline-acceptance",), ("title stock-desk forecast-status",)),
+        (
+            (
+                "REM One-click real-data pipeline acceptance: a thin launcher. All logic lives in",
+                "REM backend\\scripts\\pipeline_acceptance_real.py (ADR-0030 supplement 6 and its addenda).",  # noqa: E501
+                "REM The script copies the database files and reads only the copy; this launcher never",  # noqa: E501
+            ),
+            (
+                "REM One-click forecast status report: a thin launcher. All logic lives in",
+                "REM backend\\scripts\\forecast_status.py (ADR-0030 supplement 11 points 2 and 4).",
+                "REM The script only reads the main database (no copy, no write); this launcher never",  # noqa: E501
+            ),
+        ),
+        (  # RC-310 (the first line) and the line that asked the user to install and rerun
+            (
+                "  echo [MISSING] uv - install from https://docs.astral.sh/uv/getting-started/installation/",  # noqa: E501
+                "  echo After installing, run this script again.",
+            ),
+            ("  echo " + missing_uv(), "  echo Tell the coordinator."),
+        ),
+        ((), ("  echo " + backend_missing_extra(),)),  # RC-318: added under the [ERROR] line
+        ((PRECEDENT_COMMAND,), (COMMAND,)),
+    ]
+    # Seven lines differ from the precedent: 1 + 3 + 2 (RC-310) + 1 (RC-318) added is a new line.
+    assert sum(len(o) for o, _ in changes) == 7 and sum(len(n) for _, n in changes) == 8
+    assert len(new) == len(old) + 1
     assert not any("After installing" in x for x in new)
     assert "  echo Tell the coordinator." in new
+
+
+def test_rc318_the_backend_error_line_is_followed_by_the_risk_control_sentence() -> None:
+    sentence = backend_missing_extra()
+    lines = _bat_lines(BAT)
+    at = lines.index("  echo [ERROR] Cannot find the backend folder next to this file.")
+    assert lines[at + 1] == "  echo " + sentence and lines[at + 2] == "  goto fail"
+    # cmd ``echo`` prints a semicolon as it is; the line's bytes carry no cmd operator character.
+    raw = lines[at + 1].encode("ascii")
+    assert b";" in raw and not any(c in raw for c in b'&|<>^%!()"')
+    assert raw.endswith(b"tell the coordinator.")
 
 
 def test_the_bat_has_no_non_cmd_redirect_and_only_r2_lines_besides_its_own() -> None:
@@ -1280,6 +1316,7 @@ def test_the_bat_has_no_non_cmd_redirect_and_only_r2_lines_besides_its_own() -> 
         COMMAND,
         "  echo Tell the coordinator.",
         "  echo " + missing_uv(),
+        "  echo " + backend_missing_extra(),
         "",
     }
     assert [x for x in commands if x not in r2 and x not in own] == []
