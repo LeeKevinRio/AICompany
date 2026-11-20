@@ -472,3 +472,112 @@ def test_index_values_of_the_calendar_never_enter_the_comparison() -> None:
     start, end, official = _world_days()
     found = gc.compare(official, _calendar(official), start=start, end=end)
     assert POISON_INDEX not in repr(found)
+
+
+# --- ASCII digits only (qa N-6) -----------------------------------------------------------------
+
+#: Code points of the digit zero in three other scripts: fullwidth, Arabic-Indic, Devanagari.
+ZEROS = (0xFF10, 0x0660, 0x0966)
+
+
+def _other_digits(text: str, zero: int) -> str:
+    """``text`` with every ASCII digit written in another script (``str.isdigit`` is still true)."""
+    return "".join(chr(zero + int(c)) if c in "0123456789" else c for c in text)
+
+
+@pytest.mark.parametrize("zero", ZEROS)
+def test_a_value_written_in_other_digits_is_on_no_whitelist_shape(zero: int) -> None:
+    def other(text: str) -> str:
+        return _other_digits(text, zero)
+
+    assert other("2026-11-02").isdigit() is False and other("20261102").isdigit()
+    for line in (
+        f"period_start={other('2026-11-02')}",
+        f"period_end={other('2026-11-02')}",
+        f"cache_range_start={other('2026-11-02')}",
+        f"cache_range_end={other('2026-11-02')}",
+        f"cache_not_covered_dates={other('2026-11-02')}",
+        f"official_not_in_cache_dates=2026-11-02,{other('2026-11-03')}",
+        f"cache_not_in_official_dates={other('2026-11-02')}",
+        f"months_checked={other('2026-11')}",
+        f"months_unchecked=2026-11,{other('2026-10')}",
+        f"cache_not_covered_count={other('19')}",
+        f"official_not_in_cache_count={other('19')}",
+        f"cache_not_in_official_count={other('19')}",
+    ):
+        assert not gc.on_whitelist(line), line
+        assert not gc.is_screen_line(line)
+    assert gc.on_whitelist("period_start=2026-11-02")  # the ASCII form still passes
+
+
+def test_the_same_lines_in_ascii_digits_pass_each_shape() -> None:
+    for line in (
+        "period_start=2025-07-07",
+        "months_checked=2025-07,2025-08",
+        "cache_not_covered_count=19",
+        "official_not_in_cache_dates=2026-04-15,2026-04-16",
+        "cache_range_end=none",
+    ):
+        assert gc.on_whitelist(line), line
+
+
+@pytest.mark.parametrize("zero", ZEROS)
+def test_a_roc_date_in_other_digits_is_unreadable(zero: int) -> None:
+    cell = _other_digits("115/11/02", zero)
+    assert gc.roc_to_date(cell) is None
+    assert gc.roc_to_date("115/11/02") == date(2026, 11, 2)
+    body = ('{"stat": "OK", "fields": ["日期"], "data": [["' + cell + '"]]}').encode()
+    assert gc.parse_month(body, 2026, 11) is None
+
+
+@pytest.mark.parametrize("zero", ZEROS)
+def test_the_run_folder_pattern_takes_ascii_digits_only(zero: int) -> None:
+    assert gc.RUN_FOLDER_PATTERN.fullmatch("20261119-100000")
+    assert not gc.RUN_FOLDER_PATTERN.fullmatch(_other_digits("20261119-100000", zero))
+
+
+def test_render_refuses_a_non_ascii_line_even_if_the_whitelist_were_to_pass_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start, end, official = _world_days()
+    found = gc.compare(official, _calendar(official), start=start, end=end)
+    lines = gc.render(found, git_head="a" * 40, script_sha256_lf="b" * 64)
+    assert all(line.isascii() for line in lines)
+    monkeypatch.setattr(gc, "on_whitelist", lambda _line: True)  # only the ASCII check is left
+    with pytest.raises(RuntimeError):
+        gc.render(found, git_head="é" * 40, script_sha256_lf="b" * 64)
+
+
+def test_no_pattern_of_the_script_uses_the_shorthand_digit_class() -> None:
+    import ast
+
+    from tests.gap_check_world import SCRIPT_PATH
+
+    tree = ast.parse(SCRIPT_PATH.read_text(encoding="utf-8"))
+    offenders = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and "\\d" in node.value
+    ]
+    assert offenders == []
+    # The compiled patterns agree: none of them matches a digit of another script.
+    patterns = [p for _name, p in gc.WHITELIST] + [gc._ROC_DATE, gc.RUN_FOLDER_PATTERN]
+    assert not any("\\d" in p.pattern for p in patterns)
+
+
+def test_the_trade_date_check_of_the_copy_reads_ascii_digits_only() -> None:
+    import ast
+
+    from tests.gap_check_world import SCRIPT_PATH
+
+    func = next(
+        n
+        for n in ast.walk(ast.parse(SCRIPT_PATH.read_text(encoding="utf-8")))
+        if isinstance(n, ast.FunctionDef) and n.name == "read_trade_dates"
+    )
+    patterns = [
+        n.value
+        for n in ast.walk(func)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and "{4}" in n.value
+    ]
+    assert patterns == ["[0-9]{4}-[0-9]{2}-[0-9]{2}"]

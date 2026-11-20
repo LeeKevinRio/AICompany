@@ -476,7 +476,14 @@ def test_stop_the_cache_holds_no_twii_row(tmp_path: Path, capsys: Any) -> None:
     only_stop(world, capsys, "no_rows")
 
 
-@pytest.mark.parametrize("bad", ["2026/11/02", "20261102", "2026-13-01", "", "2026-11-02T00:00"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "2026/11/02", "20261102", "2026-13-01", "", "2026-11-02T00:00",
+        "２０２６-１１-０２",  # fullwidth digits
+        "٢٠٢٦-١١-٠٢",  # Arabic-Indic digits
+    ],
+)  # fmt: skip
 def test_stop_a_trade_date_that_is_not_a_plain_iso_date(
     tmp_path: Path, capsys: Any, bad: str
 ) -> None:

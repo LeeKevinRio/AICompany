@@ -82,7 +82,7 @@ DB_NAME: Final = "stock-desk.db"
 DB_FILES: Final = (DB_NAME, f"{DB_NAME}-wal", f"{DB_NAME}-shm")
 COPY_EXTRA_FILES: Final = (f"{DB_NAME}-journal",)
 COPY_DIR: Final = "copy"
-RUN_FOLDER_PATTERN: Final = re.compile(r"\d{8}-\d{6}")
+RUN_FOLDER_PATTERN: Final = re.compile(r"[0-9]{8}-[0-9]{6}")
 STAMP_FORMAT: Final = "%Y%m%d-%H%M%S"
 PASTE_BACK_NAME: Final = "paste-back.txt"
 PORT: Final = 8000
@@ -210,8 +210,8 @@ RESULT_CODES: Final[tuple[ResultCode, ...]] = (
 )
 
 _HEX64 = r"[0-9a-f]{64}"
-_DATE = r"\d{4}-\d\d-\d\d"
-_MONTH = r"\d{4}-\d\d"
+_DATE = r"[0-9]{4}-[0-9]{2}-[0-9]{2}"
+_MONTH = r"[0-9]{4}-[0-9]{2}"
 _DATES = rf"(none|{_DATE}(,{_DATE})*)"
 _MONTHS = rf"(none|{_MONTH}(,{_MONTH})*)"
 #: One entry per allowed shape; a line is shown or written only when it fullmatches one of them.
@@ -228,11 +228,11 @@ WHITELIST: Final[tuple[tuple[str, re.Pattern[str]], ...]] = tuple(
         ("months_unchecked", rf"months_unchecked={_MONTHS}"),
         ("cache_range_start", rf"cache_range_start=(none|{_DATE})"),
         ("cache_range_end", rf"cache_range_end=(none|{_DATE})"),
-        ("cache_not_covered_count", r"cache_not_covered_count=\d+"),
+        ("cache_not_covered_count", r"cache_not_covered_count=[0-9]+"),
         ("cache_not_covered_dates", rf"cache_not_covered_dates={_DATES}"),
-        ("official_not_in_cache_count", r"official_not_in_cache_count=\d+"),
+        ("official_not_in_cache_count", r"official_not_in_cache_count=[0-9]+"),
         ("official_not_in_cache_dates", rf"official_not_in_cache_dates={_DATES}"),
-        ("cache_not_in_official_count", r"cache_not_in_official_count=\d+"),
+        ("cache_not_in_official_count", r"cache_not_in_official_count=[0-9]+"),
         ("cache_not_in_official_dates", rf"cache_not_in_official_dates={_DATES}"),
         ("result", rf"result=({'|'.join(RESULT_CODES)})"),
     )
@@ -240,7 +240,11 @@ WHITELIST: Final[tuple[tuple[str, re.Pattern[str]], ...]] = tuple(
 
 
 def on_whitelist(line: str) -> bool:
-    """True when ``line`` fullmatches one whitelist shape (an ASCII line without a newline)."""
+    """True when ``line`` fullmatches one whitelist shape (an ASCII line without a newline).
+
+    Every digit class is spelled ``[0-9]``: the shorthand class also accepts the digits of other
+    scripts (qa N-6).
+    """
     return any(pattern.fullmatch(line) for _name, pattern in WHITELIST)
 
 
@@ -259,7 +263,7 @@ def say(text: str) -> None:
 # === the calendar =================================================================================
 
 HttpGet = Callable[[str], tuple[int, bytes]]
-_ROC_DATE = re.compile(r"(\d{2,3})/(\d{2})/(\d{2})")
+_ROC_DATE = re.compile(r"([0-9]{2,3})/([0-9]{2})/([0-9]{2})")
 
 
 def month_key(day: date) -> str:
@@ -523,7 +527,7 @@ def render(comparison: Comparison, *, git_head: str, script_sha256_lf: str) -> l
         f"cache_not_in_official_dates={days(c.cache_not_in_official)}",
         f"result={c.result}",
     ]
-    if not all(on_whitelist(line) for line in lines):
+    if not all(on_whitelist(line) and line.isascii() for line in lines):
         raise RuntimeError("a rendered line is outside the whitelist")
     return lines
 
@@ -611,7 +615,7 @@ def read_trade_dates(copy_path: Path) -> list[date]:
     days: list[date] = []
     for row in rows:
         value = row[0]
-        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d\d-\d\d", value):
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
             raise RunStop("unparseable_row")
         try:
             days.append(date.fromisoformat(value))
