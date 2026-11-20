@@ -50,16 +50,19 @@ COPY_STOP = STOPS["copy_not_deleted"]
 REPORT_NAME = "2026-11-20-補充十修訂版與三句STOP判定RC265至RC274-風控.md"
 
 
-def report_path() -> Path:
-    """The risk-control report that fixes the three sentences (found under ``work/reviews``)."""
-    override = os.environ.get("GAP_CHECK_RC_REPORT")
+UV_REPORT_NAME = "2026-11-20-補充十一E1確認與缺少uv提示定稿RC305至RC312-風控.md"
+
+
+def report_path(name: str = REPORT_NAME) -> Path:
+    """A risk-control report (found under ``work/reviews``)."""
+    override = os.environ.get("GAP_CHECK_RC_REPORT") if name == REPORT_NAME else None
     if override:
         return Path(override)
     for folder in Path(__file__).resolve().parents:
-        candidate = folder / "work" / "reviews" / REPORT_NAME
+        candidate = folder / "work" / "reviews" / name
         if candidate.is_file():
             return candidate
-    raise AssertionError(f"the risk-control report was not found: work/reviews/{REPORT_NAME}")
+    raise AssertionError(f"the risk-control report was not found: work/reviews/{name}")
 
 
 def report_sentences() -> dict[str, set[str]]:
@@ -1387,13 +1390,44 @@ def test_the_bat_is_a_crlf_launcher_that_clears_uv_env_file_first() -> None:
     assert not any(a in COMMAND for a in ("--backend-dir", "--home"))
 
 
+UV_MISSING_LINES = (
+    "  echo [MISSING] uv was not found. Do not install or update anything yourself.",
+    "  echo Tell the coordinator.",
+)
+
+
+def _uv_sentence_from_report() -> str:
+    lines = report_path(UV_REPORT_NAME).read_text(encoding="utf-8").splitlines()
+    found: set[str] = set()
+    for index, line in enumerate(lines):
+        if line.startswith("項目：RC-310"):
+            following = lines[index + 1]
+            assert following.startswith("定稿全文：`") and following.endswith("`")
+            found.add(following[len("定稿全文：`") : -1])
+    assert len(found) == 1
+    return found.pop()
+
+
+def test_the_bat_prints_the_risk_control_uv_sentence_verbatim_and_no_install_hint() -> None:
+    sentence = _uv_sentence_from_report()
+    lines = BAT.read_bytes().decode("ascii").split("\r\n")
+    at = lines.index("where uv >nul 2>nul")
+    assert lines[at + 1] == "if errorlevel 1 ("
+    assert lines[at + 2] == f"  echo {sentence}"
+    assert lines[at + 3] == "  echo Tell the coordinator."
+    assert lines[at + 4] == "  goto fail"
+    text = "\n".join(lines)
+    assert "http" not in text and "install from" not in text and "run this script again" not in text
+    assert sum(1 for x in lines if "[MISSING]" in x) == 1
+
+
 def test_the_bat_matches_the_pipeline_acceptance_launcher_except_its_own_lines() -> None:
     lines = BAT.read_bytes().decode("ascii").split("\r\n")
     other = (BAT.parent / "pipeline-acceptance.bat").read_bytes().decode("ascii").split("\r\n")
     commands = [x for x in lines if not x.startswith("REM")]
     assert not any("/dev/null" in x for x in commands)
     assert "where uv >nul 2>nul" in lines
-    own = {"title stock-desk gap-check", COMMAND}
+    own = {"title stock-desk gap-check", COMMAND, *UV_MISSING_LINES}
     theirs = {x for x in other if not x.startswith("REM")}
     assert [x for x in commands if x not in theirs and x not in own] == []
 
