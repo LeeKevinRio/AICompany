@@ -136,6 +136,11 @@
 - N-10：`tests/test_service_force_refresh.py` 的 `FORBIDDEN_HELPERS` 加入 `get_daily_bars`、`get_cached_bars`（新方法本來就沒有呼叫）；`tests/test_scheduler_forecast_refresh.py` 的 log 掃描加入 `log`、`critical`，各有 teeth。
 - N-11：`tests/test_forecast_f2_window.py::test_n11_a_held_short_range_is_still_held_after_the_first_full_window`（分母 20、12、0、19 與兩項混合，帳隨時間增長）、`test_n11_arithmetic_every_numerator_7_to_20_holds_on_every_denominator_0_to_20`（純算術）、`test_n11_the_store_holds_every_numerator_7_to_20_on_every_denominator_0_to_20`（同一格點逐一建帳經 `f2_status`）、`test_n11_six_is_not_enough_on_a_full_window_of_20`。全部成立：視窗未滿時已成立者，第一個完整視窗必然成立，「自起點以來 F-2 曾否成立」進入完整視窗後為「是」，不會撤銷。
 
+### W-19 磁碟與載入程式不同的 WARNING 改字（風控 RC-331、RC-333 (a)；tech-architect `work/reviews/2026-11-20-磁碟與載入程式不同警告行祈使句裁示-tech-architect.md`；第五輪）〔做〕
+- 改檔：`app/forecast/recorder.py` 的 `DISK_DIFFERS_WARNING`，刪掉末尾的 `; restart the scheduler process to load them`，其餘不動。定稿字面（RC-331）：`forecast_record: the sources or the runtime on disk differ from the loaded program; this run keeps the loaded provenance`。
+- 測試（`tests/test_forecast_record_log_wording.py`）：`test_rc331_the_disk_differs_warning_is_the_approved_text`（自 `work/reviews/2026-11-20-警告行新字面與驗收書面紀錄確認RC331至RC335-風控.md` 的「項目：RC-331 …」抽出定稿全文，與常數執行期值逐字比對；抽取在 `tests/approved_copy.py::disk_differs_line`）、`test_rc331_the_superseded_clause_is_gone_from_app`、`test_rc333_no_forecast_record_line_in_app_is_imperative`（及兩支 teeth）。
+- `recorder.py` 在 `code_digest` 涵蓋範圍內，所以接線版 `code_digest` 改變（見下）。
+
 ### PR 說明用的材料（第四輪）
 - **S-20a「recorder、store 寫入路徑、harness 零差異」的基準**是第一輪 head `d01bd9eeb89ed97c9dea695a30d7bbf24ee98a7d`，不是登記 PR（`9d5bbf48`）。
   - `app/forecast/recorder.py` 相對登記 PR 是 +67／−3，內容是第一輪已審的 `ledger_store` 與 `warn_review_triggers`；相對 `d01bd9ee` 零差異。
@@ -147,6 +152,7 @@
   - `app/demo/seed.py:438`（`seed_demo`，非正式路徑）：`as_of` 是 seed 的 `moment`（未注入時為執行當下）；只寫 demo 標的（`2330`、`0050`、`00631L`），不寫任何 `^` 代號，不在排程、啟動或 API 路徑上。
   - 行號以第四輪 head 為準。
 - **N-13（已知取捨）**：強制更新失敗時，scheduler 只記第一行固定 WARNING，不記例外的類別、訊息或 traceback（風控 RC-267 (a)）。provider 層的失敗另由 `MarketDataService._try_provider` 的 logger（`app.data.service`）記錄，對照時間可以查到。
+- **接線版 `code_digest`（第五輪起）**：`731e09f425317a468dac98b099985766b451d5a987b03db45fbb1868bb610c2b`（取代第二～四輪的 `e8e0fb630a30361e3e0d2b34caa06b872c9e83609cc3b2b1b384581dc710d340`；改變來源只有 `app/forecast/recorder.py` 的 RC-331 改字）。計算方式：在 `apps/stock-desk/backend` 下執行 `uv run --frozen python -c "from app.forecast.canonical import code_digest; print(code_digest())"`，即 `app.forecast.canonical.code_digest()`：`app/forecast`、`app/outlook`、`app/dirdef` 的全部 `*.py` 與 `app/data/session_calendar.py`，各檔正規化行尾（CRLF／CR → LF）後取 sha256，以 `[app/相對路徑, sha256]` 清單經 `canonical_sha256` 雜湊。repo 內沒有任何測試或程式釘這個值（測試都以執行期 `code_digest()` 比對；`tests/test_cg2_register_addendum3.py::test_p1_no_code_digest_constant_is_pinned_and_the_tree_id_constant_stays` 釘住登記腳本不帶 digest 常數）。
 
 ---
 
