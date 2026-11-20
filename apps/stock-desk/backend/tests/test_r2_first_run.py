@@ -171,10 +171,95 @@ ALLOWED = [
 ALLOWED_RE = [re.compile(f"^{p}$") for p in ALLOWED]
 
 
+# Only the value of a ``...sha256...=`` key is masked, and only when it is exactly 64 lowercase
+# hex characters. The script fills those fields from hashlib digests, so a held symbol can never
+# be put there on purpose; anything else after such a key (short, upper-case, glued to other
+# text) stays visible to the leak scan. A symbol hidden inside a genuine digest is
+# indistinguishable from a coincidence and is covered by the whitelist's exact format check.
+_HASH_FIELD_RE = re.compile(r"(?P<key>sha256\w*=)[0-9a-f]{64}(?![0-9A-Za-z])")
+
+
+def _mask_hash_values(text: str) -> str:
+    return _HASH_FIELD_RE.sub(r"\g<key><masked>", text)
+
+
+def _leaked_symbols(text: str) -> list[str]:
+    """Held symbols present in ``text`` once genuine digest values are masked out."""
+    masked = _mask_hash_values(text)
+    return [symbol for symbol in SYMBOLS if symbol in masked]
+
+
 def _assert_whitelisted(lines: list[str], extra: list[re.Pattern[str]] | None = None) -> None:
     patterns = ALLOWED_RE + (extra or [])
     for line in lines:
         assert any(p.match(line) for p in patterns), f"line not on the whitelist: {line!r}"
+
+
+# ------------------------------------------------------------------ symbol leak check
+
+
+def _digest_containing(symbol: str) -> str:
+    digest = ("ab" + symbol + "cd").ljust(64, "e")
+    assert len(digest) == 64 and re.fullmatch(SHA, digest)
+    return digest
+
+
+def test_symbol_digits_inside_a_genuine_digest_are_not_a_leak() -> None:
+    text = "\n".join(
+        [
+            f"script_sha256_lf={_digest_containing('2330')}",
+            f"db_sha256_before={_digest_containing('2317')}",
+            f"db_sha256_after={_digest_containing('9958')}",
+        ]
+    )
+    # The old plain substring check misfires on this text; the masked check does not.
+    assert all(symbol in text for symbol in SYMBOLS)
+    assert _leaked_symbols(text) == []
+
+
+def test_symbol_digits_in_a_real_digest_do_not_fail_the_console_check(
+    seeded: Rig, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fixed = _digest_containing("2330")
+    stdout = (
+        "n177_n190_backtrack_probe version=2\n"
+        f"script_sha256_lf={fixed}\n"
+        f"db_sha256_before={fixed}\n"
+        f"db_sha256_after={fixed}\n"
+    )
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(r2.subprocess, "run", fake_run)
+    assert seeded.run() == 0
+    out = capsys.readouterr().out
+    pasted = seeded.paste_back().read_text(encoding="utf-8")
+    assert f"db_sha256_before={fixed}" in pasted
+    assert "2330" in pasted  # the naive substring check would have failed here
+    assert _leaked_symbols(pasted) == []
+    assert _leaked_symbols(out) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "gate_affected_symbols=2330",
+        "held: 2317 and others",
+        "9958",
+        "list=2330,2317",
+        "line end 9958\nnext",
+        "tag[2317]",
+        "x2330y",
+        "db_sha256_before=2330",
+        "db_sha256_before=" + "A" * 61 + "2330",
+        f"db_sha256_after={_digest_containing('9958')}e 2330",
+        f"script_sha256_lf={_digest_containing('2317')} 2317",
+        f"db_sha256_before={_digest_containing('2330')}\n2330",
+    ],
+)
+def test_real_symbol_leaks_are_still_caught(text: str) -> None:
+    assert _leaked_symbols(text) != []
 
 
 # ------------------------------------------------------------------ normal flow
@@ -191,8 +276,7 @@ def test_normal_flow_paste_back_is_whitelisted_and_clean(seeded: Rig) -> None:
     assert "    open: 2" in lines
     for pattern in r2.PROBE_LINE_PATTERNS:
         assert any(pattern.fullmatch(line) for line in lines), pattern.pattern
-    for symbol in SYMBOLS:
-        assert symbol not in text
+    assert _leaked_symbols(text) == []
     for fragment in (str(seeded.root), "/", "\\", "report_md", "report_json", "Traceback"):
         assert fragment not in text
     assert not re.search(r"[A-Za-z]:[\\/]", text)
@@ -206,8 +290,7 @@ def test_normal_flow_console_output_is_ascii_and_has_no_symbols(
     assert seeded.run() == 0
     out = capsys.readouterr().out
     assert out.isascii()
-    for symbol in SYMBOLS:
-        assert symbol not in out
+    assert _leaked_symbols(out) == []
     assert str(seeded.root) not in out
     assert "report.md" in out and "dev-up.bat" in out and "Ctrl+A" in out
     assert "stock-desk backend" in out and "stock-desk scheduler" in out
@@ -527,7 +610,8 @@ def test_probe_lines_are_matched_whole_and_bad_ones_dropped_and_counted(
     lines = seeded.lines()
     shown = capsys.readouterr().out
     for text in (seeded.paste_back().read_text(encoding="utf-8"), shown):
-        for leak in ("2330", "2317", "ABC", "secret", "Users", "C:", "report_", "AAAA"):
+        assert _leaked_symbols(text) == []
+        for leak in ("ABC", "secret", "Users", "C:", "report_", "AAAA"):
             assert leak not in text, leak
     assert "probe_lines_dropped=7" in lines
     kept = [ln for ln in lines if ln.startswith(("n177", "gate_", "n199_"))]
