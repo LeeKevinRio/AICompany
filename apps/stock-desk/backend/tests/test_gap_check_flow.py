@@ -1394,6 +1394,32 @@ UV_MISSING_LINES = (
     "  echo [MISSING] uv was not found. Do not install or update anything yourself.",
     "  echo Tell the coordinator.",
 )
+ERROR_LINE = "  echo [ERROR] Cannot find the backend folder next to this file."
+ERROR_SENTENCE_LINE = (
+    "  echo Do not move or change any file or folder yourself; tell the coordinator."
+)
+ERROR_REPORT_NAME = "2026-11-20-兩份CEO文件判定RC313至RC324-風控.md"
+
+
+def _backend_error_sentence_from_report() -> str:
+    lines = report_path(ERROR_REPORT_NAME).read_text(encoding="utf-8").splitlines()
+    found: set[str] = set()
+    for index, line in enumerate(lines):
+        if line.startswith("項目：RC-318"):
+            following = lines[index + 1]
+            assert following.startswith("定稿全文：`") and following.endswith("`")
+            found.add(following[len("定稿全文：`") : -1])
+    assert len(found) == 1
+    return found.pop()
+
+
+def test_the_bat_adds_the_risk_control_sentence_below_the_unchanged_backend_error_line() -> None:
+    sentence = _backend_error_sentence_from_report()
+    lines = BAT.read_bytes().decode("ascii").split("\r\n")
+    at = lines.index(ERROR_LINE)
+    assert lines[at + 1] == f"  echo {sentence}"
+    assert lines[at + 2] == "  goto fail"
+    assert sum(1 for x in lines if "[ERROR]" in x) == 1
 
 
 def _uv_sentence_from_report() -> str:
@@ -1427,7 +1453,7 @@ def test_the_bat_matches_the_pipeline_acceptance_launcher_except_its_own_lines()
     commands = [x for x in lines if not x.startswith("REM")]
     assert not any("/dev/null" in x for x in commands)
     assert "where uv >nul 2>nul" in lines
-    own = {"title stock-desk gap-check", COMMAND, *UV_MISSING_LINES}
+    own = {"title stock-desk gap-check", COMMAND, *UV_MISSING_LINES, ERROR_SENTENCE_LINE}
     theirs = {x for x in other if not x.startswith("REM")}
     assert [x for x in commands if x not in theirs and x not in own] == []
 
