@@ -169,7 +169,13 @@ def _months(count: int) -> list[tuple[int, int]]:
     return [(2025 + (6 + i) // 12, (6 + i) % 12 + 1) for i in range(count)]
 
 
-def test_requests_are_newest_first_one_per_month_and_at_least_six_seconds_apart() -> None:
+def test_the_rate_limit_constants_and_the_stop_conditions_are_the_ruled_ones() -> None:
+    assert gc.REQUEST_INTERVAL_SECONDS == 8.0 and gc.BACKOFF_INTERVAL_SECONDS == 20.0
+    assert gc.HARD_STOP_STATUSES == (403, 429, 503) and gc.MAX_CONSECUTIVE_FAILURES == 3
+    assert gc.REQUEST_TIMEOUT_SECONDS == 30.0 and gc.LOOKBACK_DAYS == 500
+
+
+def test_requests_are_newest_first_one_per_month_and_at_least_eight_seconds_apart() -> None:
     months = _months(8)
     cal = FakeCalendar(weekdays(date(2025, 7, 1), date(2026, 2, 28)))
     clock = FakeClock()
@@ -183,13 +189,13 @@ def test_requests_are_newest_first_one_per_month_and_at_least_six_seconds_apart(
     asked = [u.rsplit("date=", 1)[1] for u in cal.urls]
     assert asked == [f"{y:04d}{m:02d}01" for y, m in sorted(months, reverse=True)]
     assert len(set(asked)) == len(asked) == 8  # no retry, no repeat
-    assert all(b - a >= 6.0 for a, b in zip(stamps, stamps[1:], strict=False))
-    assert len(clock.sleeps) == 7 and all(s <= 6.0 for s in clock.sleeps)
+    assert all(b - a >= 8.0 for a, b in zip(stamps, stamps[1:], strict=False))
+    assert len(clock.sleeps) == 7 and all(s <= 8.0 for s in clock.sleeps)
     assert result.checked == tuple(f"{y:04d}-{m:02d}" for y, m in months)
     assert result.unchecked == ()
 
 
-def test_the_gap_after_a_failed_request_is_doubled_and_then_returns_to_six() -> None:
+def test_the_gap_after_a_failed_request_is_twenty_seconds_and_then_returns_to_eight() -> None:
     months = _months(4)  # asked newest first: 2025-10, 2025-09, 2025-08, 2025-07
     cal = FakeCalendar(weekdays(date(2025, 7, 1), date(2025, 10, 31)), bad={"2025-09"})
     clock = FakeClock()
@@ -201,9 +207,9 @@ def test_the_gap_after_a_failed_request_is_doubled_and_then_returns_to_six() -> 
 
     result = gc.fetch_calendar(months, get=get, clock=clock, sleep=clock.sleep)
     gaps = [b - a for a, b in zip(stamps, stamps[1:], strict=False)]
-    assert gaps[0] >= 6.0  # after the good 2025-10
-    assert gaps[1] >= 12.0  # after the failed 2025-09
-    assert 6.0 <= gaps[2] < 12.0  # after the good 2025-08: back to the base gap
+    assert gaps[0] >= 8.0  # after the good 2025-10
+    assert gaps[1] >= 20.0  # after the failed 2025-09
+    assert 8.0 <= gaps[2] < 20.0  # after the good 2025-08: back to the base gap
     assert result.unchecked == ("2025-09",)
 
 

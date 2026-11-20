@@ -108,11 +108,12 @@ CALENDAR_DATE_FIELD: Final = "日期"
 USER_AGENT: Final = "gap-check/1.0 (read-only, low rate)"
 #: The check period: 500 calendar days before the run date through the day before it.
 LOOKBACK_DAYS: Final = 500
-#: Rate limit (the 2026-10-16 probe design: at least 6 s between requests, stop on 403/429/503,
-#: no redirect followed; data-engineer 2026-11-19: 307 pages come with dense requests and
-#: recover at 5-12 s). After a failed request the next gap is doubled.
-REQUEST_INTERVAL_SECONDS: Final = 6.0
-BACKOFF_INTERVAL_SECONDS: Final = 12.0
+#: Rate limit (the 2026-10-16 probe design: stop on 403/429/503, no redirect followed;
+#: data-engineer 2026-11-19: 307 pages come with dense requests and recover at 5-12 s). Ruled
+#: 2026-11-20 (supplement 10 point 7, tech-architect B-7): at least 8 s between requests, and 20 s
+#: after a failed one; the stop conditions are unchanged and the number of requests stays 17.
+REQUEST_INTERVAL_SECONDS: Final = 8.0
+BACKOFF_INTERVAL_SECONDS: Final = 20.0
 HARD_STOP_STATUSES: Final = (403, 429, 503)
 MAX_CONSECUTIVE_FAILURES: Final = 3
 REQUEST_TIMEOUT_SECONDS: Final = 30.0
@@ -334,10 +335,11 @@ def fetch_calendar(
 ) -> Calendar:
     """One GET per month, newest first, rate limited; a month not had is listed as unchecked.
 
-    No retry. At least :data:`REQUEST_INTERVAL_SECONDS` between requests (doubled after a failed
-    one). A 403 / 429 / 503, or :data:`MAX_CONSECUTIVE_FAILURES` failures in a row, ends the
-    fetching: every month not yet asked is unchecked. A 307 page, any other status, a network
-    error, a bad body or an unexpected content makes that one month unchecked.
+    No retry. At least :data:`REQUEST_INTERVAL_SECONDS` between requests, and
+    :data:`BACKOFF_INTERVAL_SECONDS` after a failed one. A 403 / 429 / 503, or
+    :data:`MAX_CONSECUTIVE_FAILURES` failures in a row, ends the fetching: every month not yet
+    asked is unchecked. A 307 page, any other status, a network error, a bad body or an
+    unexpected content makes that one month unchecked.
     """
     dates: set[date] = set()
     checked: list[str] = []
