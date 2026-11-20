@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal, get_args
 
@@ -76,6 +77,50 @@ class CurrencyLookupError(LookupError):
     is raised -- never turned into ``UNAVAILABLE``, a ``rejection``, a missing
     token or any reader-facing wording -- before anything is written.
     """
+
+
+@dataclass(frozen=True)
+class LiveRefreshOutcome:
+    """What :meth:`MarketDataService.refresh_daily_bars_live` did (ADR-0030 supplement 10 point 2).
+
+    ``ok`` holds exactly when one live source's answer passed the currency
+    gate, was written to the cache and -- for an incremental ask -- its
+    read-back passed too. Every other ending is ``ok=False``: no cached bar is
+    ever taken as the answer. The object carries no bars and no wording a
+    reader sees; ``reason`` is the ladder's own reasons, joined as the ladder
+    joins them, or ``None`` when there is none (always ``None`` when ``ok``).
+    """
+
+    #: A live source answered, passed the gates and its bars were written.
+    ok: bool
+    #: ``ProviderResult.source`` of the answering source; ``None`` when not ``ok``.
+    source: str | None
+    #: ``ProviderResult.as_of`` of that answer (the source's request time).
+    requested_at: datetime | None
+    #: The ``fetched_at`` handed to the cache write (the service clock).
+    written_at: datetime | None
+    #: Bars in the live answer, after bars past the latest closed session were dropped.
+    live_bar_count: int
+    #: The newest bar date of that answer; ``None`` when there is none.
+    live_latest_date: date | None
+    #: ``ProviderResult.complete`` of the answer (coverage is recorded only when true).
+    complete: bool
+    #: Why not ``ok``; ``None`` when ``ok`` or when no rung said anything.
+    reason: str | None
+
+    @classmethod
+    def failed(cls, reason: str | None) -> LiveRefreshOutcome:
+        """An ``ok=False`` outcome with nothing written and the given reason."""
+        return cls(
+            ok=False,
+            source=None,
+            requested_at=None,
+            written_at=None,
+            live_bar_count=0,
+            live_latest_date=None,
+            complete=False,
+            reason=reason,
+        )
 
 
 #: Joins several layers' reasons into the one ``reason`` slot a
@@ -484,6 +529,115 @@ class MarketDataService:
                 is Verdict.HAS_LATEST_SESSION
             )
         return self._cached_result(cached, checked_at=checked_at, now=now, current=current)
+
+    def refresh_daily_bars_live(
+        self, symbol: str, market: Market, start: date, end: date
+    ) -> LiveRefreshOutcome:
+        """Ask the live sources once for ``[start, end]`` and write the answer to the cache.
+
+        ADR-0030 supplement 10 point 2: the ladder part of :meth:`get_daily_bars`
+        walked once, without layer 0 and without any cooldown, and without any
+        path that falls back to the cache. In order:
+
+        1. the admission (a refused symbol reads nothing and asks nothing);
+        2. one read of the cached range, judged by the currency gate at the
+           checkpoint ``force_refresh_cache``: a refused cached series is asked
+           for in full, otherwise the live ask starts where
+           :meth:`_incremental_start` says;
+        3. the sources in ladder order, each through :meth:`_try_provider`
+           (bars past the latest closed session dropped, a raising source
+           degraded), then the gate at ``provider``; a passing answer is
+           written (``put``, ``record_attempt``), read back and judged at
+           ``incremental_readback`` when the ask was narrowed, and its coverage
+           recorded only when it is complete;
+        4. when no source answered: ``record_attempt`` and ``ok=False``.
+
+        The checkpoint labels ``provider`` and ``incremental_readback`` are the
+        ladder's own, so this method writes the same rows the ladder does
+        (tech-architect ruling A-1 condition 3); ``force_refresh_cache`` is the
+        one label added for step 2. A :class:`CurrencyLookupError` propagates.
+
+        This is a copy of the ladder, not a call into it: :meth:`get_daily_bars`
+        is unchanged, and the two are held together by the equivalence tests in
+        ``tests/test_service_force_refresh.py``.
+        """
+        refused = self._refuse_unadmitted(symbol, market)
+        if refused is not None:
+            return LiveRefreshOutcome.failed(refused.reason)
+        cached = self._cache.get(symbol, market, start, end, now=self._clock())
+        if cached is not None and self._cache_refuses(
+            symbol, market, cached.bars, layer="force_refresh_cache", source=cached.source
+        ):
+            # As layer 0 does for a refused series (ADR-0024 D-2 (5)(a) step 4):
+            # the whole range is asked for, so a live answer overwrites the
+            # refused rows instead of being merged with them.
+            fetch_start = start
+        else:
+            fetch_start = self._incremental_start(symbol, market, start, end)
+
+        reasons: list[str] = []
+        for provider in (self._primary, *self._backups):
+            result, reason = self._try_provider(provider, symbol, market, fetch_start, end)
+            if result is None:
+                if reason is not None:
+                    reasons.append(reason)
+                continue
+            verdict = self._judge_bars(
+                symbol, market, result.bars, layer="provider", source=result.source
+            )
+            if verdict != "ok":
+                # ADR-0024 D-2 (1), D-3: nothing cached, no fetch recorded.
+                sentence = self._refusal_sentence(provider, market, verdict)
+                if sentence is not None:
+                    reasons.append(sentence)
+                if verdict == "mismatch" or self._scope == "index":
+                    fetch_start = start
+                continue
+            fetched_at = self._clock()
+            self._cache.put(result.bars, source=result.source, fetched_at=fetched_at)
+            self._cache.record_attempt(symbol, market, at=fetched_at)
+            if fetch_start > start:
+                merged = self._cache.get(symbol, market, start, end, now=fetched_at)
+                if merged is None:
+                    logger.error(
+                        "live refresh for %s: cached head could not be read back; "
+                        "degrading past %s",
+                        symbol,
+                        result.source,
+                    )
+                    reasons.append(MERGE_READBACK_FAILED_REASON)
+                    continue
+                if self._cache_refuses(
+                    symbol, market, merged.bars, layer="incremental_readback", source=merged.source
+                ):
+                    if self._wording is not None:
+                        reasons.append(self._wording.cache_unit_rejected)
+                    fetch_start = start
+                    continue
+            if result.complete:
+                self._cache.record_fetch(
+                    symbol, market, start=start, end=end, fetched_at=fetched_at
+                )
+            else:
+                logger.info(
+                    "partial live refresh for %s from %s: coverage not recorded",
+                    symbol,
+                    result.source,
+                )
+            return LiveRefreshOutcome(
+                ok=True,
+                source=result.source,
+                requested_at=result.as_of,
+                written_at=fetched_at,
+                live_bar_count=len(result.bars),
+                live_latest_date=max(bar.date for bar in result.bars),
+                complete=result.complete,
+                reason=None,
+            )
+
+        # Every live rung declined: the attempt is recorded as the ladder records it.
+        self._cache.record_attempt(symbol, market, at=self._clock())
+        return LiveRefreshOutcome.failed(_combine_reasons(reasons))
 
     def _refuse_unadmitted(self, symbol: str, market: Market) -> ProviderResult | None:
         """The admission, ahead of every cache read and every source (ADR-0024 D-4).
