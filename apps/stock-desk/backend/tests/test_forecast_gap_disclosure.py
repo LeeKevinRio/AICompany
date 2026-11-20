@@ -283,6 +283,81 @@ def test_no_holiday_data_is_added_to_app() -> None:
     assert data_files == []
 
 
+def _mentions_holiday(line: str) -> bool:
+    return "holiday" in line.lower() or "休市" in line
+
+
+def _report_holiday_violations(source: str, approved: str) -> list[str]:
+    """qa N-12: in ``report.py`` the only holiday mention is the RC-248 first heading.
+
+    Every source line that mentions a holiday (code, comment or docstring) must
+    sit inside the one ``F2_FIRST_HEADING`` assignment, be a string literal that
+    is part of the approved heading, and there must be exactly one such line;
+    the assigned value must equal the heading extracted from the risk record.
+    """
+    tree = ast.parse(source)
+    headings = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign | ast.AnnAssign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "F2_FIRST_HEADING"
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        )
+    ]
+    if len(headings) != 1:
+        return ["F2_FIRST_HEADING is not assigned exactly once"]
+    (heading,) = headings
+    found: list[str] = []
+    value = heading.value
+    if not (isinstance(value, ast.Constant) and value.value == approved):
+        found.append("F2_FIRST_HEADING is not the approved RC-248 first heading")
+    last = heading.end_lineno or heading.lineno
+    mentioned = [
+        (number, line)
+        for number, line in enumerate(source.splitlines(), start=1)
+        if _mentions_holiday(line)
+    ]
+    if len(mentioned) != 1:
+        found.append(f"{len(mentioned)} lines mention a holiday, not 1")
+    for number, line in mentioned:
+        if not heading.lineno <= number <= last:
+            found.append(f"line {number} mentions a holiday outside the heading")
+            continue
+        try:
+            piece = ast.literal_eval(line.strip())
+        except (ValueError, SyntaxError):
+            found.append(f"line {number} is not a string literal of the heading")
+            continue
+        if not isinstance(piece, str) or piece not in approved:
+            found.append(f"line {number} is not part of the approved heading")
+    return found
+
+
+def test_n12_report_mentions_a_holiday_only_in_the_rc248_first_heading() -> None:
+    approved = approved_copy.f2_wording()["first_heading"]
+    assert "休市" in approved
+    source = (APP_ROOT / "forecast" / "report.py").read_text(encoding="utf-8")
+    assert _report_holiday_violations(source, approved) == []
+
+
+def test_n12_the_report_holiday_scan_has_teeth() -> None:
+    approved = approved_copy.f2_wording()["first_heading"]
+    source = (APP_ROOT / "forecast" / "report.py").read_text(encoding="utf-8")
+    assert _report_holiday_violations(source, approved) == []
+    for extra in (
+        "\n# TWSE 休市日 list follows\n",
+        '\nHOLIDAYS = ("2026-01-01",)\n',
+        '\ndef f() -> None:\n    """Skips holiday sessions."""\n',
+    ):
+        assert _report_holiday_violations(source + extra, approved) != []
+    changed = source.replace("不扣休市日", "扣除休市日", 1)
+    assert changed != source
+    assert _report_holiday_violations(changed, approved) != []
+    removed = source.replace("F2_FIRST_HEADING: Final =", "F2_HEADING_ONE: Final =", 1)
+    assert _report_holiday_violations(removed, approved) != []
+
+
 # --- the second line: after the review trigger lines (RC-233 / RC-234) --------------------------
 
 #: The fixed n-hat note as it was before the wiring PR (9d5bbf48); it must not change.
