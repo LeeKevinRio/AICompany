@@ -4,7 +4,7 @@
 - 日期：2026-11-20
 - 底稿：`work/reviews/2026-11-20-CEO讀取執行狀態途徑裁示與補充十一-tech-architect.md`「## 補充十一」一節
 - 套用：`work/reviews/2026-11-20-補充十一D4檢查位置裁示-tech-architect.md` 的兩組「原 → 新」替換
-- 狀態：**定稿，待寫入 ADR。** 依風控 RC-284～RC-304 附條件核可；tech-architect 最後確認的 C2 修正版與 R1～R9、風控 RC-303 與 RC-304 的兩處替換都已以腳本套用。檔名沿用「草稿」是為了不改動其他文件中的引用路徑。
+- 狀態：**定稿（E1 待風控單項確認），待寫入 ADR。** 依風控 RC-284～RC-304 附條件核可；tech-architect 於一鍵檔交件後增修 E1（照實寫明 checkpoint 會改動主 DB 檔的位元組）、E2（工具結束碼）、E3（輸出方式的 AST 與 Windows 實機確認），已以腳本套用。檔名沿用「草稿」是為了不改動其他文件中的引用路徑。
 
 ## 檔頭補充紀錄行
 
@@ -37,7 +37,7 @@
      - 要開放其他子命令，須修訂本補充並送風控。
    - 讀取方式：
      - 經 `report.main` 與 `ForecastStore._read`（`query_only`）讀主 DB 本體，不取複本。
-     - WAL 模式下，SQLite 會照常建立或更新 `-wal`、`-shm`，與 backend、scheduler 平時的連線相同。
+     - WAL 模式下，SQLite 會照常建立或更新 `-wal`、`-shm`，與 backend、scheduler 平時的連線相同。本工具若是最後一個關閉的連線，SQLite 會把 `-wal` 的內容 checkpoint 進主 DB 本體並刪除 `-wal`、`-shm`，主 DB 檔的位元組與修改時間因此改變，邏輯內容不變；backend、scheduler 的連線最後關閉時也是如此。這裡的「唯讀」指不經 SQL 寫入任何內容，不指主 DB 檔的位元組不變；不得以主 DB 檔的位元組、雜湊或修改時間判讀帳內內容是否改變。
      - 這是 D-1 指定的操作者讀取路徑，不適用補充八第 5 點 (c)。
      - scheduler 執行中也可以讀；主 DB 為 WAL 模式，讀取不會使 `forecast_record` 的寫入失敗。在台北時間 22:00～22:30、23:00～23:30 執行時，最近一次執行可能顯示「沒有 end 列」（執行仍在進行），說明文件須請 CEO 避開這兩段時間；看到這種情形時，30 分鐘後再執行一次，仍是如此就告訴 coordinator。
    - 前置檢查：
@@ -68,6 +68,7 @@
    - 同一支一鍵檔在 `status` 之後，固定接著執行 `report verify --all`（同一個 `--db`）。兩段依序輸出，中間以一行固定分隔句分開，存在同一個 `status.txt`。不接受參數的規定照舊，也不提供只跑其中一段的方式。
    - `verify --all` 是 D-5 第 3 點的重算：每筆紀錄只輸出 `claim_id`、T、一致與否（不一致時附問題代碼）、程式與執行環境是否與寫入時相同，以及一行結語。不輸出標籤、基準預測、暫定對照或紀錄的其他內容。讀取方式與 `status` 相同。
    - 結束碼：`status` 回傳 0 才算成功。`status` 的結束碼為 3、4 時，只印 RC-291 對應的固定 STOP 句，不執行 `verify`，不寫檔。`status` 成功而 `verify` 的結束碼為 0 或 1 時，兩段照常顯示並存檔；1（有不一致）屬正常完成，並在第二段之後另印風控定稿的固定行動句。`status` 成功而 `verify` 的結束碼為 3、4 時，照常顯示第一段與分隔句，第二段改為風控定稿的固定 STOP 句（RC-299）。這兩種情形的 `status.txt` 都照寫，內容與畫面逐字相同（含行動句或 STOP 句）。其他情形，包括任一段的其他結束碼、`SystemExit`（例如 argparse 的 2）、其他例外、中斷與寫檔失敗，依第 2 點印固定 ERROR 句，不寫檔；已印出的內容不收回。
+   - 工具本身的結束碼：`status.txt` 已存檔而且畫面沒有 STOP 或 ERROR 句時為 0（含 `verify` 結束碼 1）；印了 STOP 句時為 3（含 `status` 成功而 `verify` 結束碼 3、4、已存檔的情形）；印 `ERROR: unexpected failure.` 時為 1；印 `ERROR: interrupted.` 時為 2。記事本開啟失敗不改變結束碼。結束碼只供 `.bat` 顯示，任何程式或流程都不得依它判讀帳內內容。
    - 頻率與紀錄同第 3 點，每次執行都含這一段。本一鍵檔只涵蓋 F-2 與 F-3 的發現，不涵蓋其他失效條件；任何 CEO 文件都不得寫成它涵蓋所有失效條件。
    - 接線 PR 合併前置清單中「CEO 本機執行 `report verify --all`」那一次，以本一鍵檔執行（帳內沒有紀錄，預期結語為「verify：沒有紀錄」），貼回依第 3 點保存。本一鍵檔必須在那一次執行之前合併。
    - 看到「不一致」或結語「verify：有不一致（F-3：停止記錄並查明）」時，CEO 只告訴 coordinator，不自己停止程式、刪改資料或設定；停止記錄與查明，由 coordinator 當天升級 tech-architect 與 devops-sre 處理。分隔句、不一致時的行動句，以及第二段的 STOP 句，字面依風控 RC-298、RC-299 定稿；這幾行是腳本另加的固定行，不改寫 `report` 的任何一行。
@@ -79,6 +80,7 @@
   - 合成 ledger 上，第一段輸出與 `python -m app.forecast.report status --db` 逐字相同，第二段與 `verify --all --db` 逐字相同，兩段之間只有固定分隔句；`verify` 結束碼 1 時照常顯示並存檔，並在第二段之後印固定行動句；`status` 結束碼 3、4 時只印固定句且不執行 `verify`；`status` 成功而 `verify` 結束碼 3、4 時，第一段與分隔句照常顯示並存檔，第二段為固定 STOP 句（測試）。
   - AST 確認腳本不 import `tests`、不讀 `work/` 下的任何檔案；以含最近一次執行、F-2 兩句與兩行缺日加註的合成 ledger 執行腳本，輸出經 `tests/test_forecast_report.py` 的 `d4_violations` 檢查為空（測試）。該合成 ledger 另含已過 `valid_until_session_estimate`、帶標籤與基準預測的紀錄，並斷言兩段輸出與所有固定行都不含任何標籤值、基準預測值或 `content_hash`（測試）。
   - e2e 擷取 stdout 與 stderr：例外、執行緒例外、警告、注入 `KeyboardInterrupt`，注入點涵蓋 `status` 執行中與 `verify` 執行中；畫面除已印出的第一段與分隔句外只有固定句，不出現 traceback、路徑或例外文字，也不留下 `status.txt` 或暫存檔。正常完成與 `verify` 結束碼 1、3、4 時，`status.txt` 與畫面逐字相同（測試）。
+  - AST：畫面輸出只經 `sys.stdout.write` 寫字串，不寫 `sys.stdout.buffer`、不呼叫 `reconfigure`；`.bat` 不含 `chcp`。工具結束碼依第 4 點（測試）。Windows 上第一次實際執行（接線前那一次 `verify --all`）視為主控台中文顯示的實機確認：coordinator 核對貼回的畫面與 `status.txt` 相同；畫面為亂碼時退回 devops-sre。
   - `app/` 零差異。
   - 本一鍵檔 PR 開在產品線上，先於接線 PR 合併；上面第四項中需要接線版 `report` 的測試（最近一次執行、F-2 兩句、兩行缺日加註），隨接線 PR 加入。qa 核對一鍵檔 PR 的合併 commit，早於接線前那一次 `verify --all` 貼回的 commit。
   - qa 核對：RC-246 通知送出的 commit，晚於一鍵檔的合併 commit，也晚於說明文件的風控核可，而且早於接線 PR 的合併 commit。
