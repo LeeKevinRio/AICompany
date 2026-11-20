@@ -21,7 +21,8 @@ shown is written to a temporary file that is renamed to ``status.txt``, then Not
 * status 3 / 4 -> only the RC-291 STOP sentence; ``verify`` is not run; no file;
 * status 0, verify 0 / 1 -> part one, the separator, part two (and, for 1, the action sentence);
   file written and opened;
-* status 0, verify 3 / 4 -> part one, the separator, the RC-299 STOP sentence; file written;
+* status 0, verify 3 / 4 -> part one, the separator, the RC-299 STOP sentence; file written; the
+  tool's exit code is 3 (every STOP sentence ends with 3; supplement 11 point 4);
 * anything else (other exit code, ``SystemExit``, any exception, an interrupt, a failed write)
   -> the RC-291 ERROR sentence after whatever was already shown; no ``status.txt`` and no
   temporary file is left. A failure to open Notepad after the rename is silent (RC-303).
@@ -239,7 +240,8 @@ def flow(state: State, injected: Mapping[str, Any]) -> int:
     show(state, first + SEPARATOR + "\n")
 
     code, second = run_report(report_main, ["verify", "--all", "--db", db], clock)
-    if code in (CODE_UNREADABLE, CODE_PATH_REFUSED):
+    stopped = code in (CODE_UNREADABLE, CODE_PATH_REFUSED)
+    if stopped:
         show(state, STOP_VERIFY + "\n")
     elif code == CODE_OK:
         show(state, second)
@@ -257,7 +259,7 @@ def flow(state: State, injected: Mapping[str, Any]) -> int:
             opener(state.final)
         except BaseException:  # noqa: BLE001 - RC-303: the file is saved; stay silent
             pass
-    return EXIT_DONE
+    return EXIT_STOP if stopped else EXIT_DONE
 
 
 def cleanup(state: State) -> None:
