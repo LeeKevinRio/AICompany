@@ -114,6 +114,12 @@ LOOKBACK_DAYS: Final = 500
 #: after a failed one; the stop conditions are unchanged and the number of requests stays 17.
 REQUEST_INTERVAL_SECONDS: Final = 8.0
 BACKOFF_INTERVAL_SECONDS: Final = 20.0
+#: Time bound of the calendar part (RC-273; pinned by tests). A check period touches 17 or 18
+#: months, so a run asks 17 or 18 times. Worst case: every request runs the full timeout and as
+#: many failures as the stop rule allows come (never 3 in a row): 17 requests take
+#: 17 * 30 + 11 * 20 + 5 * 8 = 770 s, 18 take 18 * 30 + 12 * 20 + 5 * 8 = 820 s. All succeeding:
+#: (requests - 1) * 8 s plus the requests' own time. There is no hard cap: the timeout is per
+#: socket operation, not per request (qa N-7).
 HARD_STOP_STATUSES: Final = (403, 429, 503)
 MAX_CONSECUTIVE_FAILURES: Final = 3
 REQUEST_TIMEOUT_SECONDS: Final = 30.0

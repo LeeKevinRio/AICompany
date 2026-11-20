@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from datetime import date, timedelta
 from email.message import Message
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -587,3 +588,114 @@ def test_the_trade_date_check_of_the_copy_reads_ascii_digits_only() -> None:
         if isinstance(n, ast.Constant) and isinstance(n.value, str) and "{4}" in n.value
     ]
     assert patterns == ["[0-9]{4}-[0-9]{2}-[0-9]{2}"]
+
+
+# --- the time bound of a run (RC-273): simulated with a fake clock, nothing sleeps ---------------
+
+
+def _simulated_elapsed(
+    fails: Any, *, request_seconds: float, months: int = 17
+) -> tuple[float, int]:
+    """Total fake seconds of ``fetch_calendar`` when request ``i`` fails iff ``fails(i)``."""
+    now = [0.0]
+    asked: list[str] = []
+
+    def get(url: str) -> tuple[int, bytes]:
+        index = len(asked)
+        asked.append(url)
+        now[0] += request_seconds
+        if fails(index):
+            raise OSError("synthetic timeout")
+        stamp = url.rsplit("date=", 1)[1]
+        return 200, month_body([date(int(stamp[:4]), int(stamp[4:6]), 2)])
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    gc.fetch_calendar(_months(months), get=get, clock=lambda: now[0], sleep=sleep)
+    return now[0], len(asked)
+
+
+def test_a_check_period_spans_17_or_18_months_so_a_run_asks_17_or_18_times() -> None:
+    # The "at most 17 requests" of the hand-over holds only for some run dates: a 500-day period
+    # touches 18 calendar months on about four days in ten (measured over 2024-2029).
+    counts: dict[int, date] = {}
+    day = date(2024, 1, 1)
+    while day < date(2030, 1, 1):
+        start, end = gc.check_period(day)
+        counts.setdefault(len(gc.months_between(start, end)), day)
+        day += timedelta(days=1)
+    assert sorted(counts) == [17, 18]
+    assert len(gc.months_between(*gc.check_period(date(2026, 11, 20)))) == 17
+    assert len(gc.months_between(*gc.check_period(date(2026, 12, 2)))) == 18
+
+
+@pytest.mark.parametrize(("requests", "expected"), [(17, 770.0), (18, 820.0)])
+def test_the_worst_case_of_the_calendar_part_by_the_formula_of_the_constants(
+    requests: int, expected: float
+) -> None:
+    # Worst case: all requests run the full 30 s timeout, and the failures are as many as the
+    # stop rule allows (never 3 in a row), so that as many gaps as possible are the long ones.
+    assert gc.MAX_CONSECUTIVE_FAILURES == 3
+    gaps = requests - 1
+    long_gaps = gaps - gaps // gc.MAX_CONSECUTIVE_FAILURES  # a success after every 2nd failure
+    formula = (
+        requests * gc.REQUEST_TIMEOUT_SECONDS
+        + long_gaps * gc.BACKOFF_INTERVAL_SECONDS
+        + (gaps - long_gaps) * gc.REQUEST_INTERVAL_SECONDS
+    )
+    elapsed, asked = _simulated_elapsed(
+        lambda i: i % 3 != 2, request_seconds=gc.REQUEST_TIMEOUT_SECONDS, months=requests
+    )
+    assert asked == requests
+    assert elapsed == formula == expected  # 17: 17*30 + 11*20 + 5*8; 18: 18*30 + 12*20 + 5*8
+
+
+@pytest.mark.parametrize(("requests", "worst"), [(17, 770.0), (18, 820.0)])
+def test_no_other_failure_pattern_takes_longer_than_the_worst_case(
+    requests: int, worst: float
+) -> None:
+    import itertools
+
+    for bits in itertools.product((False, True), repeat=8):  # the first 8 requests; then success
+        elapsed, _asked = _simulated_elapsed(
+            lambda i, b=bits: b[i] if i < len(b) else False,
+            request_seconds=30.0,
+            months=requests,
+        )
+        assert elapsed <= worst
+    # Every request failing: it stops after the third failure, 3 * 30 s + 2 * 20 s.
+    elapsed, asked = _simulated_elapsed(lambda _i: True, request_seconds=30.0, months=requests)
+    assert (asked, elapsed) == (3, 130.0)
+
+
+def test_a_run_where_every_request_succeeds_costs_the_gaps_of_8_seconds_plus_the_requests() -> None:
+    for requests in (17, 18):
+        gaps = (requests - 1) * gc.REQUEST_INTERVAL_SECONDS
+        for each in (0.0, 1.0, 10.0):
+            elapsed, asked = _simulated_elapsed(
+                lambda _i: False, request_seconds=each, months=requests
+            )
+            assert asked == requests and elapsed == gaps + requests * each
+    assert _simulated_elapsed(lambda _i: False, request_seconds=0.0)[0] == 128.0  # 17: 16 * 8
+
+
+def test_deleting_the_copy_waits_at_most_two_seconds_per_file_and_ten_in_all(
+    tmp_path: Path,
+) -> None:
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    for name in (*gc.DB_FILES, *gc.COPY_EXTRA_FILES):
+        (copy / name).write_bytes(b"x")  # the main file, -wal, -shm and -journal
+    failures: dict[str, int] = {}
+    pauses: list[float] = []
+
+    def remover(path: Path) -> None:
+        failures[path.name] = failures.get(path.name, 0) + 1
+        if failures[path.name] < gc.DELETE_ATTEMPTS:  # succeeds on the very last attempt
+            raise PermissionError("locked")
+        gc.remove_path(path)
+
+    gc.delete_copy(copy, remover, pauses.append)
+    assert not copy.exists()
+    assert sum(pauses) == 5 * (gc.DELETE_ATTEMPTS - 1) * gc.DELETE_PAUSE_SECONDS == 10.0
