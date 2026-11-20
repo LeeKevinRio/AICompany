@@ -1794,8 +1794,34 @@ def test_s4a_the_job_passes_the_index_loader_itself(
         )
 
     monkeypatch.setattr(scheduler_module, "record_forecasts", spy)
+    # Supplement 10 point 2: the run reaches the recorder only after a successful
+    # forced refresh whose newest bar is stamped no earlier than the run's start.
+    monkeypatch.setattr(scheduler_module, "force_refresh_benchmark", _fresh_refresh)
     scheduler_module.run_forecast_record()
     assert len(seen) == 1 and _job_wiring_violations(seen[0]) == []
+
+
+def _fresh_refresh(resolver: object, **kwargs: object) -> object:
+    from datetime import UTC
+
+    from app.data.freshness import TW_POLICY
+    from app.data.service import LiveRefreshOutcome
+    from app.services.index import ForcedBenchmarkRefresh
+    from tests.force_refresh_helpers import index_bar
+
+    now = datetime.now(UTC)
+    bar = index_bar(TW_POLICY.latest_completed_session(now), as_of=now)
+    live = LiveRefreshOutcome(
+        ok=True,
+        source="yfinance",
+        requested_at=now,
+        written_at=now,
+        live_bar_count=1,
+        live_latest_date=bar.date,
+        complete=True,
+        reason=None,
+    )
+    return ForcedBenchmarkRefresh(live=live, latest_cached_bar=bar, reason=None)
 
 
 def test_the_referrer_scan_has_teeth() -> None:

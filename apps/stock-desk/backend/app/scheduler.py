@@ -59,7 +59,7 @@ One more weekday cron job keeps the main DB's ex-dividend events current
 
 One more weekday cron job is the forecast ledger core's recorder (ADR-0030):
 
-``forecast_record`` (22:10 and 23:10, Asia/Taipei; once three minutes after start-up)
+``forecast_record`` (22:10 and 23:10, Asia/Taipei; a catch-up run three minutes after start-up)
     :func:`app.forecast.recorder.record_forecasts` on the main DB, with
     ``app.services.index.load_market_benchmark`` as its index loader (ADR-0030
     D-3 point 7, supplement 2 point 1). The only job that enters the forecast
@@ -69,7 +69,14 @@ One more weekday cron job is the forecast ledger core's recorder (ADR-0030):
     run is refused (supplement 4 point 2). It records only into the default
     production database ``<backend>/data/stock-desk.db`` with
     ``STOCK_DESK_DB_PATH`` unset (supplement 9 point 3): a deployment that
-    sets the variable, docker compose included, does not record.
+    sets the variable, docker compose included, does not record. Every run
+    first asks the live index source again
+    (:func:`app.services.index.force_refresh_benchmark`) and calls the recorder
+    only when the newest cached index bar was written by a request made no
+    earlier than the run's start (supplement 10 point 2); otherwise one fixed
+    WARNING line and no ledger row. No catch-up run is set when start-up plus
+    three minutes falls on a weekday in [13:30, 22:10) Taipei time
+    (supplement 10 point 3).
 
 Robustness rules, because a scheduler that dies silently is worse than no
 scheduler:
@@ -131,11 +138,18 @@ from app.dividends.providers import TWSE_OPENAPI_BASE_URL, DividendFetchResult, 
 from app.dividends.store import DividendEventStore, SyncTrigger
 from app.dividends.sync import DividendFetcher, sync_dividends
 from app.env_status import log_env_status
+from app.forecast.recorder import (
+    FETCH_CALENDAR_DAYS,
+    FETCH_SLACK_DAYS,
+    RunResult,
+    ledger_store,
+    record_forecasts,
+)
 from app.forecast.recorder import JOB_ID as FORECAST_RECORD_JOB_ID
-from app.forecast.recorder import RunResult, ledger_store, record_forecasts
+from app.forecast.recorder import MARKET as FORECAST_RECORD_MARKET
 from app.logging_setup import configure_logging
 from app.positions.models import Market
-from app.services.index import load_market_benchmark
+from app.services.index import force_refresh_benchmark, load_market_benchmark
 from app.services.market import load_bars
 from app.services.pit_snapshot import CaptureSummary, capture_once
 from app.services.sector_board import RefreshResult, SectorBoardService
@@ -209,6 +223,25 @@ FORECAST_RECORD_TIMEZONE = "Asia/Taipei"
 FORECAST_RECORD_DAYS = "mon-fri"
 FORECAST_RECORD_TIMES: tuple[time, ...] = (time(22, 10), time(23, 10))
 FORECAST_RECORD_STARTUP_DELAY = timedelta(minutes=3)
+#: Supplement 10 point 3: no catch-up run when start-up plus the delay falls on a
+#: weekday in [session close, first scheduled run) Taipei time, i.e. [13:30, 22:10).
+FORECAST_RECORD_NO_CATCH_UP_FROM = TW_POLICY.session_close
+FORECAST_RECORD_NO_CATCH_UP_UNTIL = FORECAST_RECORD_TIMES[0]
+
+#: Supplement 10 point 2: the three fixed WARNING lines of the check before the
+#: recorder. Logged as these exact strings -- no argument, no ``exc_info``, no
+#: exception text (risk-compliance RC-267 (a)); no path, price, date or label.
+FORECAST_RECORD_REFRESH_FAILED = (
+    "forecast_record: the live index refresh did not succeed; the run is skipped"
+    " and the cache is not used"
+)
+FORECAST_RECORD_BAR_PREDATES_RUN = (
+    "forecast_record: the newest cached index bar predates this run's start; the run is skipped"
+)
+FORECAST_RECORD_SERIES_ENDS_EARLY = (
+    "forecast_record: the refreshed index series ends before the latest weekday session"
+    " (an exchange holiday or a row missing at the source); the run continues"
+)
 
 logger = logging.getLogger("scheduler")
 
@@ -691,8 +724,44 @@ def forecast_record_trigger() -> OrTrigger:
     )
 
 
+def forecast_record_catch_up_at(started: datetime) -> datetime | None:
+    """When the start-up catch-up run fires, or ``None`` for none (supplement 10 point 3).
+
+    ``started`` plus :data:`FORECAST_RECORD_STARTUP_DELAY`, unless that moment
+    falls Monday to Friday, Taipei time, in [13:30, 22:10): then there is no
+    catch-up run and the job waits for its schedule.
+    """
+    at = started + FORECAST_RECORD_STARTUP_DELAY
+    local = at.astimezone(_TAIPEI)
+    if (
+        local.weekday() < 5
+        and FORECAST_RECORD_NO_CATCH_UP_FROM <= local.time() < FORECAST_RECORD_NO_CATCH_UP_UNTIL
+    ):
+        return None
+    return at
+
+
 def run_forecast_record() -> RunResult | None:
-    """ADR-0030 job ``forecast_record``: one recorder run on the main DB.
+    """ADR-0030 job ``forecast_record``: one checked recorder run on the main DB.
+
+    Five steps, in order (supplement 10 point 2):
+
+    1. the target check of supplement 9 point 3 (below);
+    2. t0, the system clock;
+    3. the forced refresh: :func:`app.services.index.force_refresh_benchmark`
+       over the resolver taken once here, with ``market`` and the range length
+       (``FETCH_CALENDAR_DAYS + FETCH_SLACK_DAYS``) from the recorder module;
+    4. the check: (i) the refresh raised no ``Exception`` and was ``ok``, (ii)
+       the read-back has a newest bar B, (iii) ``B.as_of >= t0``. When it
+       fails the recorder is not called and one fixed WARNING line is logged
+       (:data:`FORECAST_RECORD_REFRESH_FAILED` for (i) or (ii),
+       :data:`FORECAST_RECORD_BAR_PREDATES_RUN` for (iii)) and the job returns
+       ``None``: the cache is never used instead, nothing is written, and a
+       ``BaseException`` is not caught. When it holds but B's date is before
+       ``TW_POLICY.latest_completed_session(t0)``, the recorder is still
+       called and :data:`FORECAST_RECORD_SERIES_ENDS_EARLY` is logged; that
+       weekday rule is used for this log line only, never as a write condition;
+    5. the recorder, with the same resolver object.
 
     The recorder is the only way into the forecast core (K-3); the index
     loader is ``app.services.index.load_market_benchmark`` itself (supplement
@@ -715,10 +784,33 @@ def run_forecast_record() -> RunResult | None:
     if isinstance(target, str):
         logger.warning(FORECAST_RECORD_REFUSALS[target])
         return None
+    t0 = _utc_now()
+    resolver = get_index_resolver()
+    try:
+        refreshed = force_refresh_benchmark(
+            resolver,
+            market=FORECAST_RECORD_MARKET,
+            lookback_days=FETCH_CALENDAR_DAYS + FETCH_SLACK_DAYS,
+        )
+    except Exception:
+        # RC-267 (a): the fixed line only -- the exception's text may hold a
+        # path, a price or a date, so neither it nor its class is logged.
+        logger.warning(FORECAST_RECORD_REFRESH_FAILED)
+        return None
+    newest = refreshed.latest_cached_bar
+    if not refreshed.live.ok or newest is None:
+        logger.warning(FORECAST_RECORD_REFRESH_FAILED)
+        return None
+    if newest.as_of < t0:
+        logger.warning(FORECAST_RECORD_BAR_PREDATES_RUN)
+        return None
+    if newest.date < TW_POLICY.latest_completed_session(t0):
+        # Log only (supplement 10 point 2): not a write condition, no calendar.
+        logger.warning(FORECAST_RECORD_SERIES_ENDS_EARLY)
     result = record_forecasts(
         ledger_store(target),
         load_benchmark=load_market_benchmark,
-        resolver=get_index_resolver(),
+        resolver=resolver,
     )
     logger.info(
         "forecast_record run: run_id=%d outcome=%s records_written=%d error_class=%s",
@@ -784,7 +876,7 @@ def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingSched
         max_instances=1,
         coalesce=True,
     )
-    started = datetime.now(UTC)
+    started = _utc_now()
     engine.add_job(
         _guarded(PIT_CAPTURE_JOB_ID, capture_pit_snapshot),
         trigger=CronTrigger(
@@ -828,6 +920,11 @@ def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingSched
         coalesce=True,
         # No next_run_time: no start-up run (see the module docstring).
     )
+    # D-3 point 7: a catch-up run three minutes after start-up, except inside the
+    # window of supplement 10 point 3. Without one the argument is left out, never
+    # passed as ``None``: APScheduler adds a job with ``next_run_time=None`` paused.
+    catch_up = forecast_record_catch_up_at(started)
+    forecast_start_up: dict[str, object] = {} if catch_up is None else {"next_run_time": catch_up}
     engine.add_job(
         _guarded(FORECAST_RECORD_JOB_ID, run_forecast_record),
         trigger=forecast_record_trigger(),
@@ -835,14 +932,13 @@ def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingSched
         name="forecast ledger core: market h3 / h5 record",
         max_instances=1,
         coalesce=True,
-        # D-3 point 7: a catch-up run three minutes after start-up.
-        next_run_time=started + FORECAST_RECORD_STARTUP_DELAY,
+        **forecast_start_up,
     )
     logger.info(
         "scheduler jobs registered: data_refresh at start-up then %s, "
         "alert_evaluation every %d min, %s and %s on weekdays at %s (Asia/Taipei), "
         "%s on weekdays at %s:%d (Asia/Taipei), "
-        "%s on weekdays at %s (%s) and once after start-up",
+        "%s on weekdays at %s (%s), catch-up after start-up %s",
         _data_refresh_plan(data_minutes),
         alert_minutes,
         PIT_CAPTURE_JOB_ID,
@@ -854,6 +950,7 @@ def build_scheduler(scheduler: BlockingScheduler | None = None) -> BlockingSched
         FORECAST_RECORD_JOB_ID,
         ",".join(at.strftime("%H:%M") for at in FORECAST_RECORD_TIMES),
         FORECAST_RECORD_TIMEZONE,
+        "set" if catch_up is not None else "not set (weekday 13:30-22:10 Taipei)",
     )
     return engine
 

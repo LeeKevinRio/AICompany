@@ -13,7 +13,17 @@
 * the ledger schema is created only by ``bootstrap`` (supplement 4 point 2):
   on a main DB without it the run is refused and no ledger object appears; an
   empty registry closes the gate (CG-2, S-7);
-* ``KeyboardInterrupt`` is not swallowed by the job's guard.
+* ``KeyboardInterrupt`` is not swallowed by the job's guard;
+* supplement 10 point 2: the forced refresh before the recorder, the check
+  (i)-(iii), the three fixed WARNING lines (fixed strings only, RC-267 (a)),
+  the shared resolver and the arguments taken from the recorder module;
+* supplement 10 point 3: no catch-up run when start-up plus three minutes falls
+  on a weekday in [13:30, 22:10) Taipei time, the argument then left out.
+
+The checks of supplement 10 themselves are in
+``tests/test_scheduler_forecast_refresh.py``; tests here that exercise the
+recorder call stand in a successful forced refresh (:func:`_refresh_ok`),
+since the refresh is now step 3 of every run.
 
 Every database is a ``tmp_path`` file: the production target function
 (``production_db_target``) is pointed at ``<tmp>/data/stock-desk.db``, the
@@ -42,11 +52,14 @@ from apscheduler.triggers.combining import OrTrigger
 from apscheduler.triggers.cron import CronTrigger
 
 from app import scheduler as scheduler_module
+from app.data.freshness import TW_POLICY
+from app.data.service import LiveRefreshOutcome
 from app.forecast import recorder as recorder_module
 from app.forecast.recorder import RunResult
 from app.forecast.schema import SchemaIncompleteError, create_schema
-from app.services.index import load_market_benchmark
+from app.services.index import ForcedBenchmarkRefresh, load_market_benchmark
 from app.settings.store import SettingsStore
+from tests.force_refresh_helpers import index_bar
 from tests.import_graph import APP_ROOT, reachable_app_modules
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -106,13 +119,18 @@ def test_the_next_fire_times(settings: SettingsStore, now: datetime, expected: d
     assert fired == expected.replace(tzinfo=TAIPEI)
 
 
-def test_the_job_also_runs_three_minutes_after_start_up(settings: SettingsStore) -> None:
+def test_the_job_also_runs_three_minutes_after_start_up(
+    settings: SettingsStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Supplement 10 point 3: the start-up moment is pinned outside the no-catch-up
+    # window (Monday 23:00 Taipei), so the test does not depend on the wall clock.
+    started = datetime(2026, 11, 16, 23, 0, tzinfo=TAIPEI).astimezone(UTC)
+    monkeypatch.setattr(scheduler_module, "_utc_now", lambda: started)
     engine = scheduler_module.build_scheduler(BackgroundScheduler(timezone="UTC"))
     engine.start(paused=True)
     try:
-        started = datetime.now(UTC)
         first = engine.get_job("forecast_record").next_run_time
-        assert abs(first - (started + timedelta(minutes=3))) < timedelta(seconds=30)
+        assert first == started + timedelta(minutes=3)
     finally:
         engine.shutdown(wait=False)
 
@@ -339,6 +357,7 @@ def test_s19a_the_default_target_calls_the_recorder(
 ) -> None:
     sqlite3.connect(target).close()
     calls = _spy(monkeypatch)
+    _refresh_ok(monkeypatch)
     monkeypatch.setattr(scheduler_module, "get_index_resolver", lambda: {})
     assert scheduler_module.run_forecast_record() is not None
     ((store, _),) = calls
@@ -412,6 +431,30 @@ def _spy(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, Mapping[str, Any]]]
     return calls
 
 
+def _refresh_ok(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, Mapping[str, Any]]]:
+    """Stand in a successful forced refresh: B is stamped now (>= t0) and is the latest session."""
+    calls: list[tuple[Any, Mapping[str, Any]]] = []
+
+    def refresh(resolver: Any, **kwargs: Any) -> ForcedBenchmarkRefresh:
+        calls.append((resolver, kwargs))
+        now = datetime.now(UTC)
+        bar = index_bar(TW_POLICY.latest_completed_session(now), as_of=now)
+        live = LiveRefreshOutcome(
+            ok=True,
+            source="yfinance",
+            requested_at=now,
+            written_at=now,
+            live_bar_count=1,
+            live_latest_date=bar.date,
+            complete=True,
+            reason=None,
+        )
+        return ForcedBenchmarkRefresh(live=live, latest_cached_bar=bar, reason=None)
+
+    monkeypatch.setattr(scheduler_module, "force_refresh_benchmark", refresh)
+    return calls
+
+
 def test_s4a_the_job_passes_load_market_benchmark_itself(
     target: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -419,6 +462,7 @@ def test_s4a_the_job_passes_load_market_benchmark_itself(
     resolver = object()
     monkeypatch.setattr(scheduler_module, "get_index_resolver", lambda: resolver)
     calls = _spy(monkeypatch)
+    _refresh_ok(monkeypatch)
     result = scheduler_module.run_forecast_record()
     assert result is not None and result.outcome == "ok"
     ((store, kwargs),) = calls
@@ -434,6 +478,7 @@ def test_the_registered_job_runs_the_recorder_job(
     sqlite3.connect(target).close()
     monkeypatch.setattr(scheduler_module, "get_index_resolver", lambda: {})
     calls = _spy(monkeypatch)
+    _refresh_ok(monkeypatch)
     job = _job(scheduler_module.build_scheduler(BlockingScheduler(timezone="UTC")))
     job.func()
     assert len(calls) == 1 and calls[0][1]["load_benchmark"] is load_market_benchmark
@@ -450,6 +495,7 @@ def test_a_keyboard_interrupt_passes_through_the_guarded_job(
         raise KeyboardInterrupt
 
     monkeypatch.setattr(scheduler_module, "record_forecasts", interrupted)
+    _refresh_ok(monkeypatch)
     job = _job(scheduler_module.build_scheduler(BlockingScheduler(timezone="UTC")))
     with pytest.raises(KeyboardInterrupt):
         job.func()
@@ -476,6 +522,7 @@ def test_without_the_ledger_schema_the_run_is_refused_and_nothing_is_created(
         conn.execute("INSERT INTO positions (symbol) VALUES ('2330')")
         conn.commit()
     monkeypatch.setattr(scheduler_module, "get_index_resolver", lambda: {})
+    _refresh_ok(monkeypatch)
     with pytest.raises(SchemaIncompleteError):
         scheduler_module.run_forecast_record()
     assert _ledger_objects(target) == []
@@ -488,6 +535,7 @@ def test_the_guarded_job_logs_the_refusal_and_survives(
 ) -> None:
     sqlite3.connect(target).close()
     monkeypatch.setattr(scheduler_module, "get_index_resolver", lambda: {})
+    _refresh_ok(monkeypatch)
     job = _job(scheduler_module.build_scheduler(BlockingScheduler(timezone="UTC")))
     with caplog.at_level(logging.ERROR, logger="scheduler"):
         job.func()  # does not raise
@@ -512,6 +560,7 @@ def test_an_empty_registry_closes_the_gate_and_writes_only_the_run_rows(
         raise AssertionError("a closed gate must not read market data")
 
     monkeypatch.setattr(scheduler_module, "get_index_resolver", lambda: {})
+    _refresh_ok(monkeypatch)
     monkeypatch.setattr(recorder_module, "_fetch", no_fetch)
     result = scheduler_module.run_forecast_record()
     assert result is not None
