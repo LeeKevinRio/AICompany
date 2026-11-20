@@ -30,6 +30,7 @@ from tests.gap_check_world import (
     POISON,
     SCRIPT_PATH,
     FakeCalendar,
+    FakeGit,
     World,
     load_script,
     main_db_state,
@@ -422,8 +423,6 @@ def test_stop_work_folder_inside_a_git_work_tree(tmp_path: Path, capsys: Any) ->
 
 
 def test_stop_git_unusable_dirty_and_unpublished(tmp_path: Path, capsys: Any) -> None:
-    from tests.gap_check_world import FakeGit
-
     for name, git, kind in (
         ("a", FakeGit(unusable=True), "git_unusable"),
         ("b", FakeGit(dirty=True), "git_dirty"),
@@ -432,6 +431,77 @@ def test_stop_git_unusable_dirty_and_unpublished(tmp_path: Path, capsys: Any) ->
     ):
         world = make_world(tmp_path / name)
         only_stop(world, capsys, kind, git=git)
+
+
+class _PathAwareGit:
+    """A fake git whose ``status`` reports a change only for a path the status call names."""
+
+    def __init__(self, dirty_paths: set[str]) -> None:
+        self.dirty_paths = dirty_paths
+        self.status_calls: list[list[str]] = []
+        self.inner = FakeGit()
+
+    def __call__(self, cwd: Path, args: Any) -> tuple[int, bytes]:
+        if list(args)[:1] == ["status"]:
+            self.status_calls.append(list(args))
+            named = list(args)[list(args).index("--") + 1 :]
+            hit = sorted(self.dirty_paths & set(named))
+            return 0, "".join(f" M {x}\n" for x in hit).encode()
+        return self.inner(cwd, args)
+
+
+def test_the_clean_check_names_the_launcher_beside_the_backend_folder() -> None:
+    assert gc.CLEAN_PATHS == ("app", "tests", "scripts", "uv.lock", "../gap-check.bat")
+
+
+def test_stop_when_gap_check_bat_has_uncommitted_changes(tmp_path: Path, capsys: Any) -> None:
+    world = make_world(tmp_path)
+    git = _PathAwareGit({"../gap-check.bat"})
+    only_stop(world, capsys, "git_dirty", git=git)
+    assert git.status_calls and "../gap-check.bat" in git.status_calls[0]
+
+
+def test_a_clean_launcher_does_not_stop_and_the_other_paths_still_do(
+    tmp_path: Path, capsys: Any
+) -> None:
+    world = make_world(tmp_path / "a")
+    code, lines, _err = run(world, capsys, git=_PathAwareGit(set()))
+    assert code == 0 and lines[-1].startswith("result=")
+    for index, path in enumerate(gc.CLEAN_PATHS[:-1]):
+        other = make_world(tmp_path / f"b{index}")
+        only_stop(other, capsys, "git_dirty", git=_PathAwareGit({path}))
+
+
+def _real_git(cwd: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(cwd), *args],
+        check=True, capture_output=True,
+        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+    )  # fmt: skip
+
+
+def test_real_git_reports_a_changed_or_untracked_launcher_through_the_clean_paths(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    backend = repo / "backend"
+    for folder in ("app", "tests", "scripts"):
+        (backend / folder).mkdir(parents=True)
+        (backend / folder / "x.py").write_text("x = 1\n", "utf-8")
+    (backend / "uv.lock").write_text("lock\n", "utf-8")
+    (repo / "gap-check.bat").write_bytes(b"@echo off\r\n")
+    _real_git(repo, "init", "-q")
+    _real_git(repo, "add", "-A")
+    _real_git(repo, "commit", "-q", "-m", "init")
+    status = ["status", "--porcelain", "--untracked-files=all", "--", *gc.CLEAN_PATHS]
+    assert gc.run_git(backend, status) == (0, b"")
+    (repo / "gap-check.bat").write_bytes(b"@echo off\r\nrem changed\r\n")
+    code, out = gc.run_git(backend, status)
+    assert code == 0 and out.split() == [b"M", b"gap-check.bat"]  # porcelain: root-relative
+    _real_git(repo, "checkout", "--", "gap-check.bat")
+    assert gc.run_git(backend, status) == (0, b"")
+    (repo / "other.txt").write_text("not a clean path\n", "utf-8")  # outside the named paths
+    assert gc.run_git(backend, status) == (0, b"")
 
 
 def test_the_real_port_check_asks_only_loopback_8000(monkeypatch: pytest.MonkeyPatch) -> None:

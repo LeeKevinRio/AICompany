@@ -88,8 +88,9 @@ PASTE_BACK_NAME: Final = "paste-back.txt"
 PORT: Final = 8000
 ENV_VAR: Final = "STOCK_DESK_DB_PATH"
 ENV_KEY_PATTERN: Final = re.compile(r"^\s*STOCK_DESK_DB_PATH\s*=")
-#: Folders and files of the backend folder that must be clean in git.
-CLEAN_PATHS: Final = ("app", "tests", "scripts", "uv.lock")
+#: Folders and files that must be clean in git, relative to the backend folder; the launcher
+#: ``gap-check.bat`` beside it is included (supplement 10 point 7 (g), qa N-8).
+CLEAN_PATHS: Final = ("app", "tests", "scripts", "uv.lock", "../gap-check.bat")
 PUBLISHED_REF: Final = "origin/product/stock-desk"
 DELETE_ATTEMPTS: Final = 5
 DELETE_PAUSE_SECONDS: Final = 0.5
