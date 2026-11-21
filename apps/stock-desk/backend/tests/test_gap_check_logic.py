@@ -699,3 +699,56 @@ def test_deleting_the_copy_waits_at_most_two_seconds_per_file_and_ten_in_all(
     gc.delete_copy(copy, remover, pauses.append)
     assert not copy.exists()
     assert sum(pauses) == 5 * (gc.DELETE_ATTEMPTS - 1) * gc.DELETE_PAUSE_SECONDS == 10.0
+
+
+# --- the key search of the app .env file (preflight) --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "STOCK_DESK_DB_PATH=/x",
+        "  STOCK_DESK_DB_PATH = /x",
+        "export STOCK_DESK_DB_PATH=/x",
+        "  export   STOCK_DESK_DB_PATH = /x",
+        "stock_desk_db_path=/x",
+        "Export Stock_Desk_Db_Path=/x",
+        "export\tSTOCK_DESK_DB_PATH=/x",  # a tab after export
+        "EXPORT STOCK_DESK_DB_PATH=",  # an empty value still sets the key
+        "\ufeffSTOCK_DESK_DB_PATH=/x",  # a BOM on the first line
+    ],
+)
+def test_the_env_file_key_search_finds_every_way_of_setting_the_key(
+    tmp_path: Path, line: str
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(line + "\nOTHER=1\n", encoding="utf-8")
+    assert gc.env_file_sets_db_path(env_file) is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "# STOCK_DESK_DB_PATH=/x",
+        "  # export STOCK_DESK_DB_PATH=/x",
+        "STOCK_DESK_DB_PATH_OTHER=1",
+        "XSTOCK_DESK_DB_PATH=1",
+        "exportSTOCK_DESK_DB_PATH=1",
+        "STOCK_DESK_DB_PATH",
+        "OTHER=STOCK_DESK_DB_PATH=1",
+        "API_KEY=TOPSECRETVALUE",
+    ],
+)
+def test_the_env_file_key_search_ignores_lines_that_do_not_set_the_key(
+    tmp_path: Path, line: str
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(line + "\n", encoding="utf-8")
+    assert gc.env_file_sets_db_path(env_file) is False
+
+
+def test_the_env_file_key_pattern_flags_and_source() -> None:
+    import re
+
+    assert gc.ENV_KEY_PATTERN.pattern == r"^\s*(?:export\s+)?STOCK_DESK_DB_PATH\s*="
+    assert gc.ENV_KEY_PATTERN.flags & re.IGNORECASE
