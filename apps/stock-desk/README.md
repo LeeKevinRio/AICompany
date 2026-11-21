@@ -148,7 +148,7 @@ Docker 與原生各有自己的資料(Docker 在具名 volume,原生在 `backend
      沒有 CLI 時,可改用 Python 標準庫的 `sqlite3.Connection.backup()`(此 API 已在本機對 WAL 檔實測可備份,
      但「在容器內對 `/app/data` 下的檔案執行」這個組合未實測)。
 - 還原:`docker compose stop` 後,用同樣的 `alpine` 容器把 tar 解回 volume(`tar xzf … -C /data`),
-  並先清掉 volume 內舊的 `*.db-wal`／`*.db-shm`,理由同原生路徑;再 `docker compose start`。
+  並先清掉 volume 內舊的 `*.db-wal`／`*.db-shm`(不要讓舊的 `-wal` 留在原地,否則它可能被套用到剛還原的 `.db` 上);再 `docker compose start`。
   〔還原步驟未在實際 volume 上演練〕
   這是工程人員的步驟,而且只針對 Docker 的 volume:Docker 路徑不會記錄預測紀錄,
   請不要用它去覆蓋原生路徑的 `backend/data/`;需要還原任何資料時,先告訴 coordinator。
@@ -171,7 +171,7 @@ uv run --env-file ../.env uvicorn app.main:app --reload --port 8000   # 沒有 .
 ```
 
 手動啟動 scheduler 同理(`uv run --env-file ../.env python -m app.scheduler`)。
-手動啟動的 scheduler 不要和 `dev-up.bat` 混用:`dev-up.bat` 啟動時會強制結束它,若剛好正在記錄預測紀錄,該次記錄會中斷。
+手動啟動的 scheduler 不要和 `dev-up.bat` 混用:`dev-up.bat` 啟動時若發現它還在跑,會問 `Stop the old scheduler? [Y/N]`;答 `Y` 會強制結束它,若剛好正在記錄預測紀錄,該次記錄會中斷;答 `N` 則 `dev-up.bat` 不會繼續啟動。
 手動啟動時請不要設定 `STOCK_DESK_DB_PATH`。
 `uv run --env-file` 對**不存在的檔案會直接報錯**(實測 uv 0.11.32:`error: No environment file found`),
 所以 `dev-up.bat`／`dev-up.sh` 會先判斷檔案是否存在,再決定要不要帶(它們用等效的 `UV_ENV_FILE` 環境變數)。
