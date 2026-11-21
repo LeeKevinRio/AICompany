@@ -75,6 +75,7 @@
     - C-1：`app.sectors.store` 的例外加入 `app.data.sqlite_util`（只取 `enable_wal`）；純核心白名單不變。
     - D-1：註明 `data.sqlite_util` 為葉節點；`research.sector_biased` 追認依賴 `data.sqlite_util`。
   - 後續（ADR-0025 部分修訂）：C-15 識別字白名單由 ADR-0025 加入 `app/forecast/scoring.py`，其餘不變；CEO 2026-10-16 核可（`docs/adr/0025-stock-desk-產品定位改為提供投資建議.md`；決策紀錄 `work/dispatch/2026-10-16-CEO決策-ADR-0025核可與五日方向.md`）；本檔原文不改。
+  - 補充一（2026-11-21 append）：`dev-up.bat` 路徑下 build attestation 沒有履行（C-52 適用範圍內的部署約束缺口），記為已知缺口並限期補上；列出 NE-7 的全部子原因與 RC-421 待辦；主機部署手冊改判的連動；tech-architect 裁示，釐清與限期，不放寬 C-36、C-52，不改判定行為、使用者可見字面與 API 欄位；改採永久不補須 CEO 決定，其餘 CEO 可推翻；來源 `work/reviews/2026-11-21-心跳確認書審查與attestation落差裁示與退役測試對應-tech-architect.md`（第二件）、`work/reviews/2026-11-21-重啟請求定稿與手冊0.2及0.3節與attestation告知RC407至RC421-風控.md`（RC-419～RC-421）、`work/reviews/2026-11-21-手冊改判處理路徑與重啟請求R3-RC427至RC441-風控.md`（RC-427～RC-433、RC-436），以及`work/reviews/2026-11-21-README備份還原事實與下游ADR連動與ADR-0012補充一草稿-tech-architect.md`（D 節）；本檔原文不改。
 
 ## Context（背景）
 
@@ -1155,3 +1156,110 @@ CEO 在 2026-09-24 裁定開第一階段：首頁新增「族群動能排行」�
   - 三個 DB 檔的配置；
   - §7 對 ADR-0002 的擴充解讀。
   - （v9，已裁定）判定的部署方式：CEO 2026-09-25 裁定採主機 git checkout 直接執行（C-52）。日後若改採容器或 image 內烘入 attestation（Options K2），須另立修訂並核可。
+
+## 補充一：`dev-up.bat` 路徑下 build attestation 的已知缺口、限期、NE-7 子原因與手冊改判的連動（2026-11-21）
+
+- 決策者：tech-architect。來源見檔頭「補充一」那一行。
+- 性質：
+  - 第 1 點為事實與性質的釐清；第 2、3 點為限期與設計約束（收緊）；第 4 點為釐清；第 5 點為連動。
+  - 不改 C-36、C-52、T-22、T-36 與 Options K 的任何字面；不放寬任何判定條件；不改使用者可見字面、API 欄位與判定行為。
+  - 本檔為 accepted，本節為 append，不改寫既有任何一行。
+  - 第 6 點所列事項須 CEO 決定；其餘 CEO 可推翻。
+- 適用範圍：僅 `product/stock-desk`。路徑相對於 `apps/stock-desk/backend/`，另有標示者除外。行號為 2026-11-21 product 版的狀態，會漂移。
+
+1. **事實與性質**
+   - (a) `apps/stock-desk/dev-up.bat` 就是 K1 的主機形態：
+     - 從同一個 git checkout 的 `backend` 目錄，以 `uv run` 直接啟動 API 與 scheduler（`dev-up.bat` 150、166 行）；
+     - 啟動前先停掉舊的程序（119～124 行），再 `uv sync --locked`（130 行）；
+     - `git` 可執行、`.git` 可讀、`tests/` 存在。
+   - (b) 這個路徑沒有執行 `scripts/attest_sector_gate.py` 的步驟。所以 C-52 第 1 點的「且已在該 checkout 跑過 `scripts/attest_sector_gate.py`」沒有被履行。**這是 C-52 適用範圍內沒有被履行的部署約束，屬於實作與流程的缺口，不是 C-52 範圍之外的部署形態。**
+   - (c) K3 只把「NE-7 恆成立」接受為「K1 落地前的 fail-closed 現況」。K1 已經 CEO 2026-09-25 裁定採用，但在 `dev-up.bat` 路徑上還沒有完整落地。本補充只在第 2 點的期限內，援引 K3 對「落地前現況」的接受；過了期限仍未落地，就不得再援引 K3。
+   - (d) fail-closed 的鏈條：
+     - 判定端讀不到 attestation 檔，就列入 `attestation_missing`（`app/services/sector_attestation.py` 194～207、250～251 行）；
+     - 統計列 `selfcheck_passed=false`（`app/backtest/sector_eval.py` 2022～2023 行）；
+     - API 程序啟動時自己的檢查也不 ok，`ci_passed_commit` 為 None（`app/services/sector_runtime.py` 47～49 行）；
+     - 只要已有統計列，就加入 NE-7（`app/sectors/gate.py` 457～466 行）。
+     
+     結果只會少列示歷史比例，不會多列。這個路徑上沒有會變成 fail-open 的情形，因為不會產生 attestation 檔。
+   - (e) 和 ADR-0030 無關：預測紀錄帳核心不讀市場 DB，也不 import `app.sectors`（ADR-0030 K-2）。本缺口不是正式登記、接線或任何 ADR-0030 閘門的前置；補上時也不得動 ADR-0030 `code_digest` 涵蓋的檔案（第 3 點 (f)）。
+   - (f) 釐清：
+     - C-52 第 1 點寫的是 `uv sync --frozen`，`dev-up.bat` 用的是 `uv sync --locked`。讀為滿足 C-52 的目的（依鎖檔安裝，不更新鎖檔）：`--locked` 在鎖檔和 `pyproject.toml` 不一致時直接失敗，方向較嚴。〔推論，依 uv 的一般行為，未查證 CEO 本機的 uv 版本〕
+     - 「兩個程序都要重新啟動」由 (a) 滿足。
+     - D-8「部署期間的預期行為」要求啟動後立即補跑一次判定，由 scheduler 的啟動補跑滿足〔事實：接線版工作樹 `app/scheduler.py` 893、907 行；product 版行號未查證〕。
+2. **現行處置：已知缺口，限期補上**
+   - (a) 補上之前，`dev-up.bat` 路徑下的判定恆為 NE-7。它被 NE-1～NE-6 中編號較小者遮住，所以目前卡片顯示的是其他原因，那些原因是真的。
+   - (b) **觸發條件**（任一先到即觸發）：
+     - (i) 累積樣本數 N 達 120；
+     - (ii) 任何可能讓 NE-1～NE-6 全部消失的改動合併之前，例如回補路徑、DE-10 費率查證完成；
+     - (iii) 因其他原因改寫 `dev-up.bat` 時，一併處理。
+   - (c) 觸發時，devops-sre 交出第 3 點的設計 (a)，經 qa-reviewer（含 Codex 第二意見）與風控（只看新增的視窗輸出行）。落地期限：N 達 150 之前。
+   - (d) 補上之前與之後，都不得請 CEO 自己執行 attestation、`git status` 或任何指令（RC-420）。
+3. **觸發時的設計約束**（設計 (a)：在 `dev-up.bat` 加入 attestation 步驟）
+   - (a) attestation 失敗絕不能阻擋啟動：不得 `goto fail`，不得依它的結束碼改變後續流程。否則族群動能的問題會變成預測紀錄的漏記。
+   - (b) 位置：排在 `uv sync --locked` 之後、`start "stock-desk scheduler"` 之前。理由：C-36 不綁定已安裝的依賴（Consequences 第 1096 行）。
+   - (c) 條件式執行：attestation 檔存在、可讀，而且 `ci_passed_commit` 等於 `git rev-parse HEAD` 時，不執行；其他情形才執行。
+   - (d) 要有執行時間上限。上限依實測耗時訂定，超過就視同失敗並照常啟動。耗時目前沒有實測。
+   - (e) 不在 repo 工作樹內產生任何未被 ignore 的檔，只寫已被 ignore 的 `app/_build/ci_attestation.json`。理由：判定時的 `git status --porcelain` 涵蓋整個 repo 工作樹，未追蹤檔也算（第 4 點 J2）。
+   - (f) 不改 ADR-0030 `code_digest` 涵蓋的檔案（`app/forecast/**`、`app/outlook/**`、`app/dirdef/**`、`app/data/session_calendar.py`）。`app/_build/*.json`、`scripts/`、`tests/` 都不在涵蓋範圍內。
+   - (g) C-52 第 3 點不變：`running_commit`、`ci_passed_commit`、`suite_hash` 不得來自環境變數、build arg 或設定檔。
+   - (h) 視窗新增的每一行，逐行送風控；不新增任何要 CEO 輸入或回答的提示。
+   - (i) 設計要回答一件事：ADR-0012 第 1150 行要求監控 attestation notes，「持續出現即告警」，但 CEO 主機的 `dev-up.bat` 路徑沒有檔案 log，怎麼監控。要不要改監控方式由 tech-architect 裁示，不得以新增 CEO 的操作代替。
+   - (j) 已知限制（不改）：本機自我證明（D-8 第 430 行）；即使啟動時 attestation 成功，之後工作樹只要出現未被 ignore 的未追蹤檔，判定時照樣是 `dirty_worktree`。(a) 只能降低 NE-7 的機率，不能保證。
+4. **落進 NE-7（`lookahead_tests_failed`）的全部子原因**
+   - **判定端**：scheduler 的 `services.sector_board`，統計列寫入 `selfcheck_passed=false`。
+     - (J1) `git_unreadable`：`git rev-parse HEAD` 或 `git status --porcelain` 無法執行、非 0 結束或超過 20 秒（`sector_attestation.py` 54、91～112、246～247 行）。
+     - (J2) `dirty_worktree`：`git status --porcelain` 非空（110～112、248～249 行）。範圍是整個 repo 工作樹，含未追蹤、未被 ignore 的檔，不限於 `backend/`〔依 git 的一般行為推論，未實機驗證〕。
+     - (J3) `attestation_missing`：檔案不存在、讀不到、不是 JSON 物件，或三個欄位任一不是非空字串（194～207、250～251 行）。
+     - (J4) `commit_mismatch`：HEAD 不等於 `ci_passed_commit`，只在檔案可讀時判定（253～254 行）。
+     - (J5) `suite_hash_mismatch`：NE-7 測試集（使用 marker 的測試檔、`conftest.py`，以及遞移 import 的 `tests.*` 輔助模組）重算出來的雜湊不同（151～186、255～256 行）。
+     - (J6) runtime 自檢沒有通過（`sector_eval.py` 1934～1953 行）。依下列子項判斷「是不是檢查結果」：
+       - 自檢名稱集合不等於 `SELFCHECK_ORDER`（138 行）：沒有完整執行；
+       - 任一項 `fail`：檢查有執行，結果未通過；
+       - `vacuous` 出現在 T4、T5、T6 以外（142 行）：沒有完整執行；
+       - `skipped_insufficient_n` 出現在 T3a、T8、T8 打亂以外（141 行），或 N 不小於 `skip_allowed_below_samples`（`app/sectors/definition.py` 137 行，現值 30）：沒有完整執行。
+   - **讀取端**：API 程序的 `gate.evaluate`，只在已有統計列時（`gate.py` 457 行）。
+     - (R1) T8 沒有產出 `delta_real`、`delta_shuffle`（458～460 行，`ERROR_T8_NOT_PRODUCED`）：檢查有執行，但沒有完整產出。
+     - (R2) 最新統計列的 `selfcheck_passed=false`，也就是判定當時 J1～J6 任一成立（462 行）。
+     - (R3) `ci_passed_commit` 為 None：API 程序啟動時自己的檢查不 ok，也就是 API 程序啟動當下 J1～J5 任一成立（463 行；`sector_runtime.py` 47～49 行）。
+     - (R4) 統計列的 `running_commit` 不等於部署的 `ci_passed_commit`（464 行）。包括部署窗口（D-8 部署期間行為），以及判定時讀不到 HEAD 而寫入 `UNKNOWN_COMMIT`（`sector_board.py` 509 行）。
+   - **分類**：
+     - 「檢查實際執行了，結果未通過」只有 J6 的 `fail`。
+     - 「檢查沒有執行、沒有完整執行，或版本無法確認」包括 J1～J5、J6 的其餘子項、R1、R3、R4。
+     - R2 依它的來源歸類。
+   - 現況：`dev-up.bat` 路徑下 J3 與 R3 恆成立；若之前曾手動執行過 attestation，更新程式後改為 J4。
+   - 顯示：NE-7 只在 NE-8 不成立、而且 NE-1～NE-6 都不成立時，才是主要原因（`gate.py` 486～487 行；C 規則第 920 行）。`not_evaluated_reasons` 已含 NE-7，但非測試的 UI 不讀它（依 RC-421 的 Grep）。
+   - **RC-421 待辦**（required）：
+     - 現行卡片句（`sectorMomentumWording.ts` 第 446～449 行）把上列「沒有執行或版本無法確認」的情形，描述成「未通過資料偏誤檢查」「本次檢查未全部通過」。在第 2 點 (b) 的觸發成立之前，不必改。
+     - 觸發時，tech-architect 依本點的清單，逐項標「已執行未通過」或「未執行或無法確認」，裁示二擇一：
+       - (甲) 只改字：一句同時涵蓋兩類，不得把未執行寫成未通過；
+       - (乙) 拆代碼：例如把 J1～J5、R3、R4 拆成另一個 `NotEvaluatedReason`。這會改 NE 清單、優先序、API 列舉、C-36 與 T-22 的對照，屬於 ADR 修訂，要風控審，並讓 CEO 知悉 NE 清單的變更。
+     - （tech-architect 初步傾向，非定案）(乙)。理由：(甲) 的句子會變得含糊，而兩類原因的處理方式不同：一類要補部署步驟，另一類要查方法或資料。
+     - 之後由 creative-lead 起草，風控逐字審。禁說照 RC-421。
+5. **主機部署手冊改判的連動（RC-427～RC-433、RC-436）**
+   - (a) 第 1150 行指派 devops-sre 依 C-52 撰寫的主機部署手冊（`apps/stock-desk/docs/族群動能-主機部署手冊.md`），已改判為團隊的工程參考，不是 CEO 的操作文件。檔頭與 9 處就地警示依 RC-428、RC-429 定稿。
+   - (b) C-52 的部署形態與 devops-sre 的維護責任都不變（RC-433）。
+   - (c) 手冊第 1 節第 4 步、第 3 節第 3 步原本寫成由 CEO 執行 attestation 並排除問題，都不是 CEO 的步驟。attestation 由第 3 點的設計 (a) 承擔。
+   - (d) 手冊的任何修改都守 RC-430 的常設規則：檔頭標註與 9 處警示不得刪除、移位或弱化；不得新增對 CEO 的指示；要動到這兩者，先送風控。
+   - (e) 手冊工程內容的更正（0.2、0.3 節的路徑變數、§4.4 寫死的路徑、§5 依賴的檔案 log；RC-436）不屬本 ADR 的條文。由 devops-sre 在另一個只改文件的 PR 處理，追蹤清單列管。本點只記連動。
+6. **須 CEO 決定的事**
+   - (a) 改採「永久不補」，也就是不設期限，讓 `dev-up.bat` 路徑長期停在 K3。這實質推翻 CEO 2026-09-25 裁定的 K1：N 達 150 之後，卡片永遠不列示歷史比例，「約 3 年」的時程也失去實際意義。問句由 tech-architect 起草，送風控依 RC-263 定稿；RC-420 的字面也隨之作廢。
+   - (b) 改採容器部署，或 Options K2：依 C-52 第 2 點與第 1157 行，要另立修訂，並經 CEO 核可。
+   - 其餘各點 CEO 可推翻。
+7. **送風控的項目**
+   - (a) 本補充不含面向 CEO 的字面，只請風控知悉級確認兩件事：本補充沒有新增對 CEO 的字面；RC-420 照舊適用。
+   - (b) 設計 (a) 落地時，`dev-up.bat` 視窗新增的每一行（第 3 點 (h)）。
+   - (c) RC-421 的新字面，或拆代碼之後的新原因句（第 4 點）。
+   - (d) 補上之後給 CEO 的告知（RC-420 的承諾「補上時若需要您做什麼，我會再告訴您」）。
+   - (e) 若走第 6 點 (a)，給 CEO 的問句。
+
+- **S-A1（逐條可檢查）**
+  - S-A1-1：本補充落檔的 diff，只有檔頭「修訂：」清單末尾新增一行，加上檔尾新增本節；其他行零差異（`git diff` 只有新增行）。
+  - S-A1-2：追蹤清單有以下各列：第 2 點 (b) 的三個觸發、N 達 150 的落地期限、RC-421、RC-420 的承諾（補上時告知 CEO）。
+  - S-A1-3：設計 (a) 交件時，逐行讀 `dev-up.bat`：attestation 步驟之後沒有 `goto fail`，也沒有依它的 errorlevel 分支；位置在 `uv sync --locked` 之後、`start "stock-desk scheduler"` 之前；有第 3 點 (c) 的條件式；有第 3 點 (d) 的時間上限。
+  - S-A1-4：在乾淨的 checkout 上，attestation 步驟跑完之後，`git status --porcelain` 為空。
+  - S-A1-5：設計 (a) 的 PR 對 `app/forecast/**`、`app/outlook/**`、`app/dirdef/**`、`app/data/session_calendar.py` 零差異。
+  - S-A1-6：`sector_attestation.py`、`sector_runtime.py` 中 Grep `os.environ|getenv|dotenv` 零命中，同 T-36。
+  - S-A1-7：Windows 實機，由 devops-sre 記錄：attestation 成功與失敗（刻意讓工作樹不乾淨）兩種情形下，三個視窗都照常啟動，最後出現 `Done.`。
+  - S-A1-8：手冊、README 與任何 CEO 文件中，沒有任何把 attestation 寫成 CEO 步驟的句子（Grep `attest`）；手冊的修改符合 RC-430，由 qa 逐行確認。
+  - S-A1-9：RC-421 觸發時的裁示，附上第 4 點的清單並逐項標類別。
+  - S-A1-10：任何改動都沒有以放寬 C-36、以環境變數或 build arg、或請 CEO 手動執行 attestation 的方式來消除 NE-7（qa 審查項）。
