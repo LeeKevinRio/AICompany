@@ -289,8 +289,7 @@ EXIT_POST_COMMIT_CHECK_FAILED: Final = 5
 BOOTSTRAP_HORIZONS: Final = (3, 5)
 #: A line of an ``.env`` file that sets ``STOCK_DESK_DB_PATH``; only the key is looked for.
 #: An ``export`` prefix (any case, then whitespace) is allowed and the key matches in any case:
-#: uv loads ``export KEY=`` lines, and Windows environment names ignore case. The pattern and
-#: flags equal ``ENV_KEY_PATTERN`` of ``scripts/cg2_register.py`` (a test keeps them equal).
+#: uv loads ``export KEY=`` lines, and Windows environment names ignore case.
 _ENV_FILE_KEY: Final = re.compile(rf"^\s*(?:export\s+)?{DB_PATH_ENV_VAR}\s*=", re.IGNORECASE)
 _COMMIT: Final = re.compile(r"^[0-9a-f]{40}$")
 _SHA256: Final = re.compile(r"^[0-9a-f]{64}$")
