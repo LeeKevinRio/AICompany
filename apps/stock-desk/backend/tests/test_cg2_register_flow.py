@@ -30,7 +30,7 @@ from typing import Any
 
 import pytest
 
-from app.forecast import definitions, schema
+from app.forecast import claims, definitions, schema
 from tests.cg2_register_loader import SCRIPT_PATH
 from tests.cg2_register_world import (
     APP_ROWS,
@@ -512,10 +512,53 @@ def test_r3_the_environment_sets_the_variable(
     stop(world, capsys, mode, "env_db_path", env={"STOCK_DESK_DB_PATH": value})
 
 
-@pytest.mark.parametrize("line", ["STOCK_DESK_DB_PATH=x.db\n", "  STOCK_DESK_DB_PATH = \n"])
+#: ``.env`` lines that set the key: an ``export`` prefix (uv loads it) and any case (Windows).
+ENV_FILE_KEY_LINES = [
+    "export STOCK_DESK_DB_PATH=x.db\n",
+    "export\tSTOCK_DESK_DB_PATH=x.db\n",
+    "  export \t STOCK_DESK_DB_PATH = \n",
+    "stock_desk_db_path=x.db\n",
+    "Stock_Desk_Db_Path=x.db\n",
+    "EXPORT STOCK_DESK_DB_PATH=x.db\n",
+    "Export stock_desk_DB_path=x.db\n",
+]
+#: ``.env`` lines that do not: a comment, another key, a key with ``export`` glued to it.
+ENV_FILE_OTHER_LINES = [
+    "# STOCK_DESK_DB_PATH=x.db\n",
+    "  # export STOCK_DESK_DB_PATH=x.db\n",
+    "X_STOCK_DESK_DB_PATH=1\n",
+    "STOCK_DESK_DB_PATH_X=1\n",
+    "export X_STOCK_DESK_DB_PATH=1\n",
+    "exportSTOCK_DESK_DB_PATH=1\n",
+]
+
+
+@pytest.mark.parametrize(
+    "line", ["STOCK_DESK_DB_PATH=x.db\n", "  STOCK_DESK_DB_PATH = \n", *ENV_FILE_KEY_LINES]
+)
 def test_r3_the_env_file_sets_the_key(world: World, capsys: Any, line: str) -> None:
     (world.backend.parent / ".env").write_text("OTHER=1\n" + line, encoding="utf-8")
     stop(world, capsys, "preflight", "env_file_db_path")
+
+
+@pytest.mark.parametrize("mode", ["preflight", "register"])
+def test_r3_an_export_line_stops_both_modes(world: World, capsys: Any, mode: str) -> None:
+    (world.backend.parent / ".env").write_text("export stock_desk_db_path=x.db\n")
+    stop(world, capsys, mode, "env_file_db_path")
+
+
+@pytest.mark.parametrize("line", ENV_FILE_OTHER_LINES)
+def test_r3_an_env_file_line_naming_no_database_passes(
+    world: World, capsys: Any, line: str
+) -> None:
+    (world.backend.parent / ".env").write_text("OTHER=1\n" + line, encoding="utf-8")
+    assert real.env_file_sets_db_path(world.backend.parent / ".env") is False
+    assert run(world, capsys, "preflight")[0] == 0
+
+
+def test_r3_the_key_pattern_is_the_one_of_the_claims_module() -> None:
+    mine, theirs = real.ENV_KEY_PATTERN, claims._ENV_FILE_KEY
+    assert (mine.pattern, mine.flags) == (theirs.pattern, theirs.flags)
 
 
 def test_r3_the_env_file_is_only_searched_for_the_key(world: World, capsys: Any) -> None:
