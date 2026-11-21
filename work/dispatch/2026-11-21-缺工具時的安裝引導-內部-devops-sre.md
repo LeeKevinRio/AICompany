@@ -92,10 +92,13 @@ CEO 的回報應是一行 `[MISSING] <工具> was not found. ...`。
 | `[TIMEOUT] Backend did not become healthy in time ...`（backend 健康檢查逾時，60 秒） | 206（由 163 行跳入 204 行） | 到 `uv sync`、`npm install` 為止的全部步驟（含 `git pull`、停舊程序；若有舊程序且 CEO 回答 Y，**舊的 stock-desk 與舊 scheduler 已被停掉**）；已啟動 backend 視窗（154 行）並輪詢 `/health` 30 次未通過（157～165 行） | 啟動 scheduler 與 frontend 視窗（170～171 行）、等候 frontend、狀態列（189～193 行）、開啟瀏覽器（195 行）。**scheduler 在這一列沒有啟動過**，而舊的可能已被停掉 |
 | `[TIMEOUT] Frontend did not start in time ...`（frontend 逾時，90 秒） | 211（由 180 行跳入 209 行） | 同上，再加：backend 健康檢查已通過（167 行）；已啟動 scheduler 與 frontend 視窗（170～171 行）；輪詢 `:3000` 45 次未通過（173～182 行） | 狀態列（189～193 行）、開啟瀏覽器（195 行）、`Done.`（197 行）。scheduler 視窗已經啟動，但沒有經過狀態列確認它有沒有在跑 |
 | `[FAIL] backend   not answering at ...`、`[FAIL] scheduler not found running ...`（第 191 行字面已依 RC-446 改過，整行見風控判定檔）、`[FAIL] frontend  not answering at ...`（狀態列，三行各自獨立） | 189、191、193 | 全部步驟都已執行完，三個視窗都已啟動，frontend 已回應（173～184 行） | 無。**這三行不經過 `:fail` 段**：之後 `.bat` 仍會開啟瀏覽器（195 行）並印 `Done.`（197 行），結束碼是 0（202 行）。所以畫面上同時有 `[FAIL]` 與 `Done.` 是可能的 |
+| `Cancelled.`（切換分支的問題回答 N；前一行會印出目前的分支名稱與目標分支） | 82（經 83 行跳入 `:fail`） | 複製自己（10～20 行）；檢查 git、uv、npm（35～54 行）；確認是 git repo（61～66 行）；追蹤檔案沒有未提交改動（69～74 行）；讀出目前分支（77 行）；發現不在 `product/stock-desk`，已印出目前分支名稱（79 行）；CEO 回答 N（80～81 行） | 切換分支（85 行）、顯示 `.env` 狀況（96～107 行）、`git pull`（112 行）、停止舊程序（121～126 行）、`uv sync`、`npm install`、啟動三個視窗。**發生在 `git pull` 與停止舊程序之前**，原本開著的 stock-desk 多半還開著，但這只是依程式推論，不得當成事實對 CEO 說；目前所在分支與工作樹狀態要由 coordinator 與 devops-sre 查明 |
+| `Cancelled. Not starting a second copy.`（埠 8000 或 3000 的 `Stop the old process?` 回答 N） | 263（由 264 行 `exit /b 1` 回到 `:fail`） | `git pull --ff-only` 已成功（112 行；有新 commit 時程式已更新）；掃描埠時發現有程序佔用（250 行）並已印出 `[NOTICE]`（253 行）；CEO 回答 N（261～262 行）。若這是 3000 埠，8000 埠的程序可能已在前一輪被停掉（121 行） | 對這個埠的程序執行 `taskkill`（266 行）、另一個埠（若這是 8000）、舊 scheduler 檢查（125 行）、`uv sync`、`npm install`、啟動三個視窗。stock-desk 可能已有一部分被結束 |
+| `Cancelled. Not starting a second copy.`（`Stop the old scheduler?` 回答 N） | 296（由 297 行 `exit /b 1` 回到 `:fail`） | `git pull --ff-only` 已成功；兩個埠都已通過（121～124 行，其中任一埠若有舊程序且 CEO 回答 Y，**舊的 stock-desk 已被停掉**）；偵測到舊 scheduler 並印出 `[NOTICE]`（292 行）；CEO 回答 N（294～295 行） | 對舊 scheduler 執行 `taskkill`（299 行）、`uv sync`（132 行）、`npm install`（142 行）、啟動三個視窗（154～171 行）。**舊 scheduler 仍在執行，而兩個埠的程序可能已停掉** |
 
 說明：
 
-- 本表沒有列 `Cancelled.`（82、263、296 行，CEO 回答 N 時印出）與 `[NOTICE]`（253、292 行）。它們不是上列開頭字樣；CEO 若回報，是否比照處理，由 devops-sre 與風控另行判斷，本文件不先下結論。
+- `Cancelled.` 三列的處理依 RC-449、RC-450（見 5.3 第 8 點）。`[NOTICE]`（253、292 行）單獨出現不是觸發字樣，維持不列。
 - 5.2 各列的 B／D 歸類（B：`dev-up.bat` 在停掉舊 scheduler 之後才失敗；D：依 tech-architect R4 的界線）要由 devops-sre 在 RC-438 (b) 的當天書面回覆裡逐案判斷。本文件只列出「前面已執行／尚未執行」的事實，**不預先替任何一列歸類**。前端逾時（211 行）算不算 B，風控也列為待 devops-sre 分類。
 - 這些控制流程同樣是讀 `.bat` 得出的，沒有在 Windows 實機執行過；`choice`、`taskkill` 與 `netstat` 的實際行為未驗證。
 
@@ -115,10 +118,16 @@ CEO 的回報應是一行 `[MISSING] <工具> was not found. ...`。
    - 預測紀錄期間，排除原因時凡會動到環境的動作，事前先通知 tech-architect（RC-438 (c)，即上面第 4 點）。
    - 只從 CEO 貼回的狀態報告看出、CEO 沒有回報過畫面行的情形，不得用 R2 或 R3，照原因未明處理（RC-439）。
    - 同一次回報至多送一次 R3；再執行又出現畫面行時不得再送，轉 tech-architect（RC-438 (e)）。
-   - 5.2 的 `[FAIL]` 三行可能與 `Done.` 同時出現；`Done.` 不代表三個程序都在跑，coordinator 不得以 `Done.` 當成成功的依據。
+   - 5.2 的 `[FAIL]` 三行可能與 `Done.` 同時出現；`Done.` 不代表三個程序都在跑，coordinator 不得以 `Done.` 當成成功的依據。`[OK]` 也不得當成記錄的依據（RC-444）；CEO 只回「已執行」、沒附那三行時，依 RC-447 追問一次。
+   - **R3 的送出條件以 RC-438 全文為準，本節只摘列部分**（含 (f) 不得與 L1、L2、H、U 系列等放在同一則、(g) 預檢到登記完成之間不得送出，這兩項本節沒有展開）。
+   - 送了 R3-0 或 R3-0C 而不送 R3 時（例如先由 coordinator 引導安裝），解除的字面先送風控（RC-437、RC-449）；「由我告訴您」是承諾，要列進追蹤清單。
+8. **`Cancelled.` 開頭的行**（5.2 最後三列；出處同上，RC-449、RC-450、RC-451；一樣只引用編號，不抄字面）：
+   - 第一次回覆用風控的「R3-0C」，**不用 R3-0**（RC-449）。同一則回報同時含 `Cancelled.` 與 R3-0 觸發字樣時，用 R3-0。
+   - **82 行**：當天轉 devops-sre，查明目前分支、為什麼在這個分支、工作樹狀態；預測紀錄期間（第一筆 `forecast_run` 之後）同一天也通知 tech-architect（RC-450）。**不得用 R3**。不得問 CEO 為什麼在別的分支或是誰切的、不得叫 CEO 執行任何 git 指令、不得叫 CEO 下次按 `Y`；要 CEO 切換分支或做其他操作的字面，先送風控。
+   - **263、296 行**：照 RC-438 判斷，包括 (e)（這次執行若本身就是應 R3 而來，不再送 R3，轉 tech-architect，之後的字面先送風控）；devops-sre 當天依 RC-438 (b) 分類。禁說事項見 RC-450，不得把責任歸給 CEO，也不得說「沒有改動」「原本的 stock-desk 還開著」（RC-383 (a)）。
 
 ## 6. 這份文件沒有涵蓋的事
 
 - 沒有 Windows 實機，上述 `where` 偵測、PATH 生效時機與 `echo` 實際印出，都沒有在 Windows 上驗證。
-- 手冊（`族群動能-主機部署手冊.md`）：第 0.1 節已依風控 RC-385 改寫；手冊整體依 RC-427 改判為不是 CEO 的操作文件（保留為團隊工程參考，檔頭標註與就地警示另案處理）。本文件不處理手冊內容。
+- 手冊（`族群動能-主機部署手冊.md`）：第 0.1 節已依風控 RC-385 改寫；手冊整體依 RC-427 改判為不是 CEO 的操作文件（保留為團隊工程參考；檔頭標註與就地警示由 `docs/host-manual-ceo-notice` 分支依 RC-428、RC-429 處理，截至本文件撰寫時尚未合併）。本文件不處理手冊內容。
 - `pipeline-acceptance.bat`、`r2-probe.bat` 的改字尚未做（排在兩支新一鍵檔合併之後）。
