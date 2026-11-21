@@ -27,8 +27,10 @@
 | 工具 | 建議 | 依據 | 狀態 |
 |---|---|---|---|
 | Node.js（含 npm） | 22 版線的最新 LTS：**v22.23.5**（2026-11-11 發布，LTS 代號 Jod，隨附 npm 10.9.9） | 讀取 `https://nodejs.org/dist/index.json` 當日內容。專案目前固定在 Node 22：`apps/stock-desk/frontend/Dockerfile`（`node:22-alpine`）、`.github/workflows/stock-desk.yml`（`node-version: "22"`）、`apps/stock-desk/README.md`（Node 22 + npm）。同一份清單當日另有 v24.22.3（Krypton）與 v26.13.1（Lithium）兩條 LTS 線，**專案未驗證過**，不建議為了「最新」而換版線 | 已查證 |
-| uv | PyPI 當日最新版 **0.13.9**（2026-11-17 上傳）可作為「官方當下最新」的參考；但專案文件中實測過的版本是 **0.11.32**（`apps/stock-desk/README.md` 第 149 行「實測 uv 0.11.32」；該 README 的「已查證版本」表沒有列 uv） | 讀取 `https://pypi.org/pypi/uv/json`。`https://docs.astral.sh` 與 GitHub 的 release 頁在沙盒被擋，**沒有查到官方安裝頁與 release note 對該版本的說明**。專案沒有用 `required-version` 鎖定 uv 版本（`backend/pyproject.toml` 無此設定）；依賴版本由 `uv.lock` 鎖定，`dev-up.bat` 用 `uv sync --locked` | 部分查證（版號來自 PyPI，不是官方安裝頁）；0.13.9 是否與本專案的 `uv.lock` 相容**未驗證**，建議 coordinator 引導安裝前先請 devops-sre 在乾淨環境用該版跑一次 `uv sync --locked` |
+| uv | **0.13.9**（2026-11-17 上傳），是 PyPI 上當日的最新版；但專案文件中實測過的版本是 **0.11.32**（`apps/stock-desk/README.md` 第 149 行「實測 uv 0.11.32」；該 README 的「已查證版本」表沒有列 uv） | 讀取 `https://pypi.org/pypi/uv/json`。`https://docs.astral.sh` 與 GitHub 的 release 頁在沙盒被擋，**沒有查到官方安裝頁與 release note 對該版本的說明**。專案沒有用 `required-version` 鎖定 uv 版本（`backend/pyproject.toml` 無此設定）；依賴版本由 `uv.lock` 鎖定，`dev-up.bat` 用 `uv sync --locked` | 部分查證（版號來自 PyPI，不是官方安裝頁）；0.13.9 是否與本專案的 `uv.lock` 相容**未驗證**，建議 coordinator 引導安裝前先請 devops-sre 在乾淨環境用該版跑一次 `uv sync --locked` |
 | git（Windows 版） | **未查證** | `https://git-scm.com` 與 GitHub release 頁在沙盒被擋，查不到當下 stable 版號。`apps/stock-desk/docs/族群動能-主機部署手冊.md` 寫過沙盒內的 `git 2.43.0`，那只是 Linux 沙盒當時可用的版本，不是 Windows stable，也不是當下版本，**不可當建議版本** | 未查證 |
+
+手冊原第 0.1 節記載的 `uv 0.8.17`、`git 2.43.0`，是沙盒實測可用的版本（當時 `uv sync --frozen` 對本專案 `uv.lock` 成功），**不是建議版本**。手冊第 0.1 節改寫後，這兩個版號會從手冊消失，改在這裡保存。
 
 另外：本專案的 Python 需求是 `>=3.12`（`backend/pyproject.toml`）。依 `uv.lock` 處理的是套件版本；Python 本身是否由 uv 自動取得，要看 uv 的設定與 CEO 的環境，**未查證**。「CEO 不需要另外安裝 Python」這句話沒有依據，**不得轉述給 CEO**。
 
