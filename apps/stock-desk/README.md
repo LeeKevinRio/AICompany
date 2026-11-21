@@ -11,19 +11,21 @@
 
 CEO 日常用的是原生路徑:**Windows 雙擊 `apps\stock-desk\dev-up.bat`**(macOS／Linux 用
 `bash apps/stock-desk/dev-up.sh`)。腳本會依序更新 code、起後端(:8000)、等 `/health` 通過、
-起 scheduler、起前端(:3000),最後印出三行狀態。詳細流程與手動指令見
-`.claude/skills/local-run/SKILL.md`。
+起 scheduler、起前端(:3000),最後印出三行狀態。README 後段的手動指令與工程細節是給工程人員的,
+不是您平常的操作;需要其中任何一步時,先告訴 coordinator。
 
 - 前端:http://localhost:3000
 - 後端 API:http://localhost:8000(健康檢查 `GET /health`)
 - 排程:scheduler 是另一個程序(APScheduler:每日資料更新 + 警示評估),**關掉它的視窗就停止**。
+  預測紀錄也由 scheduler 記錄:接線的程式合併、而且用 `dev-up.bat` 重新開啟之後,才會在平日(週一到週五)晚上
+  22:10 與 23:10(台北時間)嘗試記錄。scheduler 關著的時候不會記錄;有沒有記下,以狀態報告為準,當晚結束時還沒有記下的,事後補不回來。
 - 資料存在 `apps/stock-desk/backend/data/`(多顆 SQLite,見下方「資料存放與備份」)。
-- **祕密設定(選用)**:`cp apps/stock-desk/.env.example apps/stock-desk/.env` 後填值。
+- **祕密設定(選用)**:`apps/stock-desk/.env` 裡要設定什麼,請先維持現狀,不要自己新增、修改或刪除任何設定;需要調整時,先告訴 coordinator。
+  工程人員建立新環境時,用 `cp apps/stock-desk/.env.example apps/stock-desk/.env` 後填值;複製出來的 `.env` 裡不要有 `STOCK_DESK_DB_PATH` 這個名稱(見下方「環境變數與配置」)。
   bat／sh 從本次起會在啟動後端與 scheduler 時讀取這個檔(`apps/stock-desk/.env`,已被 `.gitignore`);
   沒有這個檔也照常啟動,只是 FinMind 備援與推播不會啟用,腳本會印一行提示。
   後端與 scheduler 啟動時各印一行「FINMIND token／Alpha Vantage key／Discord webhook／Telegram:已設定或未設定」,
-  **只印狀態,不印值**。看到「未設定」但你明明填了,先檢查檔案位置與變數名稱。
-  已在 Windows 系統環境變數(或 sh 的 shell)設過的同名變數優先於 `.env`。
+  **只印狀態,不印值**。看到「未設定」但您明明填了,請不要自己搬動、改名或修改檔案,先告訴 coordinator。
 
 > **選用步驟**:若要使用代號／公司名稱搜尋功能(前端 combobox),需先在**有網路的機器**
 > 執行一次性目錄同步:
@@ -31,10 +33,12 @@ CEO 日常用的是原生路徑:**Windows 雙擊 `apps\stock-desk\dev-up.bat`**(
 > cd apps/stock-desk/backend
 > uv run python -m app.directory.sync
 > ```
-> 這會把 TWSE 上市清單與 TPEx 上櫃清單寫進 `STOCK_DESK_DB_PATH` 指到的 SQLite
-> (`backend/app/directory/sync.py:1-37`)。本雲端開發環境對財經網域的 egress 已知被封鎖,
+> 這會把 TWSE 上市清單與 TPEx 上櫃清單寫進主資料庫
+> (`backend/app/directory/sync.py:1-37`)。沒有設定 `STOCK_DESK_DB_PATH` 時,主資料庫是 `backend/data/stock-desk.db`;
+> 請不要為了這個指令去設定它。要執行這個指令之前,請先告訴 coordinator。本雲端開發環境對財經網域的 egress 已知被封鎖,
 > 此指令必須在有網路的機器(例如 CEO 本機)執行,結果隨資料庫檔案帶到其他環境即可離線查詢
-> (`backend/app/directory/sync.py:6-27`)。未同步前搜尋 API 會誠實回報
+> (`backend/app/directory/sync.py:6-27`)。把別處的主資料庫檔案帶來覆蓋 CEO 機器上的主資料庫,
+> 等於更換資料庫,請不要自己做,先告訴 coordinator。未同步前搜尋 API 會誠實回報
 > `directory_synced: false`,不會把「還沒同步」誤顯示成「查無結果」
 > (`backend/app/api/directory.py:93-102`)。
 
@@ -51,6 +55,9 @@ docker compose up --build
 網址與原生路徑相同(前端 :3000、後端 :8000)。`scheduler` 是獨立的 compose service。
 Docker 與原生各有自己的資料(Docker 在具名 volume,原生在 `backend/data/`),兩邊**不會**共用,
 切換前請先備份(見下方)。
+
+改用 Docker 啟動時,不會記錄預測紀錄,Docker 裡的資料也是另一份資料庫,不是原生那一份。
+要改用 Docker 之前,先告訴 coordinator。
 
 ## 網路暴露
 
@@ -89,24 +96,38 @@ Docker 與原生各有自己的資料(Docker 在具名 volume,原生在 `backend
 
 ### 原生路徑(dev-up.bat／dev-up.sh)的備份與還原
 
-資料在 `apps/stock-desk/backend/data/`(必須從 `backend/` 目錄啟動才會是這裡,見 `local-run`)。
+資料在 `apps/stock-desk/backend/data/`(必須從 `backend/` 目錄啟動才會是這裡)。
+預測紀錄也記在主資料庫 `backend\data\stock-desk.db` 裡。
 
 **備份**:
 
-1. **先停掉三個程序**(關掉 stock-desk backend／scheduler／frontend 三個視窗,或在 sh 按 `Ctrl+C`)。
+備份是把 `backend\data\` 裡的資料庫檔複製一份出去;原本的檔案要留在原處,不要搬動、改名或刪除。
+照這一段備份時,關掉三個視窗、複製完再用 `dev-up.bat` 重新啟動,是備份步驟的一部分,不算是 coordinator 先前請您
+「不要自己重新啟動任何程式」的那種情形。但 coordinator 請您暫時不要執行 `dev-up.bat` 的期間,請不要做備份。
+
+1. **平日(週一到週五)晚上 22:00 到 23:30 之間,不要做備份。**
+   這段時間是 scheduler 記錄預測紀錄的時段(見上方「快速啟動」),此時關掉視窗,該次記錄會中斷。
+2. **先停掉三個程序**(關掉 stock-desk backend／scheduler／frontend 三個視窗,或在 sh 按 `Ctrl+C`),
+   並確認沒有其他 stock-desk 的一鍵檔或指令正在執行(例如 `apps\stock-desk\` 裡的其他 `.bat` 檔、目錄同步)。
    不停機直接複製,WAL 內尚未寫回的資料可能沒跟上,多顆檔案之間也不是同一時間點。
-2. 把 `backend/data/` 內**所有** `*.db`、`*.db-wal`、`*.db-shm` 一起複製到帶日期的資料夾,例如
+3. 把 `backend/data/` 內**所有** `*.db`、`*.db-wal`、`*.db-shm` 一起複製到帶日期的資料夾,例如
    `backup-2026-10-26\`。三種副檔名要成套複製,不要只複製 `.db`。
    (程序正常關閉後 SQLite 通常會清掉 `-wal`／`-shm`,沒有就不用管;有就一起帶。)
+   請用「複製」再「貼上」;不要用「剪下」,也不要用滑鼠拖曳(拖曳有可能變成把檔案搬走)。
+4. **複製完請用 `dev-up.bat` 重新啟動。平日(包括週五)在 22:00 之前做的備份,請在 22:00 之前重新啟動。**
+   scheduler 關著的時候不會記錄預測紀錄。平日沒能在 22:00 之前重新啟動時,請在方便時重新啟動(仍請避開 22:00 到 23:30 之間),
+   並告訴 coordinator 是哪一天,不需要說明原因;那一晚的預測紀錄可能沒有記下,事後補不回來。
+5. 備份資料夾請放在存放 stock-desk 程式的資料夾(含有 `apps` 資料夾的那一層,例如 `AICompany`)之外。
+   備份檔裡含有您的持倉,放在裡面有被誤提交到版本控制的風險。
+6. 團隊替您做的備份(包括正式登記時做的那一份),請不要刪除、搬動或改名;那是團隊留存、供日後核對用的。
+7. 備份檔裡含有您的持倉資料,請自己留著,不要傳給別人或放到公開的地方。
 
-**還原**:
+**還原**:請不要自己還原,先告訴 coordinator。
 
-1. 先停掉三個程序。
-2. 刪掉(或先另存)`backend/data/` 內現有的 `*.db`、`*.db-wal`、`*.db-shm`,
-   **不要讓舊的 `-wal` 留在原地**,否則它可能被套用到剛還原的 `.db` 上。
-3. 把備份資料夾內的同一套檔案複製回 `backend/data/`,再重新啟動 `dev-up.bat`。
+原因:用備份檔覆蓋現在的資料庫,會把備份之後才有的內容一併蓋掉,包括預測紀錄,事後補不回來;之後也可能無法再記錄預測紀錄。
+要不要還原、怎麼還原,由團隊判斷;還原會讓部分紀錄消失時,要不要這樣做,由您決定。
 
-〔原生路徑的備份／還原步驟為依 SQLite WAL 行為與本專案檔案配置寫成,尚未在 CEO 的 Windows 機器上演練。〕
+〔原生路徑的備份步驟為依 SQLite WAL 行為與本專案檔案配置寫成,尚未在 CEO 的 Windows 機器上演練;備份檔是否完整可用,也還沒有驗證過。〕
 
 ### Docker 路徑的備份與還原
 
@@ -129,11 +150,15 @@ Docker 與原生各有自己的資料(Docker 在具名 volume,原生在 `backend
 - 還原:`docker compose stop` 後,用同樣的 `alpine` 容器把 tar 解回 volume(`tar xzf … -C /data`),
   並先清掉 volume 內舊的 `*.db-wal`／`*.db-shm`,理由同原生路徑;再 `docker compose start`。
   〔還原步驟未在實際 volume 上演練〕
+  這是工程人員的步驟,而且只針對 Docker 的 volume:Docker 路徑不會記錄預測紀錄,
+  請不要用它去覆蓋原生路徑的 `backend/data/`;需要還原任何資料時,先告訴 coordinator。
 - **危險操作警告**:`docker compose down -v` 或手動 `docker volume rm stock-desk-data`
   會**永久刪除**這顆 volume,連同全部持倉、設定、警示規則與快取。一般重啟/重建
   請只用 `docker compose down`(不帶 `-v`)或 `docker compose restart`。
 - 原生路徑與 Docker 路徑的資料互相獨立。要把原生的資料搬進 Docker(或反過來),
-  需把整套 `*.db` 檔放進對應位置;此搬移流程〔未查證、未演練〕。
+  等於更換資料庫,請不要自己做,先告訴 coordinator。把資料搬到原生路徑,
+  會覆蓋原生的主資料庫,裡面的預測紀錄等內容會永久消失,之後也可能無法再記錄預測紀錄。
+  工程人員的做法是把整套 `*.db` 檔放進對應位置;此搬移流程〔未查證、未演練〕。
 
 ## 本機開發(不用 Docker)
 
@@ -146,6 +171,8 @@ uv run --env-file ../.env uvicorn app.main:app --reload --port 8000   # 沒有 .
 ```
 
 手動啟動 scheduler 同理(`uv run --env-file ../.env python -m app.scheduler`)。
+手動啟動的 scheduler 不要和 `dev-up.bat` 混用:`dev-up.bat` 啟動時會強制結束它,若剛好正在記錄預測紀錄,該次記錄會中斷。
+手動啟動時請不要設定 `STOCK_DESK_DB_PATH`。
 `uv run --env-file` 對**不存在的檔案會直接報錯**(實測 uv 0.11.32:`error: No environment file found`),
 所以 `dev-up.bat`／`dev-up.sh` 會先判斷檔案是否存在,再決定要不要帶(它們用等效的 `UV_ENV_FILE` 環境變數)。
 
@@ -258,9 +285,9 @@ apps/stock-desk/
 
 | 變數 | 用途 | 預設 | 是否必須 |
 | --- | --- | --- | --- |
-| `STOCK_DESK_DB_PATH` | SQLite 資料庫檔路徑 | `./data/stock-desk.db`(本機直跑);Docker 下由 `compose.yaml` 顯式設為 `/app/data/stock-desk.db`(掛在 `stock-desk-data` volume) | 選用,但 Docker 部署下 backend / scheduler 兩邊務必指向同一路徑,見上方「資料存放與備份」 |
-| `STOCK_DESK_MARKET_DB_PATH` | 市場 DB(族群動能、PIT 快照)檔路徑 | `./data/stock-desk-market.db` | 選用 |
-| `STOCK_DESK_RESEARCH_DB_PATH` | 研究 DB 檔路徑 | `./data/stock-desk-research.db` | 選用 |
+| `STOCK_DESK_DB_PATH` | SQLite 資料庫檔路徑 | `./data/stock-desk.db`(本機直跑);Docker 下由 `compose.yaml` 顯式設為 `/app/data/stock-desk.db`(掛在 `stock-desk-data` volume) | **原生路徑(`dev-up.bat` 或手動 `uv run`)請不要設定**:不論設在 Windows 環境變數、`.env` 或單一視窗,也不論值是什麼(包括空值),都不會記錄預測紀錄。已經設定過的話,請不要自己刪除或修改,先告訴 coordinator。Docker 由 `compose.yaml` 設定這個變數,所以 Docker 路徑不記錄預測紀錄;Docker 部署下 backend / scheduler 兩邊務必指向同一路徑,見上方「資料存放與備份」 |
+| `STOCK_DESK_MARKET_DB_PATH` | 市場 DB(族群動能、PIT 快照)檔路徑 | `./data/stock-desk-market.db` | 不需要設定。API 與 scheduler 若設得不一致,市場資料庫會分成兩份。已經設定過的話,請不要自己刪除或修改,先告訴 coordinator |
+| `STOCK_DESK_RESEARCH_DB_PATH` | 研究 DB 檔路徑 | `./data/stock-desk-research.db` | 不需要設定。已經設定過的話,請不要自己刪除或修改,先告訴 coordinator |
 | `FINMIND_API_TOKEN` | FinMind 備援來源的 API token | 無 | 選用（未設定時 FinMind adapter 回 unavailable） |
 | `ALERT_DISCORD_WEBHOOK_URL` | Discord 推播 webhook | 無 | 選用 |
 | `ALERT_TELEGRAM_BOT_TOKEN` | Telegram bot token | 無 | 選用（需搭配 CHAT_ID） |
@@ -277,7 +304,7 @@ apps/stock-desk/
 | `docker compose` | 是 | `compose.yaml` 的 `env_file`(`required: false`) |
 | 手動 `uv run ...` | 只有加 `--env-file ../.env` 才讀 | 見上方「本機開發」 |
 
-應用程式本身不含任何 dotenv 載入程式碼;同名變數若已存在於系統環境,系統環境優先。
+應用程式本身不含任何 dotenv 載入程式碼;同名變數若已存在於系統環境,系統環境優先〔此行為只在 Linux(uv 0.11.32)實測過,未在 Windows 實測〕。
 啟動時各程序會印一行已設定／未設定狀態(不含值,`backend/app/env_status.py`)。
 
 ## 離線示範模式（`app/demo/seed.py`）
@@ -291,6 +318,8 @@ cd apps/stock-desk/backend
 uv run python -m app.demo.seed            # 產生（或更新）示範資料
 uv run python -m app.demo.seed --reset    # 清除示範資料（只刪自己寫的列）
 ```
+
+**請不要在日常用 `dev-up.bat` 的機器上執行這支 CLI**：示範日線、持倉與警示規則會寫進主資料庫（沒有設定 `STOCK_DESK_DB_PATH` 時是 `backend/data/stock-desk.db`）。執行時畫面若建議設定 `STOCK_DESK_DB_PATH`，也請不要照做；需要示範資料時，先告訴 coordinator。
 
 - 寫入三檔標的的合成日線與持倉：`2330`（一般台股）、`0050`（作為 `00631L` 標的指數的代理
   序列）、`00631L`（日度重置槓桿 ETF，NAV 由 `0050` 的單日報酬逐日複利推導）
