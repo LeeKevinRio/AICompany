@@ -85,6 +85,7 @@ if not "!CUR_BRANCH!"=="%TARGET_BRANCH%" (
   git -C "%REPO_ROOT%" checkout %TARGET_BRANCH%
   if errorlevel 1 (
     echo [ERROR] Branch switch failed
+    echo Tell the coordinator.
     goto fail
   )
 )
@@ -132,6 +133,7 @@ uv sync --locked
 if errorlevel 1 (
   popd
   echo [ERROR] Backend uv sync failed
+  echo Tell the coordinator.
   goto fail
 )
 popd
@@ -141,6 +143,7 @@ call npm install --no-save
 if errorlevel 1 (
   popd
   echo [ERROR] Frontend npm install failed
+  echo Tell the coordinator.
   goto fail
 )
 popd
