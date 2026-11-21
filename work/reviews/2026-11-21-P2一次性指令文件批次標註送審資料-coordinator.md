@@ -2,6 +2,7 @@
 
 - 產出者：coordinator（唯讀 `sed`／`grep`／`git ls-files` 擷取，未改任何對象檔）
 - 日期：2026-11-21
+- 註記：本檔初版以位元組截斷擷取 grep 輸出，造成一處多位元組字元被切斷（非有效 UTF-8）；已移除被切斷的殘位元組，被截斷的行以原檔為準（風控 RC-529 觀察）。
 - 用途：依風控 RC-473「套用前要送我：五份文件各自的第 1～10 行、讀者行或對象行的原文，以及 `STOCK_DESK_DB_PATH` 的 Grep 結果」。
 
 ## work/research/N152-未收盤殘留檢測-執行指令-2026-10-26.md
@@ -78,7 +79,7 @@
 874:| 項目 | 指令能給的 | 仍需人工的 | 判讀者 |
 2509:| 項目 | 指令能給的 | 仍需人工的 | 判讀者 |
 - STOCK_DESK_DB_PATH：
-1107:- 路徑由你自己填：市場 DB 預設為後端目錄下 `./data/stock-desk-market.db`（環境變數 `STOCK_DESK_MARKET_DB_PATH` 可覆蓋）；快取 DB 為 `STOCK_DESK_DB_PATH` 指向的�
+1107:- 路徑由你自己填：市場 DB 預設為後端目錄下 `./data/stock-desk-market.db`（環境變數 `STOCK_DESK_MARKET_DB_PATH` 可覆蓋）；快取 DB 為 `STOCK_DESK_DB_PATH` 指向的
 1970:    print("positions not readable in this DB copy (%s); use the copy of the main STOCK_DESK_DB_PATH file" % e)
 
 ## work/stock-desk-數據核實操作說明.md
