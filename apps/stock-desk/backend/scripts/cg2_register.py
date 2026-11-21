@@ -192,7 +192,8 @@ REAL_PINS: Final = Pins(
         ),
     ),
     # Final list (coordinator, addendum 3 point 4): records that approve or check the content.
-    # The last two are written after the final review; until they are in HEAD the run time
+    # The M-9 records (the two of 2026-11-17 and their two 2026-11-21 supplements for the
+    # re-pinned head) are written after the final review; until they are in HEAD the run time
     # check (check_review_refs) stops, which is the intended state.
     review_refs=(
         "work/reviews/2026-11-15-凍結包第2輪單項確認-風控.md",
@@ -200,6 +201,8 @@ REAL_PINS: Final = Pins(
         "work/reviews/2026-11-15-C8決策紀錄檔確認-風控.md",
         "work/reviews/2026-11-17-CG2登記PR-M9核對M2M3M6-風控.md",
         "work/reviews/2026-11-17-CG2登記PR-M9最終審查-qa.md",
+        "work/reviews/2026-11-21-CG2登記PR-M9補充核對M2M3M6-風控.md",
+        "work/reviews/2026-11-21-CG2登記PR-M9補充最終審查-qa.md",
     ),
 )
 

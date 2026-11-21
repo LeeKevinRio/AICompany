@@ -138,6 +138,8 @@ def test_the_review_refs_are_the_final_list_in_repo_relative_form_without_spaces
         "work/reviews/2026-11-15-C8決策紀錄檔確認-風控.md",
         "work/reviews/2026-11-17-CG2登記PR-M9核對M2M3M6-風控.md",
         "work/reviews/2026-11-17-CG2登記PR-M9最終審查-qa.md",
+        "work/reviews/2026-11-21-CG2登記PR-M9補充核對M2M3M6-風控.md",
+        "work/reviews/2026-11-21-CG2登記PR-M9補充最終審查-qa.md",
     )
     for ref in PINS.review_refs:
         assert ref.startswith("work/reviews/") and not re.search(r"\s", ref)
