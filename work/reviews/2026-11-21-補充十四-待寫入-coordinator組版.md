@@ -3,14 +3,14 @@
 - 組版者：coordinator
 - 日期：2026-11-21
 - 來源：`work/reviews/2026-11-21-退役鏈同步衝突與claims註解裁示及補充十四-tech-architect.md`（tech-architect 裁示第 2 題「補充十四（可逐字寫入）」）；字面逐字取自該檔，只把檔頭行中的代稱「本裁示的轉存檔」換成實際檔名。
-- 狀態：待風控知悉或審查（tech-architect：由風控決定要不要審；若審，退役 PR 要等審完才能合併）。
+- 狀態：風控已審（RC-512～RC-518，`work/reviews/2026-11-21-補充十四審查RC512至RC518-風控.md`），APPROVE_WITH_CONDITIONS；required 的 RC-513（檔頭行補審查紀錄）已由 coordinator 套用；suggested 的 RC-514、RC-515 待 tech-architect 決定是否採用（採用須書面確認技術意旨不變，逐字套用即可、不必回送風控）。
 - 寫入時點：append 順序 8、9、10、11、12、13、14；最晚在 CG-2 一鍵檔退役 PR 合併之前。
 - 寫入位置：檔頭行接在補充十三的檔頭行之後；正文接在補充十三正文之後。
 
 ## 檔頭行
 
 <<<檔頭行開始>>>
-- 補充紀錄：2026-11-21 append 補充十四（CG-2 一鍵檔退役 PR 對 `app/forecast/claims.py` 一句過時註解的處理；tech-architect 裁示；窄幅寬於補充九第 1 點「不改 `app/`」與 S-19a 第 1 點「`app/` 零差異」的字面，已標明；不改本文、補充八～十三的字面、事先宣告 v0.32、規則檔、定義物件與已登記雜湊；不改任何 CEO 可見字面；CEO 可推翻；來源 `work/reviews/2026-11-21-下游分支同步CG2新head交件-dev-lead.md`、`work/reviews/2026-11-21-退役鏈同步衝突與claims註解裁示及補充十四-tech-architect.md`）
+- 補充紀錄：2026-11-21 append 補充十四（CG-2 一鍵檔退役 PR 對 `app/forecast/claims.py` 一句過時註解的處理；tech-architect 裁示；窄幅寬於補充九第 1 點「不改 `app/`」與 S-19a 第 1 點「`app/` 零差異」的字面，已標明；不改本文、補充八～十三的字面、事先宣告 v0.32、規則檔、定義物件與已登記雜湊；不改任何 CEO 可見字面；經風控審查（RC-512～RC-518，`work/reviews/2026-11-21-補充十四審查RC512至RC518-風控.md`），接受；CEO 可推翻；來源 `work/reviews/2026-11-21-下游分支同步CG2新head交件-dev-lead.md`、`work/reviews/2026-11-21-退役鏈同步衝突與claims註解裁示及補充十四-tech-architect.md`）
 <<<檔頭行結束>>>
 
 ## 正文
