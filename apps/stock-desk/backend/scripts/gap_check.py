@@ -177,7 +177,7 @@ STOP_SENTENCES: Final[Mapping[RunStopKind, str]] = MappingProxyType(
             "change any file yourself; if this line appears again, tell the "
             "coordinator and do not run this again."
         ),
-        # Verbatim from the risk-control report (RC-272, S-3; replaces the cg2_register.py line):
+        # Verbatim from the risk-control report (RC-272, S-3):
         "copy_failed": (
             "STOP: a copy of the database could not be made, so the check did not "
             "continue. Do not change any setting or file yourself; tell the "
