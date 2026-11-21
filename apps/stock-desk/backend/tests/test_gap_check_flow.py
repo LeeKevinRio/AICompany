@@ -11,6 +11,7 @@ never touched (an autouse guard turns any socket connect into a failing assertio
 from __future__ import annotations
 
 import ast
+import hashlib
 import os
 import re
 import socket
@@ -1373,6 +1374,15 @@ def test_known_limit_a_same_size_write_that_restores_the_mtime_is_not_detected(
 # --- the launcher ---------------------------------------------------------------------------------
 
 BAT = BACKEND.parent / "gap-check.bat"
+# Frozen copy of apps/stock-desk/pipeline-acceptance.bat taken from commit
+# d6816eb9d6a6ecda1d5aaa6c86e8d2a4b7a41425 (product/stock-desk), git blob
+# 5b0b271e52f100a7f8584fe7e1ec9889c4cee717 (LF bytes, as stored in git; the old tests read the
+# CRLF checkout, so the helper below restores CRLF in memory).
+# It is a comparison baseline only. It is the single copy in the whole product line, it must never
+# be updated, it does not represent any existing tool, and it must not be used to bring a tool
+# back. The sha256 test pins it; the .gitattributes next to it marks it -text (no conversion).
+PRECEDENT_BAT = BACKEND / "tests" / "fixtures" / "pipeline_acceptance_bat_frozen.txt"
+PRECEDENT_SHA256 = "07265206e00c2dd6466c7a319d68484aad1634e7f64c1662638b7d506a43b4ad"
 COMMAND = r"uv run --no-sync python -I -X utf8 scripts\gap_check.py"
 
 
@@ -1447,9 +1457,30 @@ def test_the_bat_prints_the_risk_control_uv_sentence_verbatim_and_no_install_hin
     assert sum(1 for x in lines if "[MISSING]" in x) == 1
 
 
+def _precedent_lines() -> list[str]:
+    raw = PRECEDENT_BAT.read_bytes()
+    assert b"\r" not in raw  # stored with LF; CRLF is restored in memory only
+    return raw.decode("ascii").replace("\n", "\r\n").split("\r\n")
+
+
+def test_the_frozen_precedent_is_unchanged() -> None:
+    assert hashlib.sha256(PRECEDENT_BAT.read_bytes()).hexdigest() == PRECEDENT_SHA256
+
+
+def test_git_does_not_convert_the_frozen_precedent() -> None:
+    result = subprocess.run(
+        ["git", "check-attr", "text", "eol", "--", str(PRECEDENT_BAT)],
+        cwd=BACKEND,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "text: unset" in result.stdout and "eol: unspecified" in result.stdout, result.stdout
+
+
 def test_the_bat_matches_the_pipeline_acceptance_launcher_except_its_own_lines() -> None:
     lines = BAT.read_bytes().decode("ascii").split("\r\n")
-    other = (BAT.parent / "pipeline-acceptance.bat").read_bytes().decode("ascii").split("\r\n")
+    other = _precedent_lines()
     commands = [x for x in lines if not x.startswith("REM")]
     assert not any("/dev/null" in x for x in commands)
     assert "where uv >nul 2>nul" in lines
