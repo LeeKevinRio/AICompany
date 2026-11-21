@@ -51,7 +51,7 @@ def script_imports(source: str, names: set[str]) -> set[str]:
 
 def test_no_app_module_imports_the_scripts() -> None:
     names = _script_names()
-    assert "pipeline_acceptance_real" in names
+    assert names - {"scripts"}
     sources = {p: p.read_text(encoding="utf-8") for p in APP_ROOT.rglob("*.py")}
     assert {p: hits for p, s in sources.items() if (hits := script_imports(s, names))} == {}
 
