@@ -62,11 +62,11 @@ uv run --frozen --python /usr/bin/python3.12 pytest --cov=app --cov-report=term-
 
 ## 5. 沒有涵蓋的事
 
-- 沒有跑 Python 3.13（CI 會跑兩個版本）。
+- 沒有跑 Python 3.13。**更正（2026-11-21，qa 指出）**：本項原寫「CI 會跑兩個版本」，錯誤。`.github/workflows/stock-desk.yml` 的 backend job 只有 `python-version: "3.12"`，沒有版本矩陣（coordinator 已對 product tip 的 workflow 以 grep 確認）；`pyproject.toml` 的 `requires-python` 是 `>=3.12`。所以 Python 3.13 不是 CI 的門檻，不列為合併前必辦。
 - 兩支一鍵檔同時合併、以及與退役分支一起合併後的組合，沒有跑全套。
 - 沒有在 Windows 實機執行任何 `.bat`。
 - 與 G_acc 的 blob 核對（補充十二 F10）要等 CEO 的驗收貼回，另行記錄。
 
 ## 6. qa 確認
 
-（待 qa-reviewer 讀過本紀錄後，於其複審報告中確認；確認的報告路徑補記在後續追蹤清單。）
+qa-reviewer 已讀過本紀錄並對照原始輸出，結論「有條件確認」（單家審查）：`work/reviews/2026-11-21-試合併全套紀錄確認-qa.md`。第 1～4 項與原始輸出相符；條件是更正上面第 5 節的 Python 版本敘述（已更正）。qa 沒有逐測試名稱核對「先前失敗的測試各自通過」（全套為 `-q` 模式；`-k` 單獨重跑是 coordinator 的陳述），屬間接確認。qa 確認 xfail 的 2 個都在 `test_adr0019_pending.py`、為 product 原有，兩支分支沒有新增 `xfail`／`skip` 標記。**合併前仍須辦**：合併第二支（以及退役分支）時在合併點上重跑全套；與 G_acc 的 blob 核對（補充十二 F10）。
