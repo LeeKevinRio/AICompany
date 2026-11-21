@@ -51,7 +51,7 @@ provider adapter。詳見各模組檔頭註解與 `tests/fixtures/README.md`（f
 
 | 變數 | 用途 | 預設 |
 | --- | --- | --- |
-| `STOCK_DESK_DB_PATH` | SQLite 檔路徑（快取、持倉、設定、警示共用一個檔） | `./data/stock-desk.db`（本機直跑）；Docker Compose 下由 `compose.yaml` 顯式設為 `/app/data/stock-desk.db`，backend 與 scheduler 兩個 service 必須指向同一份檔案，見下方「資料持久化」 |
+| `STOCK_DESK_DB_PATH` | SQLite 檔路徑（快取、持倉、設定、警示共用一個檔）。**執行預測紀錄的主機上不得設定**：不論設在程序環境、空值或 `.env` 都不行。設了，預測紀錄排程（`forecast_record`，接線後）每次都跳過、只記一行 WARNING，正式登記與 bootstrap 也會拒絕。預測紀錄只寫 `<backend>/data/stock-desk.db`。Docker Compose 會顯式設定這個變數，所以 compose 不是會記錄預測的部署形態。這個變數只適用於不執行預測紀錄的機器（例如 CI、展示機） | `./data/stock-desk.db`（本機直跑，相對於 cwd）；Docker Compose 下由 `compose.yaml` 顯式設為 `/app/data/stock-desk.db`，backend 與 scheduler 兩個 service 必須指向同一份檔案，見下方「資料持久化」 |
 | `FINMIND_API_TOKEN` | FinMind 備援來源的 API token；未設定時該 adapter 明確回傳 `unavailable`，不丟例外 | 無 |
 | `ALERT_DISCORD_WEBHOOK_URL` | 警示推播的 Discord webhook；**祕密，只走環境變數 / `.env`**。未設定就跳過該通道 | 無 |
 | `ALERT_TELEGRAM_BOT_TOKEN` | 警示推播的 Telegram bot token；**祕密**。與 chat id 兩者都有才會送出 | 無 |
@@ -106,10 +106,11 @@ US 用 `^GSPC`（S&P 500），走與槓桿專章同一條指數資料鏈（`app/
 快取層與 store（沒有新 schema、沒有另一套資料表），讓整條鏈路可以離線跑出真實數字。
 
 ```bash
-# 產生（或更新）示範資料；DB 路徑沿用 STOCK_DESK_DB_PATH
+# 產生（或更新）示範資料；不加 --db-path 會寫進預設主 DB（相對於 cwd 的 ./data/stock-desk.db），
+# 和預測紀錄帳是同一個檔，在執行預測紀錄的主機上不得這樣跑
 uv run python -m app.demo.seed
 
-# 指定資料庫
+# 隔離示範資料：指定獨立資料庫（路徑相對於 cwd）；這是正確做法，不需要、也不應該設 STOCK_DESK_DB_PATH
 uv run python -m app.demo.seed --db-path ./data/demo.db
 
 # 清除示範資料（只刪自己寫的那些列）
@@ -135,11 +136,18 @@ uv run python -m app.demo.seed --reset
 `--reset` 只刪 `source = demo_synthetic` 的日線與帶示範標記的持倉／規則，不會刪到別人寫的列；
 警示**事件**依既有 append-only 設計保留。
 
+**寫進主 DB 的後果**：示範持倉與警示規則若寫進主 DB，會進入真實帳本的估值、`data_refresh` 的持有標的清單與警示評估；
+`[demo_synthetic]` 標記只用來辨識，不會把它們排除。所以示範資料一律用 `--db-path` 隔離，不要寫進主 DB。
+
+要讓 API 讀示範 DB，只能在**不執行預測紀錄的機器**上、對那一個 API 程序設定 `STOCK_DESK_DB_PATH` 指向它；
+執行預測紀錄的主機上不要這樣做（見上方環境變數表）。
+
 **不會覆蓋真實資料**：示範標的都是真實上市代號，若同一顆 DB 已經有這三檔的真實日線，
 upsert 會直接把它蓋掉，而 `--reset` 只刪 `demo_synthetic` 的列、救不回被蓋掉的資料。
 因此 seed **寫入前會先檢查**即將寫入的 `(symbol, market, trade_date)` 上有沒有非 `demo_synthetic`
 來源的列；只要有一筆，整次執行就**拒絕進行**（結束碼 1，日線／持倉／警示規則一律不寫），
-並印出衝突的標的、筆數、日期範圍與來源，建議改用獨立的 `--db-path` ／ `STOCK_DESK_DB_PATH`。
+並印出衝突的標的、筆數、日期範圍與來源，建議改用獨立的 `--db-path`。
+`seed.py` 目前在衝突時印出的訊息仍會建議設定 `STOCK_DESK_DB_PATH`，那句訊息將在正式登記後另行修正，在那之前不要照做。
 要不要捨棄那些真實日線是使用者的決定：腳本不會替你刪除任何不是它寫的資料。
 
 其他注意事項：
