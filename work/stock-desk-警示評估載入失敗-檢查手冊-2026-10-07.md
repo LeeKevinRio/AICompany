@@ -1,8 +1,21 @@
 # stock-desk「警示評估：標的載入失敗」本機檢查手冊
 
+> **給 CEO：這份文件不是您平常的操作文件。**
+>
+> - 您平常用 `apps/stock-desk/dev-up.bat` 啟動 stock-desk，以它為準；預測紀錄期間也一樣。
+> - 這份文件是 2026-10-07 當時為了排查「警示評估：標的載入失敗」所寫的工程檢查手冊，供團隊參考；裡面的畫面字面與做法可能已經過時。
+> - 文件裡的手動步驟請都不要照著做，也不要和 `dev-up.bat` 混著用。這包括：關掉 scheduler 視窗後自己手動重開；重新啟動 scheduler 或 backend；`docker compose` 的指令；在 PowerShell 裡輸入任何指令（查 log、`git log`、呼叫 API 等）；在 scheduler 視窗裡搜尋 log；自己查 log 並判斷原因。
+> - 不要在 Windows 環境變數、`.env` 或 PowerShell 視窗裡設定 `STOCK_DESK_DB_PATH`，也不要照這份文件去查看或確認它的設定。只要設定了它，不論設成什麼值，預測紀錄都不會記錄。已經設定過的話，請不要自己刪除或修改，先告訴 coordinator。
+> - 文件裡連到其他檢查手冊的地方，同樣不要照著做。
+> - 已經照這份文件做過其中任何一步的話，請不要自己復原或刪除，先告訴 coordinator。
+> - 警示好像沒有被評估、或畫面上看到異常時，告訴 coordinator 即可，不需要自己找原因。
+> - 需要這份文件裡的任何一步時，由 coordinator 告訴您要做哪一步、怎麼做。
+>
+> 以下內容是團隊的工程參考，可能和您平常的啟動方式不一致。
+
 - 日期：2026-10-07（週三）
 - 撰寫：devops-sre（只讀程式碼與文件，未改程式、未連網、未啟動服務、未讀 `.env`、未開啟任何 DB）
-- 讀者：CEO（Windows，用 `apps\stock-desk\dev-up.bat` 啟動），以及接手排查的工程同事
+- 讀者：接手排查的工程同事（不是 CEO 的操作文件，見上方「給 CEO」）
 - 適用分支：`product/stock-desk`
 - 對應任務單：`work/dispatch/2026-10-06-任務單-單一標的收盤價不合法不中斷整輪警示檢查.md`（devops-sre 評估已落地於 ab1a703）
 - 狀態：log 字串與層級由程式碼逐字取得（`app/alerts/engine.py`、`app/scheduler.py`）；「backend 視窗的 log 長相」已在沙盒用 Python 標準 logging 驗過行為；**CEO 本機實際輸出尚未實測**。
@@ -10,6 +23,8 @@
 ---
 
 ## 0. 一句話（給 CEO）
+
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；尤其不要自己到 scheduler 視窗裡搜尋或判讀 log，也不要照本節自己處理。需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
 
 警示每輪檢查時，若某一個標的的資料「載入時出錯」，系統現在**只略過那個標的的規則，其他標的照常檢查**，並在 log 留一行 WARNING。
 你平常不用看；要確認「警示有沒有默默漏檢」時，在 scheduler 視窗（或 log）搜 `failed_symbols=` 與 `snapshot load failed`。
@@ -58,6 +73,8 @@
 
 ## 2. 手動檢查指令
 
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
+
 ### 2.1 Docker Compose（`apps/stock-desk/compose.yaml`，服務名：`backend`、`scheduler`、`frontend`）
 
 在 `apps/stock-desk` 目錄執行。PowerShell 沒有 grep，Windows 請用 2.2 的 `Select-String` 寫法；以下 bash 寫法適用 WSL／Git Bash／Linux／macOS。
@@ -83,6 +100,8 @@ docker compose logs scheduler | grep 'scheduler jobs registered'
 ```
 
 ### 2.2 本機直跑（`dev-up.bat` / `dev-up.sh`，沒有 compose）
+
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；尤其不要自己關掉 scheduler 視窗再手動重新啟動它。需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
 
 `dev-up.bat` 為 backend、scheduler、frontend 各開一個 `cmd /k` 視窗，**不把 log 寫到檔案**；視窗被關掉 log 就沒了。三種做法：
 
@@ -132,6 +151,8 @@ Select-String -Path $env:TEMP\stock-desk-scheduler.log -Pattern 'snapshot load f
 
 ## 3. 遇到時的處置順序
 
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；尤其不要自己重新啟動 scheduler 或 backend，也不要設定本節寫到的 `STOCK_DESK_DB_PATH`。需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
+
 不含任何祕密；**不要把 `.env` 內容、token、完整 traceback 中若出現的金鑰貼給任何人**（traceback 一般不含，但貼之前自行掃一遍）。
 
 ### 步驟 1：確認範圍（1 分鐘）
@@ -168,6 +189,8 @@ Select-String -Path $env:TEMP\stock-desk-scheduler.log -Pattern 'snapshot load f
 ---
 
 ## 4. 自動化告警選項與成本（簡述，升 CEO 決定）
+
+> **給 CEO：** 本節是 2026-10-07 當時的選項整理，不是向您提出的問題，也請不要照選項 A 自己定期查看 log；需要您決定的事，由 coordinator 另外問您。見檔頭「給 CEO」。
 
 目前**沒有任何自動通知**：失敗只會躺在 log，要人去看。若 CEO 想要「失敗就推播」，選項如下（皆未實作，成本為估計，以實作前評估為準）：
 
