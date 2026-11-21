@@ -98,7 +98,7 @@ def test_p1_every_git_call_disables_fsmonitor_and_the_untracked_cache(
 
 def test_p1_no_code_digest_constant_is_pinned_and_the_tree_id_constant_stays() -> None:
     assert not any("digest" in name for name in vars(real.Pins)["__dataclass_fields__"])
-    assert real.REAL_PINS.app_tree_id == "9c157d8640fb97d7e90dc7edc3f5ff0252aa00d7"
+    assert real.REAL_PINS.app_tree_id == "d631a75a4aba2ace76c44e8647d1bd11180662d5"
 
 
 def test_p1_the_watched_files_are_the_script_and_the_two_launchers() -> None:

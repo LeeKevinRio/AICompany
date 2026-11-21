@@ -100,7 +100,9 @@ def preflight_file_name(stamp: str) -> str:
 
 DB_NAME: Final = "stock-desk.db"
 ENV_VAR: Final = "STOCK_DESK_DB_PATH"
-ENV_KEY_PATTERN: Final = re.compile(r"^\s*STOCK_DESK_DB_PATH\s*=")
+#: An ``.env`` line setting the key: optional ``export`` prefix, any case (as ``_ENV_FILE_KEY`` of
+#: ``app.forecast.claims``; a test keeps the pattern and the flags equal).
+ENV_KEY_PATTERN: Final = re.compile(r"^\s*(?:export\s+)?STOCK_DESK_DB_PATH\s*=", re.IGNORECASE)
 PORT: Final = 8000
 #: The two ledger prefixes (``app.forecast.schema.LEDGER_PREFIXES``; a test keeps them equal).
 LEDGER_PREFIXES: Final = ("forecast_", "plan_")
@@ -171,7 +173,7 @@ REAL_PINS: Final = Pins(
             "0a385de3e2f4118bc1e7c2c5dd1a667ce0a9067399ccd1b6e7c4dbab19d5707c",
         ),
     ),
-    app_tree_id="9c157d8640fb97d7e90dc7edc3f5ff0252aa00d7",
+    app_tree_id="d631a75a4aba2ace76c44e8647d1bd11180662d5",
     definition_version=DEFINITION_VERSION,
     definition_sha256="2a58bca61c647931ecaf56aa5d17e4bfffc048c30944f3550feceadbfdacc4d0",
     definition_logic_sha256="4cc1fe80054a017f47030805a486ad81e1bda249d730c7c1f6bd2c73c01d1afa",
@@ -190,7 +192,8 @@ REAL_PINS: Final = Pins(
         ),
     ),
     # Final list (coordinator, addendum 3 point 4): records that approve or check the content.
-    # The last two are written after the final review; until they are in HEAD the run time
+    # The M-9 records (the two of 2026-11-17 and their two 2026-11-21 supplements for the
+    # re-pinned head) are written after the final review; until they are in HEAD the run time
     # check (check_review_refs) stops, which is the intended state.
     review_refs=(
         "work/reviews/2026-11-15-凍結包第2輪單項確認-風控.md",
@@ -198,6 +201,8 @@ REAL_PINS: Final = Pins(
         "work/reviews/2026-11-15-C8決策紀錄檔確認-風控.md",
         "work/reviews/2026-11-17-CG2登記PR-M9核對M2M3M6-風控.md",
         "work/reviews/2026-11-17-CG2登記PR-M9最終審查-qa.md",
+        "work/reviews/2026-11-21-CG2登記PR-M9補充核對M2M3M6-風控.md",
+        "work/reviews/2026-11-21-CG2登記PR-M9補充最終審查-qa.md",
     ),
 )
 
