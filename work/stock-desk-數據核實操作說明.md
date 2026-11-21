@@ -1,4 +1,6 @@
-# Stock Desk 數據核實 -- CEO 本機一鍵操作說明
+# Stock Desk 數據核實 -- 一次性指令（不是 CEO 的操作文件，見下方「給 CEO」）
+
+> **給 CEO：這份文件是為某一次工作寫的一次性指令，不是您平常的操作文件，內容可能已經過時。請不要照著做，也不要和 `dev-up.bat` 混著用；已經照做過的話，請不要自己復原或刪除當時建立的任何東西。需要其中任何一步時，由 coordinator 告訴您。**
 
 - **背景**：`work/research/2026-08-09-stock-desk數據核實.md` 判定「資料源從未真實
   驗證」為上線前致命缺口；本雲端開發環境的 egress policy 擋掉所有財經網域，
@@ -6,6 +8,8 @@
 - **工具**：`apps/stock-desk/scripts/verify_market_data.py`（data-engineer 產出）。
 
 ## 三步驟開始
+
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；尤其不要在 `apps/stock-desk/backend` 裡執行 `uv sync` 或本節的其他指令，也不要設定本節寫到的 token 或 key。需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
 
 1. **（可選）準備憑證** -- 缺的來源工具會如實回報 FAIL，不會讓整個工具中斷：
 
