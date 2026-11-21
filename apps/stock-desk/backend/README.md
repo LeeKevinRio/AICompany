@@ -51,7 +51,7 @@ provider adapter。詳見各模組檔頭註解與 `tests/fixtures/README.md`（f
 
 | 變數 | 用途 | 預設 |
 | --- | --- | --- |
-| `STOCK_DESK_DB_PATH` | SQLite 檔路徑（快取、持倉、設定、警示共用一個檔）。**執行預測紀錄的主機上不得設定**：不論設在程序環境、空值或 `.env` 都不行。設了，預測紀錄排程（`forecast_record`，接線後）每次都跳過、只記一行 WARNING，正式登記與 bootstrap 也會拒絕。預測紀錄只寫 `<backend>/data/stock-desk.db`。Docker Compose 會顯式設定這個變數，所以 compose 不是會記錄預測的部署形態。這個變數只適用於不執行預測紀錄的機器（例如 CI、展示機） | `./data/stock-desk.db`（本機直跑，相對於 cwd）；Docker Compose 下由 `compose.yaml` 顯式設為 `/app/data/stock-desk.db`，backend 與 scheduler 兩個 service 必須指向同一份檔案，見下方「資料持久化」 |
+| `STOCK_DESK_DB_PATH` | SQLite 檔路徑（快取、持倉、設定、警示共用一個檔）。**執行預測紀錄的主機上不得設定**：空值也不行，也不得寫進 `.env`。預測紀錄排程（`forecast_record`，接線後）看的是 scheduler 程序自己的環境：程序環境裡有這個變數（含空值）就每次都跳過、只記一行 WARNING；`.env` 只有在被載入進 scheduler 程序（`dev-up.bat` 的 `UV_ENV_FILE`）時才會造成跳過，scheduler 本身不讀 `.env`；只對 API 程序設不會讓它跳過。正式登記（`bootstrap --production`）則不論程序環境或 `<backend>/../.env` 設了這個變數（含空值）都會拒絕。預測紀錄只寫 `<backend>/data/stock-desk.db`。Docker Compose 會顯式設定這個變數，所以 compose 不是會記錄預測的部署形態。這個變數只適用於不執行預測紀錄的機器（例如 CI、展示機） | `./data/stock-desk.db`（本機直跑，相對於 cwd）；Docker Compose 下由 `compose.yaml` 顯式設為 `/app/data/stock-desk.db`，backend 與 scheduler 兩個 service 必須指向同一份檔案，見下方「資料持久化」 |
 | `FINMIND_API_TOKEN` | FinMind 備援來源的 API token；未設定時該 adapter 明確回傳 `unavailable`，不丟例外 | 無 |
 | `ALERT_DISCORD_WEBHOOK_URL` | 警示推播的 Discord webhook；**祕密，只走環境變數 / `.env`**。未設定就跳過該通道 | 無 |
 | `ALERT_TELEGRAM_BOT_TOKEN` | 警示推播的 Telegram bot token；**祕密**。與 chat id 兩者都有才會送出 | 無 |
@@ -61,8 +61,9 @@ provider adapter。詳見各模組檔頭註解與 `tests/fixtures/README.md`（f
 
 ## 資料持久化（Docker 部署）
 
-`app/data/cache.py` 的 `resolve_db_path()` 讀 `STOCK_DESK_DB_PATH` 決定唯一一顆
-SQLite 檔（快取、持倉、設定、警示規則/事件全部共用，WAL 模式）。在 `compose.yaml`
+`app/data/cache.py` 的 `resolve_db_path()` 讀 `STOCK_DESK_DB_PATH` 決定主 DB
+（快取、持倉、設定、警示規則/事件共用，WAL 模式）；市場資料與研究資料各有獨立的 SQLite 檔
+（`STOCK_DESK_MARKET_DB_PATH`，預設 `./data/stock-desk-market.db`；研究 DB 預設 `./data/stock-desk-research.db`）。在 `compose.yaml`
 裡，`backend` 與 `scheduler` 是**各自獨立的容器**，兩者都把 `STOCK_DESK_DB_PATH`
 顯式設成 `/app/data/stock-desk.db`，並掛同一個具名 volume `stock-desk-data`
 到 `/app/data`；缺一不可——路徑不一致或沒掛 volume，排程寫的資料 API 讀不到
@@ -106,8 +107,9 @@ US 用 `^GSPC`（S&P 500），走與槓桿專章同一條指數資料鏈（`app/
 快取層與 store（沒有新 schema、沒有另一套資料表），讓整條鏈路可以離線跑出真實數字。
 
 ```bash
-# 產生（或更新）示範資料；不加 --db-path 會寫進預設主 DB（相對於 cwd 的 ./data/stock-desk.db），
-# 和預測紀錄帳是同一個檔，在執行預測紀錄的主機上不得這樣跑
+# 產生（或更新）示範資料；不加 --db-path 時寫進 resolve_db_path() 的結果：有設 STOCK_DESK_DB_PATH 就是它指的檔，
+# 否則是相對於 cwd 的 ./data/stock-desk.db。在 backend 目錄、沒設變數時，就是預測紀錄帳那個檔，
+# 在執行預測紀錄的主機上不得這樣跑
 uv run python -m app.demo.seed
 
 # 隔離示範資料：指定獨立資料庫（路徑相對於 cwd）；這是正確做法，不需要、也不應該設 STOCK_DESK_DB_PATH
@@ -145,7 +147,7 @@ uv run python -m app.demo.seed --reset
 **不會覆蓋真實資料**：示範標的都是真實上市代號，若同一顆 DB 已經有這三檔的真實日線，
 upsert 會直接把它蓋掉，而 `--reset` 只刪 `demo_synthetic` 的列、救不回被蓋掉的資料。
 因此 seed **寫入前會先檢查**即將寫入的 `(symbol, market, trade_date)` 上有沒有非 `demo_synthetic`
-來源的列；只要有一筆，整次執行就**拒絕進行**（結束碼 1，日線／持倉／警示規則一律不寫），
+來源的列；只要有一筆，整次執行就**拒絕進行**（結束碼 1，日線／持倉／警示規則的資料列一律不寫；但三個 store 的建構子在衝突檢查之前就會建立目錄與資料表，所以目標檔與空表可能已經存在），
 並印出衝突的標的、筆數、日期範圍與來源，建議改用獨立的 `--db-path`。
 `seed.py` 目前在衝突時印出的訊息仍會建議設定 `STOCK_DESK_DB_PATH`，那句訊息將在正式登記後另行修正，在那之前不要照做。
 要不要捨棄那些真實日線是使用者的決定：腳本不會替你刪除任何不是它寫的資料。
