@@ -91,7 +91,7 @@ CEO 的回報應是一行 `[MISSING] <工具> was not found. ...`。
 | 要求重新開機的那一句：`PID 4 is a Windows system process and cannot be stopped. Reboot and try again.` | 256（前面一行 253 是 `[NOTICE] Port ... is already in use:`，後面 257 行直接結束該段） | `git pull --ff-only` 已成功（112 行）；掃描埠時發現 PID 4 佔用 8000 或 3000（250 行）。若這是 3000 埠，8000 埠的程序可能已在前一輪被停掉（121 行）。這一列**還沒有**問「Stop the old process?」，也沒有對 PID 4 執行 `taskkill` | 另一個埠、舊 scheduler 檢查（125 行）、`uv sync`、`npm install`、啟動三個視窗。注意：這句不是以 `[` 開頭的行，容易被漏掉 |
 | `[TIMEOUT] Backend did not become healthy in time ...`（backend 健康檢查逾時，60 秒） | 206（由 163 行跳入 204 行） | 到 `uv sync`、`npm install` 為止的全部步驟（含 `git pull`、停舊程序；若有舊程序且 CEO 回答 Y，**舊的 stock-desk 與舊 scheduler 已被停掉**）；已啟動 backend 視窗（154 行）並輪詢 `/health` 30 次未通過（157～165 行） | 啟動 scheduler 與 frontend 視窗（170～171 行）、等候 frontend、狀態列（189～193 行）、開啟瀏覽器（195 行）。**scheduler 在這一列沒有啟動過**，而舊的可能已被停掉 |
 | `[TIMEOUT] Frontend did not start in time ...`（frontend 逾時，90 秒） | 211（由 180 行跳入 209 行） | 同上，再加：backend 健康檢查已通過（167 行）；已啟動 scheduler 與 frontend 視窗（170～171 行）；輪詢 `:3000` 45 次未通過（173～182 行） | 狀態列（189～193 行）、開啟瀏覽器（195 行）、`Done.`（197 行）。scheduler 視窗已經啟動，但沒有經過狀態列確認它有沒有在跑 |
-| `[FAIL] backend   not answering at ...`、`[FAIL] scheduler not running ...`、`[FAIL] frontend  not answering at ...`（狀態列，三行各自獨立） | 189、191、193 | 全部步驟都已執行完，三個視窗都已啟動，frontend 已回應（173～184 行） | 無。**這三行不經過 `:fail` 段**：之後 `.bat` 仍會開啟瀏覽器（195 行）並印 `Done.`（197 行），結束碼是 0（202 行）。所以畫面上同時有 `[FAIL]` 與 `Done.` 是可能的 |
+| `[FAIL] backend   not answering at ...`、`[FAIL] scheduler not found running ...`（第 191 行字面已依 RC-446 改過，整行見風控判定檔）、`[FAIL] frontend  not answering at ...`（狀態列，三行各自獨立） | 189、191、193 | 全部步驟都已執行完，三個視窗都已啟動，frontend 已回應（173～184 行） | 無。**這三行不經過 `:fail` 段**：之後 `.bat` 仍會開啟瀏覽器（195 行）並印 `Done.`（197 行），結束碼是 0（202 行）。所以畫面上同時有 `[FAIL]` 與 `Done.` 是可能的 |
 
 說明：
 
