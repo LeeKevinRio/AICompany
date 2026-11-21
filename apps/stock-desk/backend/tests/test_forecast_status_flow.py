@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import builtins
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -53,7 +54,15 @@ from tests.test_forecast_report import (
 
 BACKEND = Path(__file__).resolve().parents[1]
 BAT = BACKEND.parent / "forecast-status.bat"
-PRECEDENT_BAT = BACKEND.parent / "pipeline-acceptance.bat"
+# Frozen copy of apps/stock-desk/pipeline-acceptance.bat taken from commit
+# d6816eb9d6a6ecda1d5aaa6c86e8d2a4b7a41425 (product/stock-desk), git blob
+# 5b0b271e52f100a7f8584fe7e1ec9889c4cee717 (LF bytes, as stored in git; the old tests read the
+# CRLF checkout, so the helper below restores CRLF in memory).
+# It is a comparison baseline only. It is the single copy in the whole product line, it must never
+# be updated, it does not represent any existing tool, and it must not be used to bring a tool
+# back. The sha256 test pins it; the .gitattributes next to it marks it -text (no conversion).
+PRECEDENT_BAT = BACKEND / "tests" / "fixtures" / "pipeline_acceptance_bat_frozen.txt"
+PRECEDENT_SHA256: Final[str] = "07265206e00c2dd6466c7a319d68484aad1634e7f64c1662638b7d506a43b4ad"
 UNEXPECTED: Final[str] = fs.UNEXPECTED
 INTERRUPTED: Final[str] = fs.INTERRUPTED
 SENTENCE_NAMES = (
@@ -1254,8 +1263,29 @@ def backend_missing_extra() -> str:
     return following[len("定稿全文：`") : -1]
 
 
+def _precedent_lines() -> list[str]:
+    raw = PRECEDENT_BAT.read_bytes()
+    assert b"\r" not in raw  # stored with LF; CRLF is restored in memory only
+    return raw.decode("ascii").replace("\n", "\r\n").split("\r\n")
+
+
+def test_the_frozen_precedent_is_unchanged() -> None:
+    assert hashlib.sha256(PRECEDENT_BAT.read_bytes()).hexdigest() == PRECEDENT_SHA256
+
+
+def test_git_does_not_convert_the_frozen_precedent() -> None:
+    result = subprocess.run(
+        ["git", "check-attr", "text", "eol", "--", str(PRECEDENT_BAT)],
+        cwd=BACKEND,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "text: unset" in result.stdout and "eol: unspecified" in result.stdout, result.stdout
+
+
 def test_the_bat_differs_from_the_precedent_only_in_the_listed_lines() -> None:
-    new, old = _bat_lines(BAT), _bat_lines(PRECEDENT_BAT)
+    new, old = _bat_lines(BAT), _precedent_lines()
     matcher = difflib.SequenceMatcher(a=old, b=new, autojunk=False)
     changes = [
         (tuple(old[i1:i2]), tuple(new[j1:j2]))
