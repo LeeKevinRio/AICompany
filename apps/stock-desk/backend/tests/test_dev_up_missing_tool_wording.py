@@ -154,3 +154,54 @@ def test_the_self_update_guard_is_untouched() -> None:
     assert lines[:3] == ["@echo off", "setlocal enabledelayedexpansion", "title stock-desk dev-up"]
     assert "if not defined DEVUP_SRC_DIR (" in lines
     assert '  copy /y "%~f0" "%TEMP%\\stock-desk-dev-up.bat" >nul' in lines
+
+
+# RC-446: the scheduler status line (line 191), approved wording, pinned verbatim.
+SCHEDULER_STATUS_LINE = (
+    "if errorlevel 1 (echo [FAIL] scheduler not found running - while it is not running there is "
+    "no background refresh, no alerts and no forecast recording. Do not try to fix it yourself. "
+    "Tell the coordinator.) else (echo [OK]   scheduler running - window 'stock-desk scheduler')"
+)
+SCHEDULER_FAIL_TEXT = (
+    "[FAIL] scheduler not found running - while it is not running there is no background "
+    "refresh, no alerts and no forecast recording. Do not try to fix it yourself. "
+    "Tell the coordinator."
+)
+SCHEDULER_OK_TEXT = "[OK]   scheduler running - window 'stock-desk scheduler'"
+FAIL_SIDE_FORBIDDEN = '()&|<>^%!;"'
+
+
+def _scheduler_status_lines() -> list[str]:
+    return [x for x in _lines() if "scheduler" in x and "[OK]" in x]
+
+
+def test_the_scheduler_status_line_is_the_approved_line_verbatim() -> None:
+    assert _scheduler_status_lines() == [SCHEDULER_STATUS_LINE]
+    lines = _lines()
+    assert lines.index(SCHEDULER_STATUS_LINE) == 190  # still line 191 of the file
+    assert lines[189] == "call :check_scheduler"
+
+
+def test_the_scheduler_fail_side_is_ascii_without_cmd_special_characters() -> None:
+    line = _scheduler_status_lines()[0]
+    head, sep, _tail = line.partition(") else (")
+    assert sep
+    prefix = "if errorlevel 1 (echo "
+    assert head.startswith(prefix)
+    fail_text = head[len(prefix) :]
+    assert fail_text == SCHEDULER_FAIL_TEXT
+    assert fail_text.isascii()
+    assert not any(c in fail_text for c in FAIL_SIDE_FORBIDDEN), fail_text
+
+
+def test_the_scheduler_ok_side_is_unchanged() -> None:
+    line = _scheduler_status_lines()[0]
+    _head, _sep, tail = line.partition(") else (echo ")
+    assert tail == SCHEDULER_OK_TEXT + ")"
+
+
+def test_the_scheduler_fail_sentence_is_not_a_bare_coordinator_echo_line() -> None:
+    # The count test above only counts lines that are exactly "echo Tell the coordinator.".
+    # The new sentence ends with that text but sits inside a longer line, so it must not match.
+    assert SCHEDULER_STATUS_LINE.strip() != f"echo {CLOSING}"
+    assert SCHEDULER_FAIL_TEXT.endswith(CLOSING)

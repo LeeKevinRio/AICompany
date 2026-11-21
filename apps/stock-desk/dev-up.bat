@@ -188,7 +188,7 @@ echo.
 call :probe "http://localhost:8000/health"
 if errorlevel 1 (echo [FAIL] backend   not answering at http://localhost:8000/health) else (echo [OK]   backend   http://localhost:8000/health)
 call :check_scheduler
-if errorlevel 1 (echo [FAIL] scheduler not running - check the 'stock-desk scheduler' window. The app still works but there is no background refresh or alerts.) else (echo [OK]   scheduler running - window 'stock-desk scheduler')
+if errorlevel 1 (echo [FAIL] scheduler not found running - while it is not running there is no background refresh, no alerts and no forecast recording. Do not try to fix it yourself. Tell the coordinator.) else (echo [OK]   scheduler running - window 'stock-desk scheduler')
 call :probe "http://localhost:3000"
 if errorlevel 1 (echo [FAIL] frontend  not answering at http://localhost:3000) else (echo [OK]   frontend  http://localhost:3000)
 REM Empty first quoted arg is the window title; otherwise start treats the URL as the title.
