@@ -100,7 +100,9 @@ def preflight_file_name(stamp: str) -> str:
 
 DB_NAME: Final = "stock-desk.db"
 ENV_VAR: Final = "STOCK_DESK_DB_PATH"
-ENV_KEY_PATTERN: Final = re.compile(r"^\s*STOCK_DESK_DB_PATH\s*=")
+#: An ``.env`` line setting the key: optional ``export`` prefix, any case (as ``_ENV_FILE_KEY`` of
+#: ``app.forecast.claims``; a test keeps the pattern and the flags equal).
+ENV_KEY_PATTERN: Final = re.compile(r"^\s*(?:export\s+)?STOCK_DESK_DB_PATH\s*=", re.IGNORECASE)
 PORT: Final = 8000
 #: The two ledger prefixes (``app.forecast.schema.LEDGER_PREFIXES``; a test keeps them equal).
 LEDGER_PREFIXES: Final = ("forecast_", "plan_")
@@ -171,7 +173,7 @@ REAL_PINS: Final = Pins(
             "0a385de3e2f4118bc1e7c2c5dd1a667ce0a9067399ccd1b6e7c4dbab19d5707c",
         ),
     ),
-    app_tree_id="9c157d8640fb97d7e90dc7edc3f5ff0252aa00d7",
+    app_tree_id="d631a75a4aba2ace76c44e8647d1bd11180662d5",
     definition_version=DEFINITION_VERSION,
     definition_sha256="2a58bca61c647931ecaf56aa5d17e4bfffc048c30944f3550feceadbfdacc4d0",
     definition_logic_sha256="4cc1fe80054a017f47030805a486ad81e1bda249d730c7c1f6bd2c73c01d1afa",

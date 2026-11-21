@@ -320,9 +320,35 @@ def test_4_the_environment_names_a_database(
     _refused(desk, desk.argv(), claims.EXIT_PATH_REFUSED, sentence, capsys, env=env)
 
 
+#: ``.env`` lines that set the key: an ``export`` prefix (uv loads it) and any case (Windows).
+ENV_FILE_KEY_LINES: Final = [
+    "export STOCK_DESK_DB_PATH=x.db\n",
+    "export\tSTOCK_DESK_DB_PATH=x.db\n",
+    "  export \t STOCK_DESK_DB_PATH = \n",
+    "stock_desk_db_path=x.db\n",
+    "Stock_Desk_Db_Path=x.db\n",
+    "EXPORT STOCK_DESK_DB_PATH=x.db\n",
+    "Export stock_desk_DB_path=x.db\n",
+]
+#: ``.env`` lines that do not: a comment, another key, a key with ``export`` glued to it.
+ENV_FILE_OTHER_LINES: Final = [
+    "# STOCK_DESK_DB_PATH=x.db\n",
+    "  # export STOCK_DESK_DB_PATH=x.db\n",
+    "X_STOCK_DESK_DB_PATH=1\n",
+    "STOCK_DESK_DB_PATH_X=1\n",
+    "export X_STOCK_DESK_DB_PATH=1\n",
+    "exportSTOCK_DESK_DB_PATH=1\n",
+]
+
+
 @pytest.mark.parametrize(
     "line",
-    ["STOCK_DESK_DB_PATH=x.db\n", "  STOCK_DESK_DB_PATH = \n", "\ufeffSTOCK_DESK_DB_PATH=a\n"],
+    [
+        "STOCK_DESK_DB_PATH=x.db\n",
+        "  STOCK_DESK_DB_PATH = \n",
+        "\ufeffSTOCK_DESK_DB_PATH=a\n",
+        *ENV_FILE_KEY_LINES,
+    ],
 )
 def test_4_the_env_file_names_a_database(
     desk: Desk, line: str, capsys: pytest.CaptureFixture[str]
@@ -337,6 +363,13 @@ def test_an_env_file_without_the_key_does_not_refuse(desk: Desk) -> None:
     (desk.backend.parent / ".env").write_text(
         "OTHER=1\n# STOCK_DESK_DB_PATH=commented\nX_STOCK_DESK_DB_PATH=1\n", encoding="utf-8"
     )
+    assert desk.main(desk.argv()) == claims.EXIT_OK
+
+
+@pytest.mark.parametrize("line", ENV_FILE_OTHER_LINES)
+def test_4_an_env_file_line_naming_no_database_does_not_refuse(desk: Desk, line: str) -> None:
+    (desk.backend.parent / ".env").write_text(f"{line}OTHER=1\n", encoding="utf-8")
+    assert claims.env_file_sets_db_path(desk.backend.parent / ".env") is False
     assert desk.main(desk.argv()) == claims.EXIT_OK
 
 
