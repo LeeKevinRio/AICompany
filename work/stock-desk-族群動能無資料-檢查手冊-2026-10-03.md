@@ -1,8 +1,25 @@
 # stock-desk「族群動能排行」無資料：根因分析與本機檢查手冊
 
+> **給 CEO：這份文件不是您平常的操作文件。**
+>
+> - 您平常用 `apps/stock-desk/dev-up.bat` 啟動 stock-desk，以它為準；預測紀錄期間也一樣。
+> - 這份文件是 2026-10-03 當時為了排查所寫的工程紀錄，留作團隊參考，之後不會再更新；裡面的日期、畫面字面與數字，有些已經過時。
+> - 文件裡的步驟請都不要照著做，也不要和 `dev-up.bat` 混著用。這包括：自己更新程式；在 PowerShell 裡輸入任何指令（查環境變數、執行 SQL、`curl` 等）；設定 FinMind token，不論用哪一種方式；從 PowerShell 啟動 `dev-up.bat`；暖身、手動擷取或重算；重新啟動任何視窗；照 log 或對照表自己判斷原因。
+> - 不要在 Windows 環境變數、`.env` 或 PowerShell 視窗裡設定 `STOCK_DESK_DB_PATH`，這份文件的步驟 3 寫到它也一樣。只要設定了它，不論設成什麼值，預測紀錄都不會記錄。已經設定過的話，請不要自己刪除或修改，先告訴 coordinator。
+> - `.env` 要放在哪裡、裡面要寫什麼，也不要照這份文件做。
+> - 不要自己搬動、改名或刪除資料庫檔，也不要用備份檔覆蓋它們。
+> - 文件裡提到的其他手冊（例如主機部署手冊），同樣不要照著做。
+> - 已經照這份文件做過其中任何一步的話（例如設過 token），請不要自己復原或刪除，先告訴 coordinator。
+> - 文件裡引用的 `dev-up.bat` 畫面字面，有的已經改了，之後也可能再改。畫面上出現以 `[FAIL]`、`[ERROR]` 等開頭的行時，請不要照這份文件判讀或處理，先告訴 coordinator。
+> - 文件裡的時間表，以及要電腦在 17:30 前後開著的寫法，都已經過時，不是請您改變開關機的習慣。
+> - 族群動能卡片沒有資料時，告訴 coordinator 即可，不需要自己找原因。
+> - 需要這份文件裡的任何一步時，由 coordinator 告訴您要做哪一步、怎麼做。
+>
+> 以下內容是團隊的工程紀錄，可能和您平常的啟動方式不一致。
+
 - 日期：2026-10-03（週六）
 - 撰寫：devops-sre（只讀程式碼與文件，未改程式、未讀 `.env`、未開啟 `backend/data/*.db`）
-- 讀者：CEO（Windows，用 `apps\stock-desk\dev-up.bat` 啟動）
+- 讀者：團隊工程參考（不是 CEO 的操作文件，見上方「給 CEO」）
 - 適用分支：`product/stock-desk`
 - 狀態：**根因由程式碼推得，尚未在 CEO 本機實測**。第 3 節的檢查就是用來確認到底是哪一個。
 
@@ -37,6 +54,8 @@
 ---
 
 ## 2. 為什麼會沒有 board：資料怎麼流（程式碼依據）
+
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；尤其不要執行本節寫到的暖身指令。需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
 
 ```
 scheduler 視窗（app/scheduler.py）
@@ -76,9 +95,13 @@ backend 視窗（app/api/sectors.py）
 
 ## 3. 逐步檢查（照順序做，每步都標了該看什麼）
 
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
+
 下列指令預設在 PowerShell。`<repo>` 換成你的 repo 路徑。
 
 ### 步驟 1：scheduler 視窗有沒有在跑
+
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；尤其不要照本節自己更新程式，或關掉視窗後重新執行 `dev-up.bat`。畫面上出現以 `[FAIL]` 開頭的行時，請不要自己判讀，先告訴 coordinator。需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
 
 1. `dev-up.bat` 最後應有一行：`[OK]   scheduler running - window 'stock-desk scheduler'`。若是 `[FAIL] scheduler not running`，直接看該視窗的錯誤訊息。
 2. 工作列應有三個視窗：`stock-desk backend`、`stock-desk scheduler`、`stock-desk frontend`。**沒有 scheduler 視窗**＝你用的是舊版 `dev-up.bat`（舊版只開 backend 與 frontend；現行版本是 commit `518b1e5` 起才會開 scheduler）。處置：關掉全部視窗，在 repo 內 `git pull --ff-only origin product/stock-desk` 後重跑 `dev-up.bat`。
@@ -121,6 +144,8 @@ log 格式為 `時間 等級 訊息`。依序應該看到：
 
 ### 步驟 3：兩個 DB 檔在哪裡、多大
 
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；尤其不要設定本節寫到的 `STOCK_DESK_DB_PATH`。需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
+
 程式沒有設環境變數時，路徑是**相對於啟動時的工作目錄**：`dev-up.bat` 讓 backend 與 scheduler 都在 `apps\stock-desk\backend` 啟動，所以兩邊預設讀同一組：
 
 - 主 DB：`apps\stock-desk\backend\data\stock-desk.db`（`STOCK_DESK_DB_PATH`）
@@ -140,6 +165,8 @@ $env:STOCK_DESK_DB_PATH; $env:STOCK_DESK_MARKET_DB_PATH
 若第三條印 `False`，scheduler 幾乎確定沒有 token（除非你是從已設好 `$env:FINMIND_API_TOKEN` 的 PowerShell 內執行 dev-up）。
 
 ### 步驟 4：唯讀 SQL（看擷取結果與 board）
+
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
 
 只讀、不會改任何東西（用 SQLite `mode=ro` 開啟）。**一定要在 `apps\stock-desk\backend` 目錄下執行**，路徑才會與 scheduler 一致。整段貼上：
 
@@ -223,6 +250,8 @@ curl.exe -s "http://localhost:8000/api/sectors/momentum?market=TW"
 ---
 
 ## 4. 立即可做的補救
+
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；尤其不要自己設定 token、執行本節的暖身或擷取指令，也不要為此重新啟動任何視窗。需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
 
 ### A. 讓 scheduler 拿得到 FinMind token（最常見）
 
