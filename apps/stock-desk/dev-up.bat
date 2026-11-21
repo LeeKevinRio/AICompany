@@ -35,21 +35,21 @@ REM ---- 1. prerequisites ----
 set "MISSING="
 where git >nul 2>nul
 if errorlevel 1 (
-  echo [MISSING] git - install from https://git-scm.com/download/win
+  echo [MISSING] git was not found. Do not install or update anything yourself.
   set "MISSING=1"
 )
 where uv >nul 2>nul
 if errorlevel 1 (
-  echo [MISSING] uv - install from https://docs.astral.sh/uv/getting-started/installation/
+  echo [MISSING] uv was not found. Do not install or update anything yourself.
   set "MISSING=1"
 )
 where npm >nul 2>nul
 if errorlevel 1 (
-  echo [MISSING] npm - install Node.js from https://nodejs.org
+  echo [MISSING] npm was not found. Do not install or update anything yourself.
   set "MISSING=1"
 )
 if defined MISSING (
-  echo After installing, run this script again.
+  echo Tell the coordinator.
   goto fail
 )
 
@@ -61,6 +61,7 @@ REM ---- 2. repo state checks ----
 git -C "%REPO_ROOT%" rev-parse --is-inside-work-tree >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Not a git repo: !REPO_ROOT!
+  echo Do not move or change any file or folder yourself; tell the coordinator.
   goto fail
 )
 
