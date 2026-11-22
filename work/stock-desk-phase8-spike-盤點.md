@@ -1,5 +1,7 @@
 # Stock Desk Phase 8 — 資料源 Spike 盤點（S-1～S-3）
 
+> **給 CEO：這份文件是團隊內部的工程文件，不是您平常的操作文件；裡面寫給您在本機執行的指令，是為某一次工作寫的一次性指令，內容可能已經過時。請不要照著做，也不要和 `dev-up.bat` 混著用；已經照做過的話，請不要自己復原或刪除當時建立的任何東西。需要其中任何一步時，由 coordinator 告訴您。**
+
 **撰寫者**：data-engineer
 **撰寫日期**：2026-08-02
 **依據**：`work/stock-desk-phase8-需求.md` S-1～S-3 節、`.claude/skills/data-source-integration/SKILL.md`、CEO 裁示優先序（台股為主、美股少量；S-2 > S-1 > S-3）
@@ -150,6 +152,8 @@
 ---
 
 ## 6. 待確認事項與下一步
+
+> **給 CEO：** 本節不是您平常的操作，請不要照做，也不要和 `dev-up.bat` 混著用；尤其不要安裝套件（包括 `pip install`）、執行本節的 `uv run` 或 `python` 指令，也不要在環境變數裡設定 `ALPHA_VANTAGE_API_KEY` 或其他金鑰。需要本節的任何一步時，由 coordinator 告訴您。見檔頭「給 CEO」。
 
 1. **CEO**：於本機（有網路）執行 `uv run --with httpx python scripts/spike_phase8_sources.py` 或 `python scripts/spike_phase8_sources.py`（需先 `pip install httpx`），將輸出的「HTTP 狀態 / 欄位樣本 / 結論」逐筆回填本文件第 1.3、2.3、3.3 節的空欄。
 2. 若要一併測試需要 key 的來源（Alpha Vantage `OVERVIEW`/`EARNINGS`/`NEWS_SENTIMENT`），CEO 需自行在本機環境變數設定 `ALPHA_VANTAGE_API_KEY`（免費申請）；未設定則腳本會直接跳過並在報告中明列跳過條件，不會嘗試用假值或內建金鑰。
