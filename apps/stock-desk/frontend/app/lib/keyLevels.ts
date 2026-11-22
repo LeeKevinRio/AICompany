@@ -92,16 +92,18 @@ function mean(values: number[]): number {
 
 /**
  * Compute every reference level from a chronologically ascending bar series.
- * Returns null when there is no usable bar at all. Bars with non-finite
- * numbers are rejected up front (whole-series refusal beats silently
- * computing on partly-garbage data — same posture as the repository layer).
+ * Returns null when there is no usable bar at all. If ANY bar has a
+ * non-finite or non-positive (<= 0) close, high or low, the WHOLE series is
+ * refused: we never drop the bad bars and compute on the remainder, because
+ * a partly-garbage series gives numbers that look legitimate but are not
+ * (same posture as the repository layer).
  */
 export function computeKeyLevels(bars: Bar[]): KeyLevels | null {
   if (bars.length === 0) return null;
   const closes = bars.map((b) => toNum(b.close));
   const highs = bars.map((b) => toNum(b.high));
   const lows = bars.map((b) => toNum(b.low));
-  if ([...closes, ...highs, ...lows].some((n) => !Number.isFinite(n))) return null;
+  if ([...closes, ...highs, ...lows].some((n) => !Number.isFinite(n) || n <= 0)) return null;
 
   const close = closes[closes.length - 1]!;
   const closeDate = bars[bars.length - 1]!.date;

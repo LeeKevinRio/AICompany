@@ -31,6 +31,32 @@ describe("computeKeyLevels — 邊界與退化", () => {
     expect(computeKeyLevels(bars)).toBeNull();
   });
 
+  describe("close/high/low <= 0 整批拒算", () => {
+    const fields = ["close", "high", "low"] as const;
+    const badValues = ["0", "-1"];
+    const positions: Array<[string, number]> = [
+      ["first", 0],
+      ["middle", 35],
+      ["latest", 69],
+    ];
+    for (const field of fields) {
+      for (const bad of badValues) {
+        for (const [where, idx] of positions) {
+          it(`${field} = ${bad} at the ${where} bar -> null`, () => {
+            const bars = flatBars(70, 100);
+            bars[idx] = { ...bars[idx]!, [field]: bad };
+            expect(computeKeyLevels(bars)).toBeNull();
+          });
+        }
+      }
+    }
+
+    it("tiny positive values on every field still compute", () => {
+      const bars = flatBars(70, 0.0001).map((b) => ({ ...b, high: "0.0002", low: "0.00005" }));
+      expect(computeKeyLevels(bars)).not.toBeNull();
+    });
+  });
+
   it("bar 數不足時逐欄位退化為 null 而非造數", () => {
     const levels = computeKeyLevels(flatBars(10, 100));
     expect(levels).not.toBeNull();

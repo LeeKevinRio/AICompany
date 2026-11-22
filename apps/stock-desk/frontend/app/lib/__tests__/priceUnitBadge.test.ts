@@ -464,6 +464,8 @@ describe("P0 decision card (gate: levels !== null)", () => {
       { bars: makeBars(100), market: "US", response: noPrice },
       // currency-clean bars whose prices cannot be computed (levels === null): the chip's own data check passes, only the gate stops it
       { bars: makeBars(100).map((b, i) => (i === 99 ? { ...b, close: "n/a" } : b)), market: "US" },
+      // a non-positive close makes computeKeyLevels refuse the whole series (RC-584/RC-598)
+      { bars: makeBars(100).map((b, i) => (i === 99 ? { ...b, close: "0" } : b)), market: "US" },
     ];
     for (const props of cases) {
       const html = renderBody(props);

@@ -982,6 +982,8 @@ describe("DecisionCardBody — R-6 持有分支以最新收盤為錨(B0)", () =>
 describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars 推導值", () => {
   // R-2-a (F-1 portfolio valuation guard): when advice is no_price the card must
   // treat bars as unavailable even if /api/bars returns an unusable latest close.
+  // computeKeyLevels itself now refuses any series holding a close/high/low <= 0
+  // (RC-584/RC-598), so this describe checks the card's no_price path on top of it.
   const NO_DATA_TEXT = "資料不足，無法計算。";
   const NOT_HELD_FULL_SENTENCE =
     "未持有此標的，以最新收盤 — 試算；此數字不是任何進場暗示。";
@@ -1021,12 +1023,10 @@ describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars �
       it(`close ${c.raw} × ${s.name}: no bars-derived number or sentence appears`, () => {
         const bars = badBars(c.raw);
 
-        // 1. Witness: the unguarded computation really yields the bad value, so
-        // this test proves the guard (if F-2 starts rejecting <= 0 closes, F-2
-        // rewrites this witness).
-        const witness = computeKeyLevels(bars);
-        expect(witness).not.toBeNull();
-        expect(witness!.close).toBe(c.value);
+        // 1. Witness: computeKeyLevels now refuses the whole series when any
+        // close/high/low is <= 0, so it returns null. The card-level guard below
+        // is still asserted independently (defence in depth).
+        expect(computeKeyLevels(bars)).toBeNull();
 
         const props = {
           response: noPriceResponse(s.held),
@@ -1045,14 +1045,8 @@ describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars �
         expect(html).not.toContain("%");
 
         // 4. None of the witness-derived numbers is rendered.
-        const leaked = new Set<string>([
-          toText(witness!.close),
-          toText(witness!.stopSuggested),
-          toText(witness!.target2R),
-          toText(witness!.anchorPrice),
-          "0.00",
-          "-1.00",
-        ]);
+        // No witness object exists any more; the bad close itself is the leak candidate.
+        const leaked = new Set<string>([toText(c.value), c.fixed, "0.00", "-1.00"]);
         for (const text of leaked) {
           expect(html).not.toContain(text);
         }
@@ -1094,5 +1088,19 @@ describe("DecisionCardBody — R-2-a：advice no_price 時不顯示任何 bars �
         expect(html).toBe(renderCard({ ...props, bars: null }));
       }
     }
+  });
+});
+
+
+describe("DecisionCardBody — bars holding a non-positive value (computeKeyLevels null)", () => {
+  it("advice ok + a bar with low <= 0: close and stop cells print the dash, no unit chip, no distance sentence", () => {
+    const bars = makeBars(80);
+    bars[40] = { ...bars[40]!, low: "0" };
+    expect(computeKeyLevels(bars)).toBeNull();
+    const html = renderCard({ response: makeResponse(), anchorSource: "close-not-held", avgCost: null, bars });
+    expect(html).toContain(">—<");
+    expect(html).not.toContain("價格單位");
+    expect(html).not.toContain("距最新收盤");
+    expect(html).not.toContain("%");
   });
 });
