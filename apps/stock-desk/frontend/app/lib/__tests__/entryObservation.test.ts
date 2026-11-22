@@ -130,3 +130,16 @@ describe("evaluateEntryObservation — 六條固定條件三態", () => {
     expect(isInObservationBand(100, null)).toBe(false);
   });
 });
+
+
+describe("evaluateEntryObservation — levels null (e.g. bars held a non-positive value)", () => {
+  it("range, trend and pullback are unavailable and observationBand is null", () => {
+    const result = evaluateEntryObservation(null, signals(51.37, 0.7), null, true);
+    const byId = Object.fromEntries(result.conditions.map((c) => [c.id, c]));
+    expect(byId.range!.status).toBe("unavailable");
+    expect(byId.trend!.status).toBe("unavailable");
+    expect(byId.pullback!.status).toBe("unavailable");
+    expect(result.observationBand).toBeNull();
+    expect(result.unavailableCount).toBeGreaterThanOrEqual(3);
+  });
+});
