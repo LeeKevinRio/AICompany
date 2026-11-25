@@ -89,7 +89,9 @@ export function buildDataAsOfLine(bars: string | null, signals: string | null, a
   return `資料截至：日線 ${formatDataAsOfDate(bars)}｜指標 ${formatDataAsOfDate(signals)}｜規則評估 ${formatDataAsOfDate(advice)}`;
 }
 
-export const ENTRY_NO_DATA_STATEMENT = "目前資料不足，六條條件均無法判定。";
+// Re-submitted wording after risk review (RC-700..RC-705); locked verbatim in componentWordingScan.test.ts.
+// Keep this name and keep it after buildDataAsOfLine (a test slices up to this declaration).
+export const ENTRY_NO_DATA_STATEMENT = "目前六條條件均無法判定。";
 
 /* ---------- 價位階梯：MA20 ±3% 標籤（R-18：直接印門檻） ---------- */
 
@@ -104,7 +106,8 @@ export function buildEntryBasisRange(n: number | null): BasisItem {
   const nn = n === null ? "N" : String(n);
   return {
     formula: [`位階(近${nn}根)＝(收盤−近${nn}根最低價)/(近${nn}根最高價−近${nn}根最低價)×100%；門檻 ≤ 70%`],
-    qualifier: "未滿 60 根日線或區間最高最低價相同時，本條無法判定。",
+    // RC-700..RC-705: re-submitted wording after risk review.
+    qualifier: "沒有可用日線、未滿 60 根或區間最高最低價相同時，本條無法判定。",
   };
 }
 
