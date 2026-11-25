@@ -18,6 +18,7 @@
 - 補充紀錄：2026-11-16 append 補充七附記二的風控審查紀錄（附記二第 1、5、6 點經風控審查，RC-179～RC-184，附條件接受；coordinator 依風控報告落檔，不改附記二原文；來源 `work/reviews/2026-11-16-補充七附記二三點判定RC179至RC184-風控.md`）。
 - 補充紀錄：2026-11-17 append 補充七附記三（CG-2 登記一鍵檔：R-1 以 `app/` tree id 等價核對並由 coordinator 人工補齊字面、登記檔綁定預檢回貼、兩份備份 sha256 相等、`review_refs` 內容規則與執行期存在檢查、`refusal_reason` 封閉代號、結束碼語意與 `UNCONFIRMED`、順序與探針；tech-architect 裁示，第 1 點窄幅寬於字面，其餘收緊或釐清；新增的 CEO 可見字面送風控；CEO 可推翻）
 - 補充紀錄：2026-11-17 append 補充七附記三之一（「登記已開始」自呼叫啟動子行程的函式之前起算，只有 `OSError` 判為未開始；更正附記三第 3 點與 S-15c 第 6 點字面，方向較保守；tech-architect 裁示；不改 CEO 可見字面；CEO 可推翻）
+- 補充紀錄：2026-11-25 append 補充六附記四（第 6 點 (d) 允許差異的讀法：前端原始碼與只由 main 帶進來的非文件檔，在 RC-721 Q-1～Q-8 的條件下列為允許差異；窄幅寬於字面；經風控審查（RC-720～RC-723）；tech-architect 起草，風控判定採 r2'；不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/`；CEO 可推翻；來源 `work/reviews/2026-11-25-high修正提前代價與前端折衷與ADR時點評估-tech-architect.md`、`work/reviews/2026-11-25-補充六附記四讀法與高優先修正排程CEO題RC720至RC729-風控.md`）。
 - 日期：2026-10-26
 - 決策者：tech-architect（草案）；待 CEO 核可。立案依據：CEO 2026-10-26 裁定 #57（`work/dispatch/2026-10-17-決策包二補遺-新增CEO事項.md` 第四節）；方案來源：`work/reviews/2026-10-26-產品審視-tech-architect.md` 方案 A。
 - 審查：風控語意審，核可附條件（`work/reviews/2026-10-26-ADR0030語意審-風控.md`，R-1～R-11 已納入）；quant 量化確認（`work/reviews/2026-10-26-ADR0030量化確認-quant-researcher.md`，M-1～M-12 已納入）。
@@ -974,3 +975,74 @@
 2. S-15c 第 6 點的「啟動子行程前」，讀為「呼叫啟動函式之前」。
 
 - **S-15d（逐條可檢查）**：啟動函式執行中注入中斷、注入非 `OSError` 的例外、注入回傳後的中斷，三種情況都得到結束碼 5 與 `UNCONFIRMED` 回貼；拋 `OSError` 時得到結束碼 3，而且不留回貼（測試）。
+
+## 補充六附記四：第 6 點 (d) 對前端原始碼與 main 同步檔的讀法（2026-11-25）
+
+- 決策者：tech-architect 起草；risk-compliance-officer 判定（RC-720～RC-723）。來源：`work/reviews/2026-11-25-high修正提前代價與前端折衷與ADR時點評估-tech-architect.md`（新發現 A）、`work/reviews/2026-11-25-補充六附記四讀法與高優先修正排程CEO題RC720至RC729-風控.md`（RC-720～RC-723）。
+- 性質：窄幅寬於字面。經風控審查（RC-720～RC-723）。CEO 可推翻。只釐清補充六第 6 點 (d) 的允許差異範圍；不改本文、補充六與各附記的原文，不改使用者面字面、規則檔、定義物件與已登記雜湊，不改 `app/`。與補充六第 6 點 (d) 衝突時，以本附記為準。
+
+### Context
+
+1. 補充六第 6 點 (d) 第四款只允許「`app/` 以外的登記一鍵檔、文件與測試」，並規定「其餘任何差異都使通過失效，須在新 head 重跑」。前端原始碼（`apps/stock-desk/frontend/`），以及 product `merge origin/main` 時帶進來的非文件檔（例如 `scripts/validate_agents.py`），依字面都不在允許清單內。
+2. 現況：前端合併 `6cd7d25`（T-3，2026-11-22）與 `fde59c2`（2026-11-25）已在 product；product 尚未 `merge origin/main`（含 `e1349aa`）。CEO 已於 2026-11-16 被請求執行真實資料管線驗收一次，尚未回貼，所以 `git_head` 未知。
+3. 執行期事實（RC-720）：一鍵檔啟動 Python 時，先 `cd /d "%BACKEND_DIR%"`，再 `uv run --no-sync python -I`（`pipeline-acceptance.bat:23`、`:29`）；包裝只把 backend 資料夾插入 `sys.path`（`pipeline_acceptance_real.py:64-66`）。所以 `.ts`、`.tsx`、根目錄的 `scripts/*.py` 都進不了這次執行的 import 圖。
+4. 選項：
+   - r1（照字面）：上述差異使通過失效。不採：6(d) 要保證的是「通過 harness 的程式」就是「登記的程式」，照字面讓這些差異使通過失效，會增加 CEO 的負擔，卻換不到任何保證。
+   - r2（tech-architect 原提案：backend 零差異、不在 backend 底下就放行、以 `git diff --name-only` 證明不可達）。不照原樣採：「backend 零差異」做不到，因為 CG-2 合併本來就會改 backend；「不在 backend 底下就放行」範圍太寬，會放進可能改變換行判定或 uv／Python 行為的檔，以及 `apps/stock-desk/` 底下的 `.bat`；`--name-only` 只能列出改了哪些檔，不能證明這些檔不可達。
+   - **r2'（風控判定，採用）**：見 Decision。
+
+### Decision
+
+採 r2'。
+
+**適用範圍（RC-720）**：溯及 `git_head` 之後的所有差異，含 `6cd7d25`、`fde59c2`，以及之後的 `merge origin/main`（含 `e1349aa`）。
+
+**核對條件（RC-721，照錄）**
+
+記號：
+- G：回貼的 `git_head`；
+- M：CG-2 PR 合併時的 head（也就是 6(d) 的終點）；
+- D：`git diff --name-status --no-renames G M` 的全部列。
+
+1. **Q-1** `git merge-base --is-ancestor G M` 的結束碼是 0。
+2. **Q-2** D 的每一列都要恰好歸入下列一類。任何一列歸不進去，通過就失效：
+   - 類 0：6(d) 原本列的四款，以及補充七附記二第 5 點的三個 `.gitattributes`。照原本的核對方式做，含 AST 比對，也含第四款末句五檔零差異。
+   - 類 A：路徑以 `apps/stock-desk/frontend/` 開頭。
+   - 類 B：路徑不以 `apps/` 開頭，也不以 `work/` 開頭；而且 `git log --format=%H G..M -- <path>` 列出的每個 commit，都滿足 `git merge-base --is-ancestor <commit> origin/main`。只要有 product 上的 merge commit 出現在清單裡（例如處理過衝突），這一列就不屬於類 B。
+3. **Q-3** 檔名排除。符合下列任一的列，不得歸入類 A 或類 B：
+   - 檔名（路徑最後一段）是 `.gitattributes`、`pyproject.toml`、`uv.toml`、`uv.lock`、`.python-version`、`sitecustomize.py`、`usercustomize.py` 之一；
+   - 檔名以 `.pth` 結尾，或以 `.env` 開頭；
+   - 類 A 另外不得以 `.py` 結尾。
+4. **Q-4** 路徑以 `apps/stock-desk/` 開頭、但不在 `backend/` 或 `frontend/` 底下的列，只能屬於類 0（登記一鍵檔、文件）。
+   - `.bat` 只限兩支 cg2 `.bat`；
+   - `pipeline-acceptance.bat`、`dev-up.bat` 有任何差異，通過就失效。`dev-up.bat` 不在這次放寬的範圍內，要放寬請另外送我。
+5. **Q-5** 執行期不可達。qa 在 G 上確認：
+   - `pipeline-acceptance.bat` 先 `cd /d "%BACKEND_DIR%"`，再用 `uv run --no-sync python -I` 啟動；
+   - 包裝唯一的 `sys.path` 動作，是插入 `parents[1]`，也就是 backend 資料夾；
+   - 包裝、`.bat` 與 harness 三檔中，Grep `frontend` 都是 0 筆，而且沒有 `parents[2]` 以上的寫法。
+   - 這幾檔依 6(d) 必須零差異，所以在 G 上確認，就等於在 M 上確認。
+   - suggested：加一支測試，在合成資料上跑完包裝後，斷言 `sys.modules` 裡每個 `__file__` 都落在 backend、`sys.prefix` 或 `sys.base_prefix` 之下。
+6. **Q-6** 證據：
+   - CG-2 PR 說明（S-13b 第 6 點）要附：D 全文、每一列的歸類與依據（類 B 附每個 commit 的 `is-ancestor` 結果）、Q-3 掃描結果、Q-5 的確認句。
+   - 這份放寬的證據要由**非實作者**產出（devops-sre 或 coordinator），由 qa 判讀。這是 required。
+7. **Q-7** 任何一條不成立，通過就失效，CEO 要在新 head 重跑。
+   - 不得以「這個差異無關」口頭豁免。要豁免，另立補充送我。
+   - 重跑通知的字面先送我。
+8. **Q-8** 這個讀法不改變下列事項：R-1、RC-507 (1)～(6)、#156 期間禁止合併、6(a)～(c)，以及 `code_digest`、`lockfile_sha256`、harness 雜湊、script 雜湊的核對。
+
+（Q-4、Q-7 中的「我」指 risk-compliance-officer，照錄 RC-721 原文。）
+
+### 過渡規則（RC-722，照錄）
+
+- 落檔之前照 r1 處理。暫緩前端合併與 `merge origin/main` 的決定，等落檔之後才解除。
+- coordinator 的「CEO 回貼時先核對 `git_head` 是否含 `6cd7d25`」，改成「跑 RC-721 全套」。
+
+### Consequences
+
+- 好處：前端原始碼與只由 main 帶進來的非文件檔，在 Q-1～Q-8 成立時，不再單獨使「harness 通過」失效；CEO 不會因這類差異被要求重跑。
+- 壞處與殘留：
+  - 每次判讀回貼都要多跑一套 Q-1～Q-8，而且證據要由非實作者產出、qa 判讀。
+  - `dev-up.bat`、`pipeline-acceptance.bat`、任何 `.gitattributes`、uv 與 Python 設定檔，以及 product 上處理過衝突的 merge commit，照樣會使通過失效。
+  - Q-3 的排除清單依知識判斷，偏保守（uv 會不會往上層資料夾找設定檔，風控未查證，見 RC-720 驗證段）。
+- CEO 告知與禁說依 RC-723，不在本附記重述。
+- 回滾：開新附記取代本附記，原文保留。
