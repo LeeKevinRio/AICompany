@@ -459,8 +459,10 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
       <section className="rounded-lg border border-neutral-800 p-5">
         <h2 className="text-lg font-semibold text-neutral-100">風險預算（RiskBudget）</h2>
         <SectionFallbackMarker text={sectionMarkerOf(settings, "risk_budget")} />
+        {/* RC-712 / RC-718: risk-approved wording. ATR stop multiple is a multiplier,
+            not a fraction, so it is explicitly excluded; backend path removed. */}
         <p className="mt-1 text-xs text-neutral-500">
-          每一項數字都是分數（例如 0.15 = 15%），與後端 `app/advice/limits.py` 的 RiskBudget 欄位一一對應。
+          除 ATR 停損倍數外，每一項數字都是分數（例如 0.15 = 15%）。
         </p>
         {/* `grid-flow-row-dense`: the S2 block spans both columns under cap 1's
             field; dense placement lets the next field take the cell beside
