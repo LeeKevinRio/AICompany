@@ -105,6 +105,7 @@ describe("A-23 / A-24: no comparison, arithmetic or reshaping of backend values"
 
 describe("A-30 / F11-W-24: the page holds no F-11 sentence and assembles none", () => {
   const CJK = /[㐀-鿿]+/g;
+  // RC-717: "文件說明", one "為" and "見後端" were removed from the baseline (RC-712~RC-718 trim).
   /** Every CJK run in the file before F-11, as a multiset; the file may not gain one. */
   const BASELINE_RUNS = [
     "不代表未來會重演",
@@ -122,7 +123,6 @@ describe("A-30 / F11-W-24: the page holds no F-11 sentence and assembles none", 
     "年化波動度",
     "折數",
     "指標",
-    "文件說明",
     "最大回撤",
     "期間",
     "未參與任何參數選擇",
@@ -135,7 +135,6 @@ describe("A-30 / F11-W-24: the page holds no F-11 sentence and assembles none", 
     "樣本外為所有折測試窗銜接",
     "滑價",
     "滑價率尚未對照主要來源查證",
-    "為",
     "為同期間",
     "無法計算",
     "獲利因子",
@@ -146,7 +145,6 @@ describe("A-30 / F11-W-24: the page holds no F-11 sentence and assembles none", 
     "總報酬率",
     "美股手續費率",
     "美股賣出監管費率",
-    "見後端",
     "觀測筆數",
     "費率未查證",
     "資料不足",

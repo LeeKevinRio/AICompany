@@ -335,8 +335,9 @@ function SegmentTable({
           </tbody>
         </table>
       </div>
+      {/* RC-713 / RC-717 / RC-718: backend doc reference removed; wording is risk-approved. */}
       <p className="mt-1 text-xs text-neutral-500">
-        Buy &amp; Hold 為同期間、未計交易成本的被動持有基準（見後端 `app/backtest/report.py` 文件說明）。
+        Buy &amp; Hold 為同期間、未計交易成本的被動持有基準。
       </p>
     </div>
   );
@@ -634,13 +635,15 @@ export function BacktestReportView({ report }: { report: BacktestResponse }) {
         本回測報告呈現的所有數字皆屬歷史統計描述，不代表未來會重演。
       </p>
 
+      {/* RC-714 / RC-717 / RC-718: only the "(verified_on is null)" parenthetical was removed.
+          role, class, position and display condition are unchanged. The sentence is kept on
+          one JSX line so no whitespace is added or lost inside it. */}
       {!report.rates_verified && (
         <p
           role="alert"
           className="mt-3 rounded-md border border-amber-800 bg-amber-950/40 px-4 py-2 text-sm text-amber-300"
         >
-          費率未查證：本次回測使用的手續費／交易稅／滑價率尚未對照主要來源查證（verified_on 為
-          null），報告數字應視為待查證狀態。
+          費率未查證：本次回測使用的手續費／交易稅／滑價率尚未對照主要來源查證，報告數字應視為待查證狀態。
         </p>
       )}
 

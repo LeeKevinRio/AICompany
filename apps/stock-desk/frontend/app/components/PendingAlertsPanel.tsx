@@ -1,6 +1,6 @@
 "use client";
 
-import { alertTypeLabel, formatDateTime } from "../lib/format";
+import { alertTypeLabel, formatDateTime, signalFieldLabel } from "../lib/format";
 import type { AlertEvent } from "../lib/types";
 
 /** Renders `AlertEvent.observed` (a `Record<string, number|string|null>`, verified shape). */
@@ -9,7 +9,10 @@ function ObservedValues({ observed }: { observed: Record<string, number | string
   if (entries.length === 0) return null;
   return (
     <p className="mt-1 text-xs text-neutral-500">
-      {entries.map(([key, value]) => `${key}: ${value ?? "—"}`).join("　")}
+      {/* RC-716 / RC-718: keys only pass through signalFieldLabel (unknown keys fall back to
+          the raw key). Separator, colon, "—" for null, entry count and order are unchanged;
+          nothing is filtered, so bar_as_of / signals_as_of stay visible. */}
+      {entries.map(([key, value]) => `${signalFieldLabel(key)}: ${value ?? "—"}`).join("　")}
     </p>
   );
 }
