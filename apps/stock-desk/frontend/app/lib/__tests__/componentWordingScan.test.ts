@@ -2009,7 +2009,12 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     for (const q of ["自訂之固定值", "僅為符合門檻的條數", "不代表機率、達成率或任何買賣判斷"]) expect(ENTRY_E1_QUALIFIER).toContain(q);
     expect(ENTRY_E2_XREF).toBe("本面板不是操作摘要結論的一部分；結論與免責事項見上方操作摘要。");
     expect(ENTRY_E3_DASH_NOTE).toBe("「—」代表無法判定，不代表數值為零，也不代表未成立。");
-    expect(ENTRY_NO_DATA_STATEMENT).toBe("目前資料不足，六條條件均無法判定。");
+    // RC-700..RC-705: verbatim lock of the re-submitted wording (risk-approved).
+    expect(ENTRY_NO_DATA_STATEMENT).toBe("目前六條條件均無法判定。");
+    expect(ENTRY_NO_DATA_STATEMENT).not.toContain("不足");
+    const ENTRY_RANGE_QUALIFIER = "沒有可用日線、未滿 60 根或區間最高最低價相同時，本條無法判定。";
+    expect(buildEntryBasisRange(null).qualifier).toBe(ENTRY_RANGE_QUALIFIER);
+    expect(buildEntryBasisRange(252).qualifier).toBe(ENTRY_RANGE_QUALIFIER);
     expect(LADDER_BAND_TAG).toBe("MA20 ±3%");
     expect(LADDER_BAND_NOTE).toBe("有「MA20 ±3%」標籤的列，價位皆在該範圍內。");
     expect(buildDefensiveHitsText(1)).toBe("命中 1 條");
@@ -2820,6 +2825,7 @@ describe("L-10 風控核可（2026-10-04）：使用者可見字面不得出現�
       const wording = read("../entryObservationWording.ts");
       const fnStart = wording.indexOf("export function buildDataAsOfLine(");
       const fnEnd = wording.indexOf("export const ENTRY_NO_DATA_STATEMENT");
+      expect(fnEnd).toBeGreaterThan(fnStart);
       expect(wording.slice(fnStart, fnEnd)).not.toMatch(/===|!==\s*(bars|signals|advice)|synchronized/);
     });
 
