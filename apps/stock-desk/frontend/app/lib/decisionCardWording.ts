@@ -104,3 +104,26 @@ export function pickInvalidationPrefix(conditionCount: number): string {
     ? DECISION_CARD_INVALIDATION_PREFIX
     : DECISION_CARD_INVALIDATION_PREFIX_ONE_OF;
 }
+
+/**
+ * RC-801 (risk-final wording, `work/reviews/2026-11-26-RC772補起草逐字審RC800至RC809-風控.md`):
+ * the two lines shown under the three number cells when the shared daily-bar
+ * verdict (`evaluateDailyBarsUsability`) is "unusable".
+ *
+ * Line 1: 「最新收盤」與「停損參考」兩格不顯示數字：目前沒有可用的日線資料。
+ * Line 2: 本卡依規則得出的結論與「股數參考」也用到同一批日線資料，可能同樣受到影響。
+ *
+ * The cell names come from the existing constants (never retyped): the two
+ * `KeyLevelsPanel` labels are passed in by the caller (importing them here
+ * would make this module and `KeyLevelsPanel` import each other), and the
+ * quantity label is `DECISION_CARD_QUANTITY_LABEL` above. The clause after
+ * the colon must stay identical to the prefix of `KEY_LEVELS_NO_DATA_STATEMENT`
+ * (locked by a test). Any change is wording drift and must go back to risk review.
+ */
+export const DECISION_CARD_UNUSABLE_BARS_CAUSE = "目前沒有可用的日線資料";
+
+export function buildDecisionCardUnusableBarsLine1(closeLabel: string, stopLabel: string): string {
+  return `「${closeLabel}」與「${stopLabel}」兩格不顯示數字：${DECISION_CARD_UNUSABLE_BARS_CAUSE}。`;
+}
+
+export const DECISION_CARD_UNUSABLE_BARS_SECOND_LINE = `本卡依規則得出的結論與「${DECISION_CARD_QUANTITY_LABEL}」也用到同一批日線資料，可能同樣受到影響。`;

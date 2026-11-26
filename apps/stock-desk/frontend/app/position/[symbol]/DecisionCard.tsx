@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { AdviceResponse, Bar } from "../../lib/types";
 import type { AnchorSource } from "../../lib/keyLevels";
+import type { DailyBarsUsability } from "../../lib/dailyBarsUsability";
 import { computeCostPnlPct, computeKeyLevels } from "../../lib/keyLevels";
 import { buildOperationSummary } from "../../lib/operationSummary";
 import type { OperationSummaryModel } from "../../lib/operationSummary";
@@ -21,7 +22,9 @@ import {
   DECISION_CARD_ARIA_LABEL,
   DECISION_CARD_COST_PNL_UNAVAILABLE,
   DECISION_CARD_QUANTITY_LABEL,
+  DECISION_CARD_UNUSABLE_BARS_SECOND_LINE,
   buildCostPnlRow,
+  buildDecisionCardUnusableBarsLine1,
   buildDecisionCardDistance,
   pickInvalidationPrefix,
 } from "../../lib/decisionCardWording";
@@ -305,11 +308,14 @@ export function DecisionCardBody({
   anchorSource,
   avgCost,
   market,
+  barsUsability = null,
 }: {
   response: AdviceResponse;
   bars: Bar[] | null;
   anchorSource: AnchorSource;
   avgCost: number | null;
+  /** RC-801: the page's ONE shared verdict (`evaluateDailyBarsUsability`); never re-derived in this file. */
+  barsUsability?: DailyBarsUsability | null;
   /** Page market; the price-unit chip (F-7) prints only for a known market whose bars agree. Absent = no chip. */
   market?: string;
 }) {
@@ -391,6 +397,24 @@ export function DecisionCardBody({
       : "—";
   const restoresWarning =
     model.kind === "held" ? model.restoresComplianceWarning : null;
+
+  // RC-801: two lines under the three cells when the shared verdict says the
+  // daily bars are unusable. Branch on `=== "unusable"` (not `!== "usable"`)
+  // so a future H1 "gap" state does not trigger it (RC-767).
+  // Intentional design (RC-842 item 2, coordinator decision): the caller
+  // guards the length itself. `evaluateDailyBarsUsability` stays untouched and
+  // treats an empty series as "usable"; this card additionally requires a
+  // non-null, non-empty `bars` (null = envelope not `ok`), so an empty array
+  // or a non-ok envelope keeps today's behaviour and shows neither line.
+  // `no_price` shows neither line; `no_action` shows line 1 only.
+  const showUnusableBarsNotice =
+    barsUsability !== null &&
+    barsUsability.status === "unusable" &&
+    bars !== null &&
+    bars.length > 0 &&
+    model.kind !== "no_price";
+  const showUnusableBarsLine2 =
+    showUnusableBarsNotice && (model.kind === "held" || model.kind === "candidate");
 
   // Risk review 2026-10-03 BLOCKING 3: when the conclusion was downgraded or
   // capped (action !== aggregated_action) the invalidation line does not
@@ -500,6 +524,19 @@ export function DecisionCardBody({
         </div>
       </div>
 
+      {/*
+        RC-801 (risk-final wording): directly under the three cells, main view,
+        never inside a <details>; text-xs text-neutral-400 is the floor.
+      */}
+      {showUnusableBarsNotice && (
+        <p className="mt-2 text-xs text-neutral-400">
+          {buildDecisionCardUnusableBarsLine1(KEY_LEVELS_LADDER_RUNG_CLOSE, KEY_LEVELS_STOP_CARD_TITLE)}
+        </p>
+      )}
+      {showUnusableBarsLine2 && (
+        <p className="mt-1 text-xs text-neutral-400">{DECISION_CARD_UNUSABLE_BARS_SECOND_LINE}</p>
+      )}
+
       {limitNotices !== null && limitNotices.hasAny && <LimitNoticeBlock notices={limitNotices} />}
 
       {/*
@@ -598,6 +635,7 @@ export function DecisionCard({
   anchorSource,
   avgCost,
   market,
+  barsUsability,
 }: {
   advice: UseQueryResult<AdviceResponse, Error>;
   /** Only bars from an `ok` envelope — `null` means "not usable this render". */
@@ -606,6 +644,8 @@ export function DecisionCard({
   avgCost: number | null;
   /** Required here (the only production caller is page.tsx) so a forgotten prop fails tsc, not silently drops the F-7 chip. */
   market: string;
+  /** RC-801: the page's shared `evaluateDailyBarsUsability` result for the same bars (`null` when bars are not an `ok` envelope). Required so a forgotten prop fails tsc. */
+  barsUsability: DailyBarsUsability | null;
 }) {
   return (
     <section
@@ -623,6 +663,7 @@ export function DecisionCard({
           anchorSource={anchorSource}
           avgCost={avgCost}
           market={market}
+          barsUsability={barsUsability}
         />
       )}
     </section>
