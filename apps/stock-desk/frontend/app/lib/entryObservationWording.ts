@@ -123,17 +123,18 @@ export const ENTRY_BASIS_PULLBACK: BasisItem = {
 
 export const ENTRY_BASIS_MOMENTUM: BasisItem = {
   formula: ["RSI(14)＝14 期相對強弱指標；門檻：30 < RSI(14) < 70（不含端點）"],
-  qualifier: "RSI(14) 資料不足時，本條無法判定；30、70 兩端點本身不算成立。",
+  qualifier: "RSI(14) 無法取得時，本條無法判定；30、70 兩端點本身不算成立。",
 };
 
 export const ENTRY_BASIS_VOLUME: BasisItem = {
   formula: ["成交量z＝(當日成交量−近 20 根成交量平均)/近 20 根成交量標準差（母體）；門檻：−2 < z < 2（不含端點）"],
-  qualifier: "z 值資料不足時，本條無法判定；−2、2 兩端點本身不算成立。",
+  qualifier: "z 值無法取得時，本條無法判定；−2、2 兩端點本身不算成立。",
 };
 
 export const ENTRY_BASIS_RULES: BasisItem = {
   formula: ["防禦型規則命中數＝本次規則評估中，方向為防禦型之命中規則筆數；門檻 ＝ 0"],
-  qualifier: "未持有此標的，或持有狀態未定時，本條一律無法判定，不因未命中而視為成立。",
+  qualifier:
+    "未持有此標的，或持有狀態未定時，本條一律無法判定，不因未命中而視為成立；沒有可用日線時，本條也無法判定。",
 };
 
 /** R-14: the 位階≠估值 semantic restated for this panel (not verbatim `buildRangeNotValuationNote`). */

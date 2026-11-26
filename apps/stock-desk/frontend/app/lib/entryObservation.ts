@@ -1,3 +1,4 @@
+import type { DailyBarsUsability } from "./dailyBarsUsability";
 import type { KeyLevels } from "./keyLevels";
 import { rsiBand, volumeZBand } from "./indicatorBands";
 import { ruleDirection } from "./ruleDirection";
@@ -56,6 +57,26 @@ function fin(n: number | null | undefined): number | null {
   return typeof n === "number" && Number.isFinite(n) ? n : null;
 }
 
+/**
+ * RC-862: the ONE fail-closed gate for the conditions that read backend
+ * payloads (momentum, volume and rules) instead of the
+ * client-side key levels. It only reads the shared verdict from
+ * `evaluateDailyBarsUsability` (handed in by the page, never recomputed here),
+ * and it is an allow-list: only an explicit "usable" opens it. "unusable", a
+ * missing verdict (`null`: bars not loaded, error, not `ok`), `undefined` and
+ * any status added in the future all keep it shut.
+ *
+ * The shared function calls an empty series "usable" (it has no bad bar), but
+ * an empty series answers nothing. `computeKeyLevels` returns null exactly for
+ * an empty or unusable series, so a usable verdict with null levels means
+ * "ok envelope, zero bars" and also keeps the gate shut (RC-872 point 1). No
+ * bar values are scanned here and no backend status is consulted: backend
+ * statuses may only make a result stricter, never replace this gate.
+ */
+function isBarsGateOpen(usability: DailyBarsUsability | null, levels: KeyLevels | null): boolean {
+  return usability?.status === "usable" && levels !== null;
+}
+
 function rangeCondition(levels: KeyLevels | null): ConditionResult {
   const pct = fin(levels?.rangePositionPct);
   if (pct === null) return { id: "range", status: "unavailable", observed: null, reference: null };
@@ -86,7 +107,14 @@ function pullbackCondition(levels: KeyLevels | null): ConditionResult {
   };
 }
 
-function momentumCondition(signals: SignalsPayload | null): ConditionResult {
+/**
+ * RC-862: unavailable whenever the shared daily-bar gate is shut. The RSI the
+ * backend returns is computed from the same batch, bad bars included, and its
+ * `status` stays "ok" on them, so a number would be printed beside bars the
+ * page itself calls unusable.
+ */
+function momentumCondition(signals: SignalsPayload | null, barsGateOpen: boolean): ConditionResult {
+  if (!barsGateOpen) return { id: "momentum", status: "unavailable", observed: null, reference: null };
   const rsiResult = signals?.technical?.rsi;
   const rsi = rsiResult && rsiResult.status === "ok" ? fin(rsiResult.last.rsi) : null;
   const band = rsiBand(rsi);
@@ -94,7 +122,9 @@ function momentumCondition(signals: SignalsPayload | null): ConditionResult {
   return { id: "momentum", status: band === "mid" ? "met" : "unmet", observed: rsi, reference: null };
 }
 
-function volumeCondition(signals: SignalsPayload | null): ConditionResult {
+/** RC-862: same gate as `momentumCondition`; the volume z-score is also computed from the unfiltered batch. */
+function volumeCondition(signals: SignalsPayload | null, barsGateOpen: boolean): ConditionResult {
+  if (!barsGateOpen) return { id: "volume", status: "unavailable", observed: null, reference: null };
   const vz = signals?.technical?.volume_zscore;
   const z = vz && vz.status === "ok" ? fin(vz.last.zscore) : null;
   const band = volumeZBand(z);
@@ -107,8 +137,18 @@ function volumeCondition(signals: SignalsPayload | null): ConditionResult {
  * back from the card's own `direction_weights` (never re-derived); a matched
  * rule whose action the card does not list is counted as unknown and makes
  * the condition unavailable rather than silently met.
+ *
+ * RC-862: when the daily bars cannot be used (any bad bar anywhere in the
+ * batch, bars not loaded, or zero bars) the condition is ALWAYS unavailable,
+ * whatever `held` is and even when `matched_rules` is empty. The backend
+ * builds the advice card from the whole batch including bad bars and only
+ * refuses when the latest close is bad, so a held position with no defensive
+ * hit would otherwise read "met" (reassuring) on data the page itself calls
+ * unusable. This gate stays even if the backend later rejects bad batches
+ * (RC-865 point 1).
  */
-function rulesCondition(advice: AdviceCard | null, held: boolean | null): ConditionResult {
+function rulesCondition(advice: AdviceCard | null, held: boolean | null, barsGateOpen: boolean): ConditionResult {
+  if (!barsGateOpen) return { id: "rules", status: "unavailable", observed: null, reference: null };
   // 風控 RED-1 路徑 (a): in candidate mode (not held, or holding status
   // undetermined) the position-dependent defensive rules are skipped by the
   // engine, which would bias this condition towards "met" exactly for the
@@ -129,14 +169,21 @@ export function evaluateEntryObservation(
   advice: AdviceCard | null,
   /** `AdviceResponse.held`; `null` while the holding status is undetermined. */
   held: boolean | null,
+  /**
+   * The shared verdict from `evaluateDailyBarsUsability`, computed once by the
+   * page; `null` when the bars did not load as an `ok` envelope. Required (no
+   * default) so a caller can never fall back to "usable" by omission.
+   */
+  barsUsability: DailyBarsUsability | null,
 ): EntryObservation {
+  const barsGateOpen = isBarsGateOpen(barsUsability, levels);
   const conditions: ConditionResult[] = [
     rangeCondition(levels),
     trendCondition(levels),
     pullbackCondition(levels),
-    momentumCondition(signals),
-    volumeCondition(signals),
-    rulesCondition(advice, held),
+    momentumCondition(signals, barsGateOpen),
+    volumeCondition(signals, barsGateOpen),
+    rulesCondition(advice, held, barsGateOpen),
   ];
   const metCount = conditions.filter((c) => c.status === "met").length;
   const unmetCount = conditions.filter((c) => c.status === "unmet").length;
