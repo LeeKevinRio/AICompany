@@ -198,7 +198,6 @@ import {
   FX_BACKUP_BADGE,
   buildAdviceHitCount,
   buildAlertsPendingCount,
-  buildAlertsQueriedAt,
   buildAlertsRulesNoEvents,
   buildDataAsOfBadge,
   buildKeyLevelsOneLiner,
@@ -2166,9 +2165,20 @@ describe("oneLinerWording.ts 逐字釘住（風控逐字審 R-A2）", () => {
     expect(ALERTS_MANAGE_LINK).toBe("管理警示規則");
     expect(ALERTS_SCHEDULER_DISABLED).toBe("排程目前未啟用，警示評估暫不會更新");
     expect(ALERTS_LOAD_ERROR_PREFIX).toBe("無法載入警示狀態：");
-    expect(buildAlertsRulesNoEvents(4)).toBe("4 條規則已設定，目前沒有待處理警示");
-    expect(buildAlertsQueriedAt("2026-09-19 16:40（台北時間）")).toBe("查詢時間：2026-09-19 16:40（台北時間）");
+    // RC-760 to RC-772 (RC-770 F1): verbatim, n = 4.
+    expect(buildAlertsRulesNoEvents(4)).toBe("4 條規則已設定。這裡沒有列出待處理警示，不代表警示檢查已完成。");
     expect(buildAlertsPendingCount(2)).toBe("2 條待處理警示");
+  });
+
+  it("RC-770 F1：oneLinerWording.ts 與 AlertStatusStrip.tsx 原始碼不含「查詢時間」，且已移除 buildAlertsQueriedAt", () => {
+    const wording = readFileSync(fileURLToPath(new URL("../oneLinerWording.ts", import.meta.url)), "utf8");
+    const strip = readFileSync(fileURLToPath(new URL("../../components/AlertStatusStrip.tsx", import.meta.url)), "utf8");
+    expect(wording).not.toContain("查詢時間");
+    expect(strip).not.toContain("查詢時間");
+    expect(wording).not.toContain("buildAlertsQueriedAt");
+    expect(strip).not.toContain("buildAlertsQueriedAt");
+    expect(wording).not.toContain("目前沒有待處理警示");
+    expect(strip).not.toContain("目前沒有待處理警示");
   });
 
   it("AlertStatusStrip.tsx wiring：查詢失敗前綴確實由元件渲染", () => {
