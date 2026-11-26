@@ -138,9 +138,11 @@ export default function PositionDetailPage() {
   // RC-764 / RC-767: one shared verdict on the daily bars. When ANY bar holds a
   // bad value the technical section collapses to a single sentence (see the
   // render below); the pending / error / insufficient_data branches never
-  // reach this, because it is only evaluated on an ok bars envelope.
+  // reach this, because it is only evaluated on an ok bars envelope. The
+  // `isSuccess` guard matches the render branches: a refetch error that keeps
+  // stale bad data (`isError` with `data`) must not collapse only the details.
   const technicalCollapsed =
-    bars.data !== undefined &&
+    bars.isSuccess &&
     bars.data.status === "ok" &&
     evaluateDailyBarsUsability(bars.data.bars).status === "unusable";
 

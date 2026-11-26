@@ -107,9 +107,13 @@ const SIGNALS_INSUFFICIENT: SignalsResponse = {
 
 const NO_POSITIONS: PositionsResponse = { items: [], as_of: "x" };
 
-function renderPage(seed: { bars?: BarsResponse; signals?: SignalsResponse }): string {
+function renderPage(seed: { bars?: BarsResponse; signals?: SignalsResponse; barsRefetchFailed?: boolean }): string {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (seed.bars) client.setQueryData(["bars", "2330", "TW"], seed.bars);
+  if (seed.bars && seed.barsRefetchFailed) {
+    // A failed refetch: status "error" while the previous (stale) data stays in the cache.
+    client.getQueryCache().find({ queryKey: ["bars", "2330", "TW"] })!.setState({ status: "error", error: new Error("refetch failed") });
+  }
   if (seed.signals) client.setQueryData(["signals", "2330", "TW"], seed.signals);
   client.setQueryData(["positions"], NO_POSITIONS);
   return renderToStaticMarkup(createElement(QueryClientProvider, { client }, createElement(PositionDetailPage)));
@@ -239,6 +243,17 @@ describe("whole page with a bad bar (RC-764, RC-770 items 3 and 4)", () => {
 });
 
 describe("unchanged branches (RC-764, RC-770 item 5)", () => {
+  it("bars query in isError while keeping stale BAD data: details stay as in today's error state, no statement", () => {
+    const html = renderPage({ bars: barsResponse(withBad("close", "0")), signals: SIGNALS, barsRefetchFailed: true });
+    expect(html).not.toContain(FINAL_STATEMENT);
+    expect(html).not.toContain(CHART_LABEL);
+    // The details area is not half-collapsed: cards and the bar-count line show as before.
+    expect(html).toContain(renderToStaticMarkup(createElement(TechnicalIndicatorsPanel, { payload: SIGNALS.signals!, lastBarDate: META.last_bar_date })));
+    // The bar-count line is gated by bars.isSuccess, so in the error state it is absent exactly as before this change.
+    expect(html).not.toContain("共 100 根日線");
+    expect(html).toContain("無法載入日K線");
+  });
+
   it("bars still loading: no statement", () => {
     expect(renderPage({ signals: SIGNALS })).not.toContain(FINAL_STATEMENT);
   });
