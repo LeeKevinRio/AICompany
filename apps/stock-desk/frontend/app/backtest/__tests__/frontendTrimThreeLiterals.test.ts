@@ -103,15 +103,17 @@ describe("RC-717 item 3: alert event observed values", () => {
     );
   }
 
+  // RC-717 item 4 updated for RC-732 ~ RC-734: the expected literals are the approved labels; the
+  // anti-"case C" assertions (entry count, date value visible) are kept.
   it("price event: close is labelled, nothing is dropped, four entries remain", () => {
     const html = render({
       observed: { close: 605, threshold: 600, currency: "TWD", bar_as_of: "2026-11-24" },
     });
-    expect(html).toContain("最新收盤價: 605");
-    expect(html).toContain("bar_as_of: 2026-11-24");
-    const line = html.match(/最新收盤價: 605[^<]*/)![0];
+    expect(html).toContain("資料日收盤價: 605");
+    expect(html).toContain("2026-11-24");
+    const line = html.match(/資料日收盤價: 605[^<]*/)![0];
     expect(line.split("　")).toHaveLength(4);
-    expect(line).toBe("最新收盤價: 605　threshold: 600　currency: TWD　bar_as_of: 2026-11-24");
+    expect(line).toBe("資料日收盤價: 605　設定的門檻: 600　幣別: TWD　資料日期（日線收盤，非即時）: 2026-11-24");
   });
 
   it("signal_condition event: signals_as_of stays visible", () => {
@@ -119,6 +121,6 @@ describe("RC-717 item 3: alert event observed values", () => {
       rule_type: "signal_condition",
       observed: { field: "rsi14.last", value: 71.2, op: "gt", compared_to: 70, signals_as_of: "2026-11-24" },
     });
-    expect(html).toContain("signals_as_of: 2026-11-24");
+    expect(html).toContain("資料日期（日線收盤，非即時）: 2026-11-24");
   });
 });

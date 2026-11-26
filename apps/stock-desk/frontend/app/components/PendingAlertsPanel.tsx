@@ -1,6 +1,7 @@
 "use client";
 
-import { alertTypeLabel, formatDateTime, signalFieldLabel } from "../lib/format";
+import { observedEntryText } from "../lib/alertObservedLabels";
+import { alertTypeLabel, formatDateTime } from "../lib/format";
 import type { AlertEvent } from "../lib/types";
 
 /** Renders `AlertEvent.observed` (a `Record<string, number|string|null>`, verified shape). */
@@ -9,10 +10,13 @@ function ObservedValues({ observed }: { observed: Record<string, number | string
   if (entries.length === 0) return null;
   return (
     <p className="mt-1 text-xs text-neutral-500">
-      {/* RC-716 / RC-718: keys only pass through signalFieldLabel (unknown keys fall back to
-          the raw key). Separator, colon, "—" for null, entry count and order are unchanged;
-          nothing is filtered, so bar_as_of / signals_as_of stay visible. */}
-      {entries.map(([key, value]) => `${signalFieldLabel(key)}: ${value ?? "—"}`).join("　")}
+      {/* RC-716 / RC-718 / RC-730 ~ RC-739: keys and the three engineering values (op, field,
+          violated_limit_ids) are labelled by `alertObservedLabels` (11-key table; `close` no
+          longer goes through signalFieldLabel, RC-734; unknown keys or values fall back to the
+          raw string). Separator ": ", joiner "　", "—" for null, entry count and order are
+          unchanged; nothing is dropped, so both date entries stay visible. The date labels
+          claim "daily close, not real-time": see the invalidation condition in the module. */}
+      {entries.map(([key, value]) => observedEntryText(key, value)).join("　")}
     </p>
   );
 }
