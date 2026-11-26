@@ -123,12 +123,12 @@ export const ENTRY_BASIS_PULLBACK: BasisItem = {
 
 export const ENTRY_BASIS_MOMENTUM: BasisItem = {
   formula: ["RSI(14)＝14 期相對強弱指標；門檻：30 < RSI(14) < 70（不含端點）"],
-  qualifier: "RSI(14) 資料不足時，本條無法判定；30、70 兩端點本身不算成立。",
+  qualifier: "RSI(14) 無法取得時，本條無法判定；30、70 兩端點本身不算成立。",
 };
 
 export const ENTRY_BASIS_VOLUME: BasisItem = {
   formula: ["成交量z＝(當日成交量−近 20 根成交量平均)/近 20 根成交量標準差（母體）；門檻：−2 < z < 2（不含端點）"],
-  qualifier: "z 值資料不足時，本條無法判定；−2、2 兩端點本身不算成立。",
+  qualifier: "z 值無法取得時，本條無法判定；−2、2 兩端點本身不算成立。",
 };
 
 export const ENTRY_BASIS_RULES: BasisItem = {

@@ -87,10 +87,10 @@ describe("evaluateEntryObservation — 六條固定條件三態", () => {
     expect(at3.status).toBe("met");
     const over3 = evaluateEntryObservation(levels({ close: 103.01, ma20: 100 }), null, null, true, USABLE).conditions[2]!;
     expect(over3.status).toBe("unmet");
-    expect(evaluateEntryObservation(null, signals(70, 0), null, true, USABLE).conditions[3]!.status).toBe("unmet");
-    expect(evaluateEntryObservation(null, signals(69.9, 0), null, true, USABLE).conditions[3]!.status).toBe("met");
-    expect(evaluateEntryObservation(null, signals(50, 2), null, true, USABLE).conditions[4]!.status).toBe("unmet");
-    expect(evaluateEntryObservation(null, signals(50, 1.99), null, true, USABLE).conditions[4]!.status).toBe("met");
+    expect(evaluateEntryObservation(levels(), signals(70, 0), null, true, USABLE).conditions[3]!.status).toBe("unmet");
+    expect(evaluateEntryObservation(levels(), signals(69.9, 0), null, true, USABLE).conditions[3]!.status).toBe("met");
+    expect(evaluateEntryObservation(levels(), signals(50, 2), null, true, USABLE).conditions[4]!.status).toBe("unmet");
+    expect(evaluateEntryObservation(levels(), signals(50, 1.99), null, true, USABLE).conditions[4]!.status).toBe("met");
     // close == MA60 is not "above".
     expect(evaluateEntryObservation(levels({ close: 100, ma60: 100 }), null, null, true, USABLE).conditions[1]!.status).toBe("unmet");
   });
@@ -139,7 +139,7 @@ describe("evaluateEntryObservation — 六條固定條件三態", () => {
 
 describe("evaluateEntryObservation — levels null (e.g. bars held a non-positive value)", () => {
   it("range, trend and pullback are unavailable and observationBand is null", () => {
-    const result = evaluateEntryObservation(null, signals(51.37, 0.7), null, true, USABLE);
+    const result = evaluateEntryObservation(null, signals(51.37, 0.7), null, true, null);
     const byId = Object.fromEntries(result.conditions.map((c) => [c.id, c]));
     expect(byId.range!.status).toBe("unavailable");
     expect(byId.trend!.status).toBe("unavailable");

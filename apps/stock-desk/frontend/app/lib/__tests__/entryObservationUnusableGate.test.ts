@@ -1,9 +1,13 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { evaluateDailyBarsUsability } from "../dailyBarsUsability";
 import type { DailyBarsUsability } from "../dailyBarsUsability";
 import { evaluateEntryObservation } from "../entryObservation";
 import type { ConditionId, ConditionResult } from "../entryObservation";
 import { computeKeyLevels } from "../keyLevels";
+import { ENTRY_NO_DATA_STATEMENT, buildConditionCount, buildDefensiveHitsText } from "../entryObservationWording";
+import { EntryObservationPanel } from "../../position/[symbol]/EntryObservationPanel";
 import type { AdviceCard, Bar, IndicatorResult, SignalsPayload, SignalsTechnicalBlock } from "../types";
 
 /**
@@ -149,5 +153,91 @@ describe("RC-862 rules condition: unusable daily bars => always unavailable", ()
   it("backend statuses are not a bad-value signal: an ok advice on bad bars is still gated, a null advice stays unavailable", () => {
     expect(byId(evaluateFor(BAD_EARLIER_CLOSE, true, NO_HIT_ADVICE).conditions, "rules").status).toBe("unavailable");
     expect(byId(evaluateFor(CLEAN_BARS, true, null).conditions, "rules").status).toBe("unavailable");
+  });
+});
+
+describe("RC-862 momentum and volume: unusable daily bars => unavailable", () => {
+  const cases: [string, Bar[]][] = [
+    ["(a) latest close 0", BAD_LATEST_CLOSE],
+    ["(b) latest low 0", BAD_LATEST_LOW],
+    ["(c) earlier close 0", BAD_EARLIER_CLOSE],
+    ["(d) earlier high -1", BAD_EARLIER_HIGH],
+  ];
+  for (const [name, bars] of cases) {
+    it(`${name}: valid RSI 50 and z 0.5 are not read; observed and reference are null`, () => {
+      const result = evaluateFor(bars);
+      expect(byId(result.conditions, "momentum")).toEqual({ id: "momentum", ...UNAVAILABLE });
+      expect(byId(result.conditions, "volume")).toEqual({ id: "volume", ...UNAVAILABLE });
+      expect(byId(result.conditions, "rules")).toEqual({ id: "rules", ...UNAVAILABLE });
+      expect(result.conditions.every((c) => c.status === "unavailable" && c.observed === null && c.reference === null)).toBe(true);
+      expect(result.allUnavailable).toBe(true);
+    });
+  }
+
+  it("(e) bars not loaded (verdict null) and ok-with-[] (RC-872 point 1): momentum and volume unavailable", () => {
+    for (const result of [evaluateFor(null), evaluateFor([])]) {
+      expect(byId(result.conditions, "momentum")).toEqual({ id: "momentum", ...UNAVAILABLE });
+      expect(byId(result.conditions, "volume")).toEqual({ id: "volume", ...UNAVAILABLE });
+    }
+  });
+
+  it("fail-closed: an unknown or missing verdict value never opens the gate", () => {
+    const levels = computeKeyLevels(CLEAN_BARS);
+    for (const verdict of [undefined, { status: "gap" }, {}] as unknown[]) {
+      const result = evaluateEntryObservation(levels, signals(50, 0.5), NO_HIT_ADVICE, true, verdict as DailyBarsUsability | null);
+      expect(byId(result.conditions, "momentum").status, JSON.stringify(verdict)).toBe("unavailable");
+      expect(byId(result.conditions, "volume").status, JSON.stringify(verdict)).toBe("unavailable");
+    }
+  });
+
+  it("(f) usable bars: unchanged — RSI 50 and z 0.5 are met with their numbers", () => {
+    const result = evaluateFor(CLEAN_BARS);
+    expect(byId(result.conditions, "momentum")).toEqual({ id: "momentum", status: "met", observed: 50, reference: null });
+    expect(byId(result.conditions, "volume")).toEqual({ id: "volume", status: "met", observed: 0.5, reference: null });
+    expect(result.allUnavailable).toBe(false);
+  });
+});
+
+describe("RC-863 point 6: rendered panel on unusable bars", () => {
+  function render(bars: Bar[] | null): string {
+    const levels = bars === null ? null : computeKeyLevels(bars);
+    return renderToStaticMarkup(
+      createElement(EntryObservationPanel, {
+        observation: evaluateFor(bars),
+        rangeBarCount: levels?.rangeBarCount ?? null,
+        dataAsOfDates: { bars: null, signals: null, advice: null },
+        market: "TW",
+        bars,
+        pending: false,
+      }),
+    );
+  }
+  const occurrences = (html: string, text: string) => html.split(text).length - 1;
+
+  const cases: [string, Bar[] | null][] = [
+    ["(a)", BAD_LATEST_CLOSE],
+    ["(b)", BAD_LATEST_LOW],
+    ["(c)", BAD_EARLIER_CLOSE],
+    ["(d)", BAD_EARLIER_HIGH],
+    ["(e) bars not loaded", null],
+    ["(e) ok with []", []],
+  ];
+  for (const [name, bars] of cases) {
+    it(`${name}: the no-data sentence appears once, no count sentence, no hit count`, () => {
+      const html = render(bars);
+      expect(occurrences(html, ENTRY_NO_DATA_STATEMENT)).toBe(1);
+      for (let met = 0; met <= 6; met += 1) {
+        for (let un = 0; met + un <= 6; un += 1) expect(html).not.toContain(buildConditionCount(met, un));
+      }
+      expect(html).not.toContain(buildDefensiveHitsText(0));
+      expect(html).not.toContain("命中 0 條");
+      expect(html).not.toContain("50.00");
+    });
+  }
+
+  it("(f) usable bars: the count sentence is printed and the no-data sentence is not", () => {
+    const html = render(CLEAN_BARS);
+    expect(html).not.toContain(ENTRY_NO_DATA_STATEMENT);
+    expect(html).toContain("6 條中成立");
   });
 });

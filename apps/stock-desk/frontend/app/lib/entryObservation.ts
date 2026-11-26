@@ -59,7 +59,7 @@ function fin(n: number | null | undefined): number | null {
 
 /**
  * RC-862: the ONE fail-closed gate for the conditions that read backend
- * payloads (rules now; momentum and volume in the next commit) instead of the
+ * payloads (momentum, volume and rules) instead of the
  * client-side key levels. It only reads the shared verdict from
  * `evaluateDailyBarsUsability` (handed in by the page, never recomputed here),
  * and it is an allow-list: only an explicit "usable" opens it. "unusable", a
@@ -107,7 +107,14 @@ function pullbackCondition(levels: KeyLevels | null): ConditionResult {
   };
 }
 
-function momentumCondition(signals: SignalsPayload | null): ConditionResult {
+/**
+ * RC-862: unavailable whenever the shared daily-bar gate is shut. The RSI the
+ * backend returns is computed from the same batch, bad bars included, and its
+ * `status` stays "ok" on them, so a number would be printed beside bars the
+ * page itself calls unusable.
+ */
+function momentumCondition(signals: SignalsPayload | null, barsGateOpen: boolean): ConditionResult {
+  if (!barsGateOpen) return { id: "momentum", status: "unavailable", observed: null, reference: null };
   const rsiResult = signals?.technical?.rsi;
   const rsi = rsiResult && rsiResult.status === "ok" ? fin(rsiResult.last.rsi) : null;
   const band = rsiBand(rsi);
@@ -115,7 +122,9 @@ function momentumCondition(signals: SignalsPayload | null): ConditionResult {
   return { id: "momentum", status: band === "mid" ? "met" : "unmet", observed: rsi, reference: null };
 }
 
-function volumeCondition(signals: SignalsPayload | null): ConditionResult {
+/** RC-862: same gate as `momentumCondition`; the volume z-score is also computed from the unfiltered batch. */
+function volumeCondition(signals: SignalsPayload | null, barsGateOpen: boolean): ConditionResult {
+  if (!barsGateOpen) return { id: "volume", status: "unavailable", observed: null, reference: null };
   const vz = signals?.technical?.volume_zscore;
   const z = vz && vz.status === "ok" ? fin(vz.last.zscore) : null;
   const band = volumeZBand(z);
@@ -172,8 +181,8 @@ export function evaluateEntryObservation(
     rangeCondition(levels),
     trendCondition(levels),
     pullbackCondition(levels),
-    momentumCondition(signals),
-    volumeCondition(signals),
+    momentumCondition(signals, barsGateOpen),
+    volumeCondition(signals, barsGateOpen),
     rulesCondition(advice, held, barsGateOpen),
   ];
   const metCount = conditions.filter((c) => c.status === "met").length;

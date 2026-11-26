@@ -2030,6 +2030,13 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     expect(buildEntryFooterItems(252)).toHaveLength(7);
   });
 
+  it("RC-802／RC-863：動能與成交量頁尾逐字鎖定，不含「資料不足」", () => {
+    expect(ENTRY_BASIS_MOMENTUM.qualifier).toBe("RSI(14) 無法取得時，本條無法判定；30、70 兩端點本身不算成立。");
+    expect(ENTRY_BASIS_VOLUME.qualifier).toBe("z 值無法取得時，本條無法判定；−2、2 兩端點本身不算成立。");
+    expect(ENTRY_BASIS_MOMENTUM.qualifier).not.toContain("資料不足");
+    expect(ENTRY_BASIS_VOLUME.qualifier).not.toContain("資料不足");
+  });
+
   it("RC-860／RC-863：規則條件頁尾逐字鎖定，且與位階頁尾同詞「沒有可用日線」", () => {
     const RULES_QUALIFIER =
       "未持有此標的，或持有狀態未定時，本條一律無法判定，不因未命中而視為成立；沒有可用日線時，本條也無法判定。";
