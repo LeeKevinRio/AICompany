@@ -141,10 +141,14 @@ export default function PositionDetailPage() {
   // reach this, because it is only evaluated on an ok bars envelope. The
   // `isSuccess` guard matches the render branches: a refetch error that keeps
   // stale bad data (`isError` with `data`) must not collapse only the details.
+  // RC-801: the SAME result is handed to the decision card (same `ok` gate as
+  // the card's `bars` prop), so the card holds no second bad-value judgement.
+  const dailyBarsUsability =
+    bars.data && bars.data.status === "ok"
+      ? evaluateDailyBarsUsability(bars.data.bars)
+      : null;
   const technicalCollapsed =
-    bars.isSuccess &&
-    bars.data.status === "ok" &&
-    evaluateDailyBarsUsability(bars.data.bars).status === "unusable";
+    bars.isSuccess && dailyBarsUsability !== null && dailyBarsUsability.status === "unusable";
 
   const entryLevels =
     bars.data && bars.data.status === "ok"
@@ -241,6 +245,7 @@ export default function PositionDetailPage() {
         anchorSource={keyLevelsAnchor.anchorSource}
         avgCost={keyLevelsAnchor.avgCost}
         market={market}
+        barsUsability={dailyBarsUsability}
       />
 
       {/*

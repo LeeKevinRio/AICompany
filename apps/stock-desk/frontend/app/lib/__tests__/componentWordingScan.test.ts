@@ -410,6 +410,11 @@ const SCANNED_FILES = [
   // 新元件與其專屬字面模組，先前都不在掃描清單內。
   "../../position/[symbol]/DecisionCard.tsx",
   "../decisionCardWording.ts",
+  // RC-844 item 1 (風控 RC-840 至 RC-845 risk-gate, 2026-11-26): the RC-764
+  // final sentence lives in this new file, while page.tsx only references the
+  // constant name, so it was outside the forbidden-term source scan. The RC-801
+  // decision-card lines live in DecisionCard.tsx / decisionCardWording.ts above.
+  "../dailyBarsUsability.ts",
   // 風控 2026-10-04 R1：回撤規則揭露句的取用邏輯（常數本身在 adviceWording.ts，下方逐字釘住）。
   "../ruleSelection.ts",
   // 族群動能排行（第四波，`work/stock-desk-族群動能-派工單.md` §12/§13）：新首頁
