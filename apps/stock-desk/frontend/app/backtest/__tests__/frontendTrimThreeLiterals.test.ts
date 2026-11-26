@@ -14,7 +14,9 @@ import type { AlertEvent } from "../../lib/types";
 import { BacktestReportView } from "../BacktestReportView";
 import { makeResponse } from "./roundTripFixtures";
 
-const SENTENCE_1 = "除 ATR 停損倍數外，每一項數字都是分數（例如 0.15 = 15%）。";
+// RC-730: the example number is 0.01 = 1% (previous example retired).
+const SENTENCE_1 = "除 ATR 停損倍數外，每一項數字都是分數（例如 0.01 = 1%）。";
+const SENTENCE_1B = "此標的市值占總資產(已估值部位市值,不含現金)的上限（比例，例如 0.01 代表 1%）。";
 const SENTENCE_2 = "Buy &amp; Hold 為同期間、未計交易成本的被動持有基準。";
 const SENTENCE_3 =
   "費率未查證：本次回測使用的手續費／交易稅／滑價率尚未對照主要來源查證，報告數字應視為待查證狀態。";
@@ -35,6 +37,31 @@ describe("RC-717 item 1: SettingsForm sentence", () => {
   it("source holds neither the backend path nor the old one-to-one claim", () => {
     expect(code).not.toContain("app/advice/limits.py");
     expect(code).not.toContain("一一對應");
+  });
+
+  // RC-738 A1: both approved sentences appear exactly once in the source.
+  it("RC-738 A1: both approved sentences appear exactly once", () => {
+    expect(countOf(source, SENTENCE_1)).toBe(1);
+    expect(countOf(source, SENTENCE_1B)).toBe(1);
+  });
+
+  // RC-738 A2: the retired example is gone from the source (comments included).
+  it("RC-738 A2: no old example literal remains", () => {
+    expect(source).not.toContain("例如 0.15");
+    expect(source).not.toContain("15%");
+  });
+
+  // RC-738 A3: consistency lock, both sentences carry the same example.
+  it("RC-738 A3: both sentences carry 0.01 and 1%", () => {
+    for (const sentence of [SENTENCE_1, SENTENCE_1B]) {
+      expect(sentence).toContain("0.01");
+      expect(sentence).toContain("1%");
+    }
+  });
+
+  // RC-738 A4 (= RC-717 item 1 assertions kept): the ATR exclusion prefix stays.
+  it("RC-738 A4: ATR exclusion prefix is kept", () => {
+    expect(source).toContain("除 ATR 停損倍數外，");
   });
 });
 
@@ -76,15 +103,17 @@ describe("RC-717 item 3: alert event observed values", () => {
     );
   }
 
+  // RC-717 item 4 updated for RC-732 ~ RC-734: the expected literals are the approved labels; the
+  // anti-"case C" assertions (entry count, date value visible) are kept.
   it("price event: close is labelled, nothing is dropped, four entries remain", () => {
     const html = render({
       observed: { close: 605, threshold: 600, currency: "TWD", bar_as_of: "2026-11-24" },
     });
-    expect(html).toContain("最新收盤價: 605");
-    expect(html).toContain("bar_as_of: 2026-11-24");
-    const line = html.match(/最新收盤價: 605[^<]*/)![0];
+    expect(html).toContain("資料日收盤價: 605");
+    expect(html).toContain("2026-11-24");
+    const line = html.match(/資料日收盤價: 605[^<]*/)![0];
     expect(line.split("　")).toHaveLength(4);
-    expect(line).toBe("最新收盤價: 605　threshold: 600　currency: TWD　bar_as_of: 2026-11-24");
+    expect(line).toBe("資料日收盤價: 605　設定的門檻: 600　幣別: TWD　資料日期（日線收盤，非即時）: 2026-11-24");
   });
 
   it("signal_condition event: signals_as_of stays visible", () => {
@@ -92,6 +121,6 @@ describe("RC-717 item 3: alert event observed values", () => {
       rule_type: "signal_condition",
       observed: { field: "rsi14.last", value: 71.2, op: "gt", compared_to: 70, signals_as_of: "2026-11-24" },
     });
-    expect(html).toContain("signals_as_of: 2026-11-24");
+    expect(html).toContain("資料日期（日線收盤，非即時）: 2026-11-24");
   });
 });
