@@ -95,7 +95,10 @@ export const RISK_BUDGET_FIELDS: FieldSpec<RiskBudgetSettings>[] = [
   {
     key: "max_position_weight",
     label: "單一標的佔比上限",
-    description: "此標的市值占總資產(已估值部位市值,不含現金)的上限（比例，例如 0.15 代表 15%）。",
+    // RC-730 / RC-731 / RC-738 (risk-approved example): only the number differs from the previous
+    // wording; the example must stay at or below every fraction field default and match the
+    // example in the section note below. Half-width and full-width punctuation are verbatim.
+    description: "此標的市值占總資產(已估值部位市值,不含現金)的上限（比例，例如 0.01 代表 1%）。",
     // #61 (2026-10-26): mirrors `DEFAULT_MAX_POSITION_WEIGHT` in
     // `app/advice/limits.py`; pinned equal by `cap1Default.test.ts` here and by
     // `tests/test_cap1_default.py` on the backend.
@@ -460,9 +463,11 @@ export function SettingsForm({ settings }: { settings: SettingsResponse }) {
         <h2 className="text-lg font-semibold text-neutral-100">風險預算（RiskBudget）</h2>
         <SectionFallbackMarker text={sectionMarkerOf(settings, "risk_budget")} />
         {/* RC-712 / RC-718: risk-approved wording. ATR stop multiple is a multiplier,
-            not a fraction, so it is explicitly excluded; backend path removed. */}
+            not a fraction, so it is explicitly excluded; backend path removed.
+            RC-730 / RC-731 / RC-738: only the example number changed (verbatim, same example
+            as the max_position_weight description above). */}
         <p className="mt-1 text-xs text-neutral-500">
-          除 ATR 停損倍數外，每一項數字都是分數（例如 0.15 = 15%）。
+          除 ATR 停損倍數外，每一項數字都是分數（例如 0.01 = 1%）。
         </p>
         {/* `grid-flow-row-dense`: the S2 block spans both columns under cap 1's
             field; dense placement lets the next field take the cell beside
