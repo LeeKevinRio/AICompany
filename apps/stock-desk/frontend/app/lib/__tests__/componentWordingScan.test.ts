@@ -2030,6 +2030,26 @@ describe("六項觀察條件 守門（T1～T14）", () => {
     expect(buildEntryFooterItems(252)).toHaveLength(7);
   });
 
+  it("RC-860／RC-863：規則條件頁尾逐字鎖定，且與位階頁尾同詞「沒有可用日線」", () => {
+    const RULES_QUALIFIER =
+      "未持有此標的，或持有狀態未定時，本條一律無法判定，不因未命中而視為成立；沒有可用日線時，本條也無法判定。";
+    expect(ENTRY_BASIS_RULES.qualifier).toBe(RULES_QUALIFIER);
+    expect((ENTRY_BASIS_RULES.qualifier ?? "").startsWith("未持有此標的，或持有狀態未定時，本條一律無法判定，不因未命中而視為成立")).toBe(true);
+    expect(ENTRY_BASIS_RULES.qualifier).toContain("不因未命中而視為成立");
+    for (const banned of ["壞值", "資料錯誤", "損壞", "後端", "仍", "照常", "取得", "跳空", "公司行動"]) {
+      expect(ENTRY_BASIS_RULES.qualifier, banned).not.toContain(banned);
+    }
+    // Same phrase as the range condition's footer, so the reader sees one concept.
+    expect((buildEntryBasisRange(252).qualifier ?? "").startsWith("沒有可用日線")).toBe(true);
+    expect(ENTRY_BASIS_RULES.qualifier).toContain("沒有可用日線");
+    // Formulas stay exactly as they are today.
+    expect(ENTRY_BASIS_RULES.formula).toEqual(["防禦型規則命中數＝本次規則評估中，方向為防禦型之命中規則筆數；門檻 ＝ 0"]);
+    expect(ENTRY_BASIS_MOMENTUM.formula).toEqual(["RSI(14)＝14 期相對強弱指標；門檻：30 < RSI(14) < 70（不含端點）"]);
+    expect(ENTRY_BASIS_VOLUME.formula).toEqual([
+      "成交量z＝(當日成交量−近 20 根成交量平均)/近 20 根成交量標準差（母體）；門檻：−2 < z < 2（不含端點）",
+    ]);
+  });
+
   it("T3／T11：計數句為陳述句，無 %、無 N/6、無「分」；unavailable > 0 一律印出無法判定條數", () => {
     for (const [met, un] of [[0, 0], [4, 0], [3, 1], [0, 6], [6, 0]] as const) {
       const text = buildConditionCount(met, un);

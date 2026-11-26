@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { KeyLevels } from "../keyLevels";
 import type { AdviceCard, IndicatorResult, SignalsPayload, SignalsTechnicalBlock } from "../types";
+import type { DailyBarsUsability } from "../dailyBarsUsability";
 import { ENTRY_CONDITION_IDS, evaluateEntryObservation, isInObservationBand } from "../entryObservation";
+
+const USABLE: DailyBarsUsability = { status: "usable" };
 
 function levels(overrides: Partial<KeyLevels> = {}): KeyLevels {
   return {
@@ -61,6 +64,7 @@ describe("evaluateEntryObservation — 六條固定條件三態", () => {
         { direction: "defensive", actions: ["reduce"] },
       ]),
       true,
+      USABLE,
     );
     expect(result.conditions.map((c) => c.id)).toEqual(ENTRY_CONDITION_IDS);
     expect(result.conditions.map((c) => c.status)).toEqual(["unmet", "met", "met", "met", "met", "unmet"]);
@@ -77,18 +81,18 @@ describe("evaluateEntryObservation — 六條固定條件三態", () => {
   });
 
   it("thresholds are inclusive/exclusive exactly as printed: ≤70%, ±3% inclusive, RSI/z open intervals", () => {
-    const at70 = evaluateEntryObservation(levels({ rangePositionPct: 70 }), null, null, true).conditions[0]!;
+    const at70 = evaluateEntryObservation(levels({ rangePositionPct: 70 }), null, null, true, USABLE).conditions[0]!;
     expect(at70.status).toBe("met");
-    const at3 = evaluateEntryObservation(levels({ close: 103, ma20: 100 }), null, null, true).conditions[2]!;
+    const at3 = evaluateEntryObservation(levels({ close: 103, ma20: 100 }), null, null, true, USABLE).conditions[2]!;
     expect(at3.status).toBe("met");
-    const over3 = evaluateEntryObservation(levels({ close: 103.01, ma20: 100 }), null, null, true).conditions[2]!;
+    const over3 = evaluateEntryObservation(levels({ close: 103.01, ma20: 100 }), null, null, true, USABLE).conditions[2]!;
     expect(over3.status).toBe("unmet");
-    expect(evaluateEntryObservation(null, signals(70, 0), null, true).conditions[3]!.status).toBe("unmet");
-    expect(evaluateEntryObservation(null, signals(69.9, 0), null, true).conditions[3]!.status).toBe("met");
-    expect(evaluateEntryObservation(null, signals(50, 2), null, true).conditions[4]!.status).toBe("unmet");
-    expect(evaluateEntryObservation(null, signals(50, 1.99), null, true).conditions[4]!.status).toBe("met");
+    expect(evaluateEntryObservation(null, signals(70, 0), null, true, USABLE).conditions[3]!.status).toBe("unmet");
+    expect(evaluateEntryObservation(null, signals(69.9, 0), null, true, USABLE).conditions[3]!.status).toBe("met");
+    expect(evaluateEntryObservation(null, signals(50, 2), null, true, USABLE).conditions[4]!.status).toBe("unmet");
+    expect(evaluateEntryObservation(null, signals(50, 1.99), null, true, USABLE).conditions[4]!.status).toBe("met");
     // close == MA60 is not "above".
-    expect(evaluateEntryObservation(levels({ close: 100, ma60: 100 }), null, null, true).conditions[1]!.status).toBe("unmet");
+    expect(evaluateEntryObservation(levels({ close: 100, ma60: 100 }), null, null, true, USABLE).conditions[1]!.status).toBe("unmet");
   });
 
   it("AC-2 short history: 位階 unavailable, denominator stays 6", () => {
@@ -97,6 +101,7 @@ describe("evaluateEntryObservation — 六條固定條件三態", () => {
       signals(50, 0),
       advice([], []),
       true,
+      USABLE,
     );
     expect(result.conditions[0]!.status).toBe("unavailable");
     expect(result.conditions[0]!.observed).toBeNull();
@@ -105,25 +110,25 @@ describe("evaluateEntryObservation — 六條固定條件三態", () => {
   });
 
   it("AC-3 advice unavailable: 規則 unavailable, others evaluated; unknown action also unavailable", () => {
-    expect(evaluateEntryObservation(levels(), signals(50, 0), null, true).conditions[5]!.status).toBe("unavailable");
+    expect(evaluateEntryObservation(levels(), signals(50, 0), null, true, USABLE).conditions[5]!.status).toBe("unavailable");
     const unknown = advice([{ action: "mystery" }], [{ direction: "neutral", actions: ["hold"] }]);
-    expect(evaluateEntryObservation(levels(), signals(50, 0), unknown, true).conditions[5]!.status).toBe("unavailable");
+    expect(evaluateEntryObservation(levels(), signals(50, 0), unknown, true, USABLE).conditions[5]!.status).toBe("unavailable");
     const clean = advice([{ action: "hold" }], [{ direction: "neutral", actions: ["hold"] }]);
-    expect(evaluateEntryObservation(levels(), signals(50, 0), clean, true).conditions[5]!.status).toBe("met");
+    expect(evaluateEntryObservation(levels(), signals(50, 0), clean, true, USABLE).conditions[5]!.status).toBe("met");
   });
 
   it("RED-1 路徑 (a): not held or undetermined → 規則 unavailable even with a clean card", () => {
     const clean = advice([{ action: "hold" }], [{ direction: "neutral", actions: ["hold"] }]);
-    expect(evaluateEntryObservation(levels(), signals(50, 0), clean, false).conditions[5]!.status).toBe("unavailable");
-    expect(evaluateEntryObservation(levels(), signals(50, 0), clean, null).conditions[5]!.status).toBe("unavailable");
-    expect(evaluateEntryObservation(levels(), signals(50, 0), clean, true).conditions[5]!.status).toBe("met");
+    expect(evaluateEntryObservation(levels(), signals(50, 0), clean, false, USABLE).conditions[5]!.status).toBe("unavailable");
+    expect(evaluateEntryObservation(levels(), signals(50, 0), clean, null, USABLE).conditions[5]!.status).toBe("unavailable");
+    expect(evaluateEntryObservation(levels(), signals(50, 0), clean, true, USABLE).conditions[5]!.status).toBe("met");
   });
 
   it("all unavailable when nothing is loaded; observation band follows MA20", () => {
-    const empty = evaluateEntryObservation(null, null, null, true);
+    const empty = evaluateEntryObservation(null, null, null, true, USABLE);
     expect(empty.allUnavailable).toBe(true);
     expect(empty.observationBand).toBeNull();
-    const withMa = evaluateEntryObservation(levels({ ma20: 100 }), null, null, true);
+    const withMa = evaluateEntryObservation(levels({ ma20: 100 }), null, null, true, USABLE);
     expect(withMa.observationBand).toEqual({ low: 97, high: 103 });
     expect(isInObservationBand(97, withMa.observationBand)).toBe(true);
     expect(isInObservationBand(103.5, withMa.observationBand)).toBe(false);
@@ -134,7 +139,7 @@ describe("evaluateEntryObservation — 六條固定條件三態", () => {
 
 describe("evaluateEntryObservation — levels null (e.g. bars held a non-positive value)", () => {
   it("range, trend and pullback are unavailable and observationBand is null", () => {
-    const result = evaluateEntryObservation(null, signals(51.37, 0.7), null, true);
+    const result = evaluateEntryObservation(null, signals(51.37, 0.7), null, true, USABLE);
     const byId = Object.fromEntries(result.conditions.map((c) => [c.id, c]));
     expect(byId.range!.status).toBe("unavailable");
     expect(byId.trend!.status).toBe("unavailable");

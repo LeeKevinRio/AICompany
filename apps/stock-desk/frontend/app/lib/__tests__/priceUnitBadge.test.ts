@@ -38,6 +38,7 @@ import { KEY_LEVELS_PANEL_TITLE, KeyLevelsPanel } from "../../position/[symbol]/
 import { EntryObservationPanel } from "../../position/[symbol]/EntryObservationPanel";
 import { evaluateEntryObservation } from "../entryObservation";
 import { ENTRY_E1_QUALIFIER, ENTRY_PANEL_TITLE } from "../entryObservationWording";
+import { evaluateDailyBarsUsability } from "../dailyBarsUsability";
 import { computeKeyLevels } from "../keyLevels";
 import { DECISION_CARD_ARIA_LABEL } from "../decisionCardWording";
 import { TECHNICAL_ANALYSIS_TITLE } from "../sectionTitles";
@@ -211,7 +212,7 @@ function renderEntry(bars: Bar[] | null, market: string | undefined): string {
   const levels = bars === null ? null : computeKeyLevels(bars);
   return renderToStaticMarkup(
     createElement(EntryObservationPanel, {
-      observation: evaluateEntryObservation(levels, null, null, null),
+      observation: evaluateEntryObservation(levels, null, null, null, bars === null ? null : evaluateDailyBarsUsability(bars)),
       rangeBarCount: levels?.rangeBarCount ?? null,
       dataAsOfDates: { bars: null, signals: null, advice: null },
       market,

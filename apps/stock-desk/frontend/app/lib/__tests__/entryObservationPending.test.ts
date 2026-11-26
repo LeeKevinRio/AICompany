@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { evaluateDailyBarsUsability } from "../dailyBarsUsability";
+import type { DailyBarsUsability } from "../dailyBarsUsability";
 import { computeKeyLevels } from "../keyLevels";
 import type { KeyLevels } from "../keyLevels";
 import type {
@@ -85,6 +87,8 @@ function signals(): SignalsPayload {
   };
 }
 
+const USABLE: DailyBarsUsability = { status: "usable" };
+
 function advice(): AdviceCard {
   return {
     matched_rules: [{ id: "r0", name: "", action: "add", weight: 1, weight_meaning: "", explanation: "", invalidation: null }],
@@ -99,6 +103,7 @@ function renderPanel(arrived: { bars: boolean; signals: boolean; advice: boolean
     arrived.signals ? signals() : null,
     arrived.advice ? advice() : null,
     arrived.advice ? true : null,
+    arrived.bars ? USABLE : null,
   );
   const pending = isEntryObservationPending([
     { isPending: !arrived.bars },
@@ -173,13 +178,13 @@ describe("EntryObservationPanel — no verdict before the data has arrived", () 
         for (const sentence of printedCounts(renderPanel(state))) seen.add(sentence);
       }
     }
-    const full = evaluateEntryObservation(levels(), signals(), advice(), true);
+    const full = evaluateEntryObservation(levels(), signals(), advice(), true, USABLE);
     expect([...seen]).toEqual([buildConditionCount(full.metCount, full.unavailableCount)]);
   });
 
   it("a settled query that has no answer is still reported as undecidable (not hidden)", () => {
     // signals failed for good: not pending, so the count prints with its 無法判定 part.
-    const observation = evaluateEntryObservation(levels(), null, advice(), true);
+    const observation = evaluateEntryObservation(levels(), null, advice(), true, USABLE);
     const html = renderToStaticMarkup(
       createElement(EntryObservationPanel, {
         observation,
@@ -376,7 +381,13 @@ function renderPage(seed: { signals?: SignalsResponse }): string {
 }
 
 describe("whole page (seeded query cache) — first load vs reload of the same data", () => {
-  const full = evaluateEntryObservation(computeKeyLevels(BARS.bars), SIGNALS.signals, ADVICE.advice, ADVICE.held);
+  const full = evaluateEntryObservation(
+    computeKeyLevels(BARS.bars),
+    SIGNALS.signals,
+    ADVICE.advice,
+    ADVICE.held,
+    evaluateDailyBarsUsability(BARS.bars),
+  );
   const fullCount = buildConditionCount(full.metCount, full.unavailableCount);
 
   it("signals not arrived yet (cold first load): no MA verdict and no count on the page", () => {
@@ -400,7 +411,13 @@ describe("whole page (seeded query cache) — first load vs reload of the same d
   it("signals settled as insufficient: the MA note and the 無法判定 part are real and shown", () => {
     const html = renderPage({ signals: SIGNALS_INSUFFICIENT });
     expect(html).toContain(MA_NOTE);
-    const partial = evaluateEntryObservation(computeKeyLevels(BARS.bars), null, ADVICE.advice, ADVICE.held);
+    const partial = evaluateEntryObservation(
+      computeKeyLevels(BARS.bars),
+      null,
+      ADVICE.advice,
+      ADVICE.held,
+      evaluateDailyBarsUsability(BARS.bars),
+    );
     expect(printedCounts(html)).toEqual([buildConditionCount(partial.metCount, partial.unavailableCount)]);
   });
 });
@@ -429,6 +446,7 @@ function renderSettlement(state: QueryStates, dates: { bars: string | null; sign
     state.signals === "ok" ? signals() : null,
     state.advice === "ok" ? advice() : null,
     state.advice === "ok" ? true : null,
+    state.bars === "ok" ? USABLE : null,
   );
   return renderToStaticMarkup(
     createElement(EntryObservationPanel, {

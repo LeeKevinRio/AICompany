@@ -159,6 +159,7 @@ export default function PositionDetailPage() {
     signals.data?.status === "ok" ? (signals.data.signals ?? null) : null,
     advice.data?.status === "ok" ? advice.data.advice : null,
     advice.data?.status === "ok" ? advice.data.held : null,
+    dailyBarsUsability,
   );
   // Trust fix (2026-10-26 product review, issue 4): the count is withheld until
   // all three payloads have settled, so the same data always yields the same

@@ -133,7 +133,8 @@ export const ENTRY_BASIS_VOLUME: BasisItem = {
 
 export const ENTRY_BASIS_RULES: BasisItem = {
   formula: ["防禦型規則命中數＝本次規則評估中，方向為防禦型之命中規則筆數；門檻 ＝ 0"],
-  qualifier: "未持有此標的，或持有狀態未定時，本條一律無法判定，不因未命中而視為成立。",
+  qualifier:
+    "未持有此標的，或持有狀態未定時，本條一律無法判定，不因未命中而視為成立；沒有可用日線時，本條也無法判定。",
 };
 
 /** R-14: the 位階≠估值 semantic restated for this panel (not verbatim `buildRangeNotValuationNote`). */
