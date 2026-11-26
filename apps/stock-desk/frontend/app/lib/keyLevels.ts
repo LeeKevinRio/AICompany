@@ -1,4 +1,5 @@
 import type { Bar } from "./types";
+import { evaluateDailyBarsUsability } from "./dailyBarsUsability";
 
 /**
  * Key reference levels derived from the verified bars chain — price position
@@ -103,7 +104,8 @@ export function computeKeyLevels(bars: Bar[]): KeyLevels | null {
   const closes = bars.map((b) => toNum(b.close));
   const highs = bars.map((b) => toNum(b.high));
   const lows = bars.map((b) => toNum(b.low));
-  if ([...closes, ...highs, ...lows].some((n) => !Number.isFinite(n) || n <= 0)) return null;
+  // RC-767: the whole-batch refusal lives in the shared verdict (same rule as before).
+  if (evaluateDailyBarsUsability(bars).status === "unusable") return null;
 
   const close = closes[closes.length - 1]!;
   const closeDate = bars[bars.length - 1]!.date;

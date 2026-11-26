@@ -15,6 +15,7 @@ import { KEY_LEVELS_PANEL_TITLE, KeyLevelsPanel, buildKeyLevelsFooterItems } fro
 import { EntryObservationPanel } from "./EntryObservationPanel";
 import { evaluateEntryObservation, isEntryObservationPending } from "../../lib/entryObservation";
 import { computeKeyLevels } from "../../lib/keyLevels";
+import { TECHNICAL_SECTION_NO_DATA_STATEMENT, evaluateDailyBarsUsability } from "../../lib/dailyBarsUsability";
 import { ENTRY_PANEL_TITLE, buildEntryFooterItems } from "../../lib/entryObservationWording";
 import { PageFooterDisclosures } from "../../components/PageFooterDisclosures";
 import type { FooterGroup } from "../../components/PageFooterDisclosures";
@@ -134,6 +135,17 @@ export default function PositionDetailPage() {
     rules condition additionally needs a CONFIRMED held position (風控 RED-1
     路徑 a) — `advice.data.held` is only trusted on an ok envelope.
   */
+  // RC-764 / RC-767: one shared verdict on the daily bars. When ANY bar holds a
+  // bad value the technical section collapses to a single sentence (see the
+  // render below); the pending / error / insufficient_data branches never
+  // reach this, because it is only evaluated on an ok bars envelope. The
+  // `isSuccess` guard matches the render branches: a refetch error that keeps
+  // stale bad data (`isError` with `data`) must not collapse only the details.
+  const technicalCollapsed =
+    bars.isSuccess &&
+    bars.data.status === "ok" &&
+    evaluateDailyBarsUsability(bars.data.bars).status === "unusable";
+
   const entryLevels =
     bars.data && bars.data.status === "ok"
       ? computeKeyLevels(bars.data.bars)
@@ -379,6 +391,12 @@ export default function PositionDetailPage() {
               <div className="mt-3"><InsufficientPanel reason={bars.data.reason} /></div>
             )}
             {bars.isSuccess && bars.data.status === "ok" && (
+              // RC-764: a bad bar swaps the chart, chips row, signals error /
+              // insufficient panels and the one-line conclusion for ONE sentence.
+              // (Inner block keeps its original indentation to keep the diff small.)
+              technicalCollapsed ? (
+              <p className="mt-3 text-sm text-neutral-400">{TECHNICAL_SECTION_NO_DATA_STATEMENT}</p>
+              ) : (
               <>
                 <div className="mt-3">
                   <PriceChart
@@ -403,6 +421,7 @@ export default function PositionDetailPage() {
                   )}
                 </p>
               </>
+              )
             )}
           </div>
         )}
@@ -446,14 +465,15 @@ export default function PositionDetailPage() {
               </p>
             )}
             {/* signals 徽章列／Error／Insufficient 已移回主視圖（R-A1）；詳細只留 pending skeleton 與完整指標卡。 */}
-            {signals.isPending && <SkeletonBlock className="h-40 w-full" />}
-            {signals.isSuccess && signals.data.status === "ok" && signals.data.signals && (
+            {/* RC-764: the skeleton, indicator cards and bar-count line collapse; the sources and badges above stay (RC-766 item 2). */}
+            {!technicalCollapsed && signals.isPending && <SkeletonBlock className="h-40 w-full" />}
+            {!technicalCollapsed && signals.isSuccess && signals.data.status === "ok" && signals.data.signals && (
               <TechnicalIndicatorsPanel
                 payload={signals.data.signals}
                 lastBarDate={signals.data.data.last_bar_date}
               />
             )}
-            {bars.isSuccess && bars.data.status === "ok" && (
+            {bars.isSuccess && bars.data.status === "ok" && !technicalCollapsed && (
               <p>
                 共 {bars.data.bars.length} 根日線（{bars.data.data.first_bar_date ?? "—"} ~{" "}
                 {bars.data.data.last_bar_date ?? "—"}）。
