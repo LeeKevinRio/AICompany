@@ -47,13 +47,11 @@ function renderStrip(
   rules: AlertRule[],
   events: AlertEvent[],
   schedulerEnabled: boolean | null = true,
-  eventsAsOf = "2026-09-19T02:00:00Z",
 ) {
   return renderToStaticMarkup(
     createElement(AlertStatusStripView, {
       rules,
       events,
-      eventsAsOf,
       schedulerEnabled,
       onAck: () => {},
       ackPending: false,
@@ -71,12 +69,19 @@ describe("AlertStatusStripView — 四態（B.4 + R-A3）", () => {
     expect(html).not.toContain("amber-950");
   });
 
-  it("狀態 B：有規則、沒有待處理事件 —— N 用規則總數（不分 enabled/disabled）+ 查詢時間", () => {
+  // RC-760 to RC-772 (RC-770 F1): state B is locked verbatim; reverting to the
+  // old wording must turn these assertions red.
+  const STATE_B_N2 = "2 條規則已設定。這裡沒有列出待處理警示，不代表警示檢查已完成。";
+
+  it("狀態 B：有規則、沒有待處理事件 —— N 用規則總數（不分 enabled/disabled），整句逐字、無查詢時間", () => {
     const rules = [makeRule({ id: 1, enabled: true }), makeRule({ id: 2, enabled: false })];
-    const html = renderStrip(rules, [], true, "2026-09-19T03:15:00Z");
+    const html = renderStrip(rules, [], true);
     // rules.length = 2, regardless of how many are enabled.
-    expect(html).toContain("2 條規則已設定，目前沒有待處理警示");
-    expect(html).toContain("查詢時間：");
+    expect(html).toContain(`<p class="text-sm text-neutral-300">${STATE_B_N2}</p>`);
+    expect(html).not.toContain("目前沒有待處理警示");
+    expect(html).not.toContain("查詢時間");
+    expect(html).not.toContain("<span");
+    expect(html).not.toMatch(/安全|正常|無風險|沒事/);
     expect(html).not.toContain("尚未設定警示規則");
     expect(html).not.toContain("amber-950");
   });
@@ -84,7 +89,8 @@ describe("AlertStatusStripView — 四態（B.4 + R-A3）", () => {
   it("狀態 B：規則全部停用時仍印規則總數，不誤報「0 條規則已設定」", () => {
     const rules = [makeRule({ id: 1, enabled: false }), makeRule({ id: 2, enabled: false })];
     const html = renderStrip(rules, [], true);
-    expect(html).toContain("2 條規則已設定，目前沒有待處理警示");
+    expect(html).toContain(STATE_B_N2);
+    expect(html).not.toContain("0 條規則已設定");
   });
 
   it("狀態 C：有事件 —— N 條待處理警示 + 管理警示規則連結 + 事件清單", () => {
@@ -131,7 +137,7 @@ describe("AlertStatusStripView — 四態（B.4 + R-A3）", () => {
     expect(noRules).not.toContain("排程目前未啟用");
 
     const withRules = renderStrip([makeRule({ id: 1 })], [], null);
-    expect(withRules).toContain("1 條規則已設定，目前沒有待處理警示");
+    expect(withRules).toContain("1 條規則已設定。這裡沒有列出待處理警示，不代表警示檢查已完成。");
     expect(withRules).not.toContain("排程目前未啟用");
   });
 });

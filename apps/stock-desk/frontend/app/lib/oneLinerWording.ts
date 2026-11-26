@@ -72,16 +72,12 @@ export const ALERTS_NO_RULES_LINK = "去設定";
  * 讀者會誤以為根本沒設定過規則（qa 2026-09-19 追加 low 修正）。
  */
 export function buildAlertsRulesNoEvents(n: number): string {
-  return `${n} 條規則已設定，目前沒有待處理警示`;
-}
-
-/**
- * 狀態 B 右側時間戳。措辭刻意用「查詢時間」而非「最近評估」——系統目前沒有
- * 排程實際評估時間欄位，只有 `AlertEventListResponse.as_of`（查詢回應時間），
- * 誠實標示避免暗示排程剛評估過（實作規格 §3.3、視覺規範 B.4）。
- */
-export function buildAlertsQueriedAt(t: string): string {
-  return `查詢時間：${t}`;
+  // RC-760 to RC-772: verbatim wording approved by risk-compliance. The second
+  // clause blocks the "nothing listed means checked and fine" inference. The
+  // single ASCII space between `{n}` and 條 is intentional; all other
+  // punctuation is full-width. The old right-side "queried at" timestamp was
+  // removed on purpose (RC-760), so do not reintroduce it.
+  return `${n} 條規則已設定。這裡沒有列出待處理警示，不代表警示檢查已完成。`;
 }
 
 /** 警示狀態列狀態 C（有待處理事件）標題句。 */
@@ -95,7 +91,7 @@ export const ALERTS_MANAGE_LINK = "管理警示規則";
 /**
  * 警示狀態列狀態 D（排程總開關關閉，`AppSettings.alerts.enabled === false`）
  * ——風控 2026-09-19 required：總開關關閉時排程整個 tick 跳過，此時狀態 B
- * 「N 條規則已設定，目前沒有待處理警示」會被誤讀成「剛查過、沒事」，須另立
+ * 狀態 B（N 條規則已設定）會被誤讀成「剛查過、沒事」，須另立
  * 一態。字面為 creative-lead 文案稿 B4 狀態三候選 1，僅陳述排程未啟用這件
  * 事實，不下任何安心／無事的判斷語，已核可。
  */

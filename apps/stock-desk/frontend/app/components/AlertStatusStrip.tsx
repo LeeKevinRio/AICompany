@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { ApiError } from "../lib/api";
-import { formatDateTime } from "../lib/format";
 import {
   ALERTS_LOAD_ERROR_PREFIX,
   ALERTS_MANAGE_LINK,
@@ -10,7 +9,6 @@ import {
   ALERTS_NO_RULES_LINK,
   ALERTS_SCHEDULER_DISABLED,
   buildAlertsPendingCount,
-  buildAlertsQueriedAt,
   buildAlertsRulesNoEvents,
 } from "../lib/oneLinerWording";
 import { useAckAlertEvent, useAlertEvents, useAlerts, useSettings } from "../lib/queries";
@@ -37,11 +35,10 @@ import { SkeletonBlock } from "./SkeletonBlock";
 export interface AlertStatusStripViewProps {
   rules: AlertRule[];
   events: AlertEvent[];
-  eventsAsOf: string;
   /**
    * `AppSettings.alerts.enabled` — the scheduler's own kill switch (when
-   * `false` the whole evaluation tick is skipped, so state B's "已設定，目前
-   * 沒有待處理警示" would read as "just checked, all clear", which is false).
+   * `false` the whole evaluation tick is skipped, so state B's "N 條規則已設定"
+   * line would read as "just checked, all clear", which is false).
    * `null` means "unknown" (the settings query itself failed) — R-A3: a
    * settings failure must not block the alerts strip, so `null` falls back to
    * the A/B/C-only judgement as if the switch were on.
@@ -54,7 +51,6 @@ export interface AlertStatusStripViewProps {
 export function AlertStatusStripView({
   rules,
   events,
-  eventsAsOf,
   schedulerEnabled,
   onAck,
   ackPending,
@@ -98,12 +94,13 @@ export function AlertStatusStripView({
     );
   }
 
-  // 狀態 B：有規則、沒有待處理事件。N 用規則**總數**（不分 enabled/disabled，
+  // RC-760 to RC-772: state B renders only the approved sentence in the same
+  // `<p>` (`text-sm text-neutral-300`); the right-side timestamp `<span>` is
+  // intentionally not rendered. 狀態 B：有規則、沒有待處理事件。N 用規則**總數**（不分 enabled/disabled，
   // 見 `oneLinerWording.ts` 的 `buildAlertsRulesNoEvents` 註解）。
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-800 bg-neutral-950/40 px-4 py-3">
       <p className="text-sm text-neutral-300">{buildAlertsRulesNoEvents(rules.length)}</p>
-      <span className="text-xs text-neutral-500">{buildAlertsQueriedAt(formatDateTime(eventsAsOf))}</span>
     </div>
   );
 }
@@ -141,7 +138,6 @@ export function AlertStatusStrip() {
     <AlertStatusStripView
       rules={alerts.data.items}
       events={events.data.items}
-      eventsAsOf={events.data.as_of}
       schedulerEnabled={schedulerEnabled}
       onAck={(id) => ackMutation.mutate(id)}
       ackPending={ackMutation.isPending}
